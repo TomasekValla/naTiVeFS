@@ -29,6 +29,7 @@ enum TrayAction {
 struct TrayAwareApp {
     inner: NativeFS,
     tray_actions: Arc<Mutex<Vec<TrayAction>>>,
+    _tray: tray_icon::TrayIcon,
 }
 
 impl eframe::App for TrayAwareApp {
@@ -69,10 +70,9 @@ fn white_icon_16() -> tray_icon::Icon {
 }
 
 fn load_tray_icon() -> tray_icon::Icon {
-    // If icon.png is present next to the binary, load it.
     let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()));
+    .ok()
+    .and_then(|p| p.parent().map(|p| p.to_path_buf()));
 
     if let Some(dir) = exe_dir {
         let icon_path = dir.join("icon.png");
@@ -94,8 +94,8 @@ fn load_tray_icon() -> tray_icon::Icon {
 
 fn load_app_icon() -> egui::IconData {
     let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()));
+    .ok()
+    .and_then(|p| p.parent().map(|p| p.to_path_buf()));
 
     if let Some(dir) = exe_dir {
         let icon_path = dir.join("icon.png");
@@ -120,16 +120,20 @@ fn load_app_icon() -> egui::IconData {
 // ── main ──────────────────────────────────────────────────────────────────────
 
 fn main() {
-    // Tray menu
+    // Initialize GTK on Linux before anything else
+    #[cfg(target_os = "linux")]
+    gtk::init().expect("Failed to initialize GTK");
+
+    // Tray menu items (prepared before eframe, but tray built after GTK init)
     let tray_menu = Menu::new();
 
-    let item_open        = MenuItem::new("Open",                   true, None);
-    let item_upload      = MenuItem::new("Upload file…",           true, None);
+    let item_open        = MenuItem::new("Open",                  true, None);
+    let item_upload      = MenuItem::new("Upload file…",          true, None);
     let item_sep1        = PredefinedMenuItem::separator();
-    let item_copy_direct = MenuItem::new("Copy last link",         true, None);
-    let item_copy_styled = MenuItem::new("Copy last styled link",  true, None);
+    let item_copy_direct = MenuItem::new("Copy last link",        true, None);
+    let item_copy_styled = MenuItem::new("Copy last styled link", true, None);
     let item_sep2        = PredefinedMenuItem::separator();
-    let item_quit        = MenuItem::new("Quit",                   true, None);
+    let item_quit        = MenuItem::new("Quit",                  true, None);
 
     tray_menu.append_items(&[
         &item_open,
@@ -148,13 +152,7 @@ fn main() {
     let id_quit        = item_quit.id().clone();
 
     let tray_icon = load_tray_icon();
-
-    let _tray = TrayIconBuilder::new()
-        .with_menu(Box::new(tray_menu))
-        .with_tooltip("naTiVeFS")
-        .with_icon(tray_icon)
-        .build()
-        .expect("Failed to build tray icon");
+    let app_icon  = load_app_icon();
 
     // Shared action queue
     let tray_actions: Arc<Mutex<Vec<TrayAction>>> = Arc::new(Mutex::new(Vec::new()));
@@ -187,14 +185,12 @@ fn main() {
         }
     });
 
-    let app_icon = load_app_icon();
-
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("naTiVeFS")
-            .with_inner_size([480.0, 580.0])
-            .with_min_inner_size([380.0, 420.0])
-            .with_icon(Arc::new(app_icon)),
+        .with_title("naTiVeFS")
+        .with_inner_size([480.0, 580.0])
+        .with_min_inner_size([380.0, 420.0])
+        .with_icon(Arc::new(app_icon)),
         ..Default::default()
     };
 
@@ -202,9 +198,18 @@ fn main() {
         "naTiVeFS",
         native_options,
         Box::new(move |cc| {
+            // Build tray AFTER eframe/GTK has been initialized
+            let tray = TrayIconBuilder::new()
+            .with_menu(Box::new(tray_menu))
+            .with_tooltip("naTiVeFS")
+            .with_icon(tray_icon)
+            .build()
+            .expect("Failed to build tray icon");
+
             Ok(Box::new(TrayAwareApp {
                 inner: NativeFS::new(cc),
-                tray_actions,
+                        tray_actions,
+                        _tray: tray,
             }))
         }),
     )
