@@ -68,9 +68,9 @@ jobs:
         with:
           path: dist/
 
-      - name: Create release
+- name: Create release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/**/*
           generate_release_notes: true
-	  prerelease: true
+          prerelease: true
