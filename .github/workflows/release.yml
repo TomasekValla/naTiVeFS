@@ -17,8 +17,6 @@ jobs:
             output: nativefs-linux-x64
           - os: ubuntu-22.04-arm
             output: nativefs-linux-arm64
-          - os: macos-13
-            output: nativefs-macos-x64
           - os: macos-14
             output: nativefs-macos-arm64
           - os: windows-2022
