@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>naTiVeFS — Get</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #111111;
+  --fg: #eeeeee;
+  --fg-dim: rgba(238,238,238,0.4);
+  --fg-mid: rgba(238,238,238,0.65);
+  --border: rgba(238,238,238,0.12);
+  --panel: #1a1a1a;
+  --accent: #eeeeee;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+body.light {
+  --bg: #ffffff;
+  --fg: #000000;
+  --fg-dim: rgba(0,0,0,0.38);
+  --fg-mid: rgba(0,0,0,0.6);
+  --border: rgba(0,0,0,0.12);
+  --panel: #f5f5f5;
+  --accent: #000000;
+}
+
+body.amoled {
+  --bg: #000000;
+  --fg: #ffffff;
+  --fg-dim: rgba(255,255,255,0.38);
+  --fg-mid: rgba(255,255,255,0.6);
+  --border: rgba(255,255,255,0.1);
+  --panel: #0a0a0a;
+  --accent: #ffffff;
+}
+
+.page {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 48px 24px 80px;
+  flex: 1;
+}
+
+h1 {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin-bottom: 4px;
+}
+
+.tagline {
+  color: var(--fg-mid);
+  font-size: 13px;
+  margin-bottom: 40px;
+}
+
+.section-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  margin-bottom: 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.platform-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 28px;
+  border: 1px solid var(--border);
+  width: fit-content;
+}
+
+.platform-tabs button {
+  background: none;
+  border: none;
+  color: var(--fg-mid);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 20px;
+  cursor: pointer;
+  border-right: 1px solid var(--border);
+  transition: color 0.1s, background 0.1s;
+}
+
+.platform-tabs button:last-child {
+  border-right: none;
+}
+
+.platform-tabs button.active {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.platform-tabs button:hover:not(.active) {
+  color: var(--fg);
+}
+
+.platform-section {
+  display: none;
+}
+
+.platform-section.visible {
+  display: block;
+}
+
+.step {
+  margin-bottom: 28px;
+}
+
+.step-num {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  margin-bottom: 6px;
+}
+
+.step h3 {
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.step p {
+  color: var(--fg-mid);
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+
+.dl-btn {
+  display: inline-block;
+  background: var(--accent);
+  color: var(--bg);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 9px 18px;
+  border: none;
+  cursor: pointer;
+  text-decoration: none;
+  margin-right: 8px;
+  margin-bottom: 8px;
+  transition: opacity 0.1s;
+}
+
+.dl-btn:hover {
+  opacity: 0.85;
+}
+
+.dl-btn.secondary {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--fg);
+}
+
+.dl-btn.secondary:hover {
+  border-color: var(--fg);
+}
+
+code {
+  font-family: 'SF Mono', 'Fira Mono', 'Consolas', monospace;
+  font-size: 12px;
+  background: var(--panel);
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+}
+
+pre {
+  font-family: 'SF Mono', 'Fira Mono', 'Consolas', monospace;
+  font-size: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  padding: 14px 16px;
+  overflow-x: auto;
+  margin: 10px 0;
+  color: var(--fg);
+  line-height: 1.7;
+}
+
+.note {
+  font-size: 12px;
+  color: var(--fg-dim);
+  margin-top: 6px;
+}
+
+.divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 36px 0;
+}
+
+.android-section {
+  margin-top: 8px;
+}
+
+.android-section p {
+  color: var(--fg-mid);
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.android-section ol {
+  color: var(--fg-mid);
+  font-size: 13px;
+  padding-left: 20px;
+  margin-bottom: 16px;
+}
+
+.android-section ol li {
+  margin-bottom: 4px;
+}
+
+footer {
+  border-top: 1px solid var(--border);
+  padding: 16px 24px;
+}
+
+.footer-inner {
+  max-width: 640px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.footer-inner span {
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+
+.theme-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--fg-mid);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: color 0.1s, border-color 0.1s;
+}
+
+.theme-btn:hover {
+  color: var(--fg);
+  border-color: var(--fg-mid);
+}
+
+.gh-link {
+  color: var(--fg-dim);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.gh-link:hover {
+  color: var(--fg);
+}
+</style>
+</head>
+<body class="dark" id="body">
+
+<div class="page">
+
+  <h1>naTiVeFS</h1>
+  <p class="tagline">Get your files uploaded. Natively.</p>
+
+  <p class="section-label">Desktop</p>
+
+  <div class="platform-tabs" role="tablist">
+    <button class="active" onclick="switchPlatform('linux', this)" role="tab">Linux</button>
+    <button onclick="switchPlatform('macos', this)" role="tab">macOS</button>
+    <button onclick="switchPlatform('windows', this)" role="tab">Windows</button>
+  </div>
+
+  <!-- LINUX -->
+  <div class="platform-section visible" id="plat-linux">
+
+    <div class="step">
+      <div class="step-num">Step 1</div>
+      <h3>Download</h3>
+      <p>Download the binary for your architecture.</p>
+      <a class="dl-btn" href="https://github.com/TomasekValla/naTiVeFS/releases/latest/download/nativefs-linux-x64" download>
+        nativefs-linux-x64 ↓
+      </a>
+      <a class="dl-btn secondary" href="https://github.com/TomasekValla/naTiVeFS/releases/latest/download/nativefs-linux-arm64" download>
+        nativefs-linux-arm64 ↓
+      </a>
+    </div>
+
+    <div class="step">
+      <div class="step-num">Step 2</div>
+      <h3>Install</h3>
+      <p>Run the install script, or do it manually.</p>
+      <p><strong>Automated:</strong></p>
+<pre>curl -fsSL https://files.tomasekvalla.cz/get/install-linux.sh | sh</pre>
+      <p><strong>Manual:</strong></p>
+<pre>chmod +x nativefs-linux-x64
+mv nativefs-linux-x64 ~/.local/bin/nativefs</pre>
+      <p class="note">To appear in "Open with" in your file manager, also create <code>~/.local/share/applications/nativefs.desktop</code> — the install script does this automatically.</p>
+    </div>
+
+    <div class="step">
+      <div class="step-num">Step 3</div>
+      <h3>Log in</h3>
+      <p>Run <code>nativefs</code>. Enter your TVFS password on first launch.</p>
+    </div>
+
+    <div class="step">
+      <div class="step-num">Step 4</div>
+      <h3>Upload</h3>
+      <p>Drag files into the window, use Ctrl+U, or right-click any file and choose Open With → naTiVeFS.</p>
+    </div>
+
+  </div>
+
+  <!-- MACOS -->
+  <div class="platform-section" id="plat-macos">
+
+    <div class="step">
+      <div class="step-num">Step 1</div>
+      <h3>Download</h3>
+      <p>Download the binary for your Mac.</p>
+      <a class="dl-btn" href="https://github.com/TomasekValla/naTiVeFS/releases/latest/download/nativefs-macos-arm64" download>
+        Apple Silicon (arm64) ↓
+      </a>
+      <a class="dl-btn secondary" href="https://github.com/TomasekValla/naTiVeFS/releases/latest/download/nativefs-macos-x64" download>
+        Intel (x64) ↓
+      </a>
+    </div>
+
+    <div class="step">
+      <div class="step-num">Step 2</div>
+      <h3>Install</h3>
+<pre>chmod +x nativefs-macos-arm64
+xattr -dr com.apple.quarantine nativefs-macos-arm64
+mv nativefs-macos-arm64 /usr/local/bin/nativefs</pre>
+      <p class="note">The <code>xattr</code> step removes the Gatekeeper quarantine flag that blocks unnotarized binaries.</p>
+    </div>
+
+    <div class="step">
+      <div class="step-num">Step 3</div>
+      <h3>Log in</h3>
+      <p>Run <code>nativefs</code> from Terminal or Spotlight. Enter your TVFS password.</p>
+    </div>
+
+    <div class="step">
+      <div class="step-num">Step 4</div>
+      <h3>Upload</h3>
+      <p>Drag files into the window, or use Cmd+U. Right-click → Open With → naTiVeFS works in Finder once the binary is in <code>/usr/local/bin</code>.</p>
+    </div>
+
+  </div>
+
+  <!-- WINDOWS -->
+  <div class="platform-section" id="plat-windows">
+
+    <div class="step">
+      <div class="step-num">Step 1</div>
+      <h3>Download</h3>
+      <a class="dl-btn" href="https://github.com/TomasekValla/naTiVeFS/releases/latest/download/nativefs-windows-x64.exe" download>
+        nativefs-windows-x64.exe ↓
+      </a>
+    </div>
+
+    <div class="step">
+      <div class="step-num">Step 2</div>
+      <h3>Install</h3>
+      <p>Run the PowerShell install script. This copies the binary to <code>%LOCALAPPDATA%\naTiVeFS\</code> and adds a Send To shortcut.</p>
+<pre>irm https://files.tomasekvalla.cz/get/install-windows.ps1 | iex</pre>
+      <p class="note">Or just place the .exe wherever you want and run it directly. The Send To shortcut lets you right-click files in Explorer.</p>
+    </div>
+
+    <div class="step">
+      <div class="step-num">Step 3</div>
+      <h3>Log in</h3>
+      <p>Run <code>nativefs.exe</code>. Enter your TVFS password on first launch.</p>
+    </div>
+
+    <div class="step">
+      <div class="step-num">Step 4</div>
+      <h3>Upload</h3>
+      <p>Drag files into the window, use Ctrl+U, or right-click any file → Send to → naTiVeFS.</p>
+    </div>
+
+  </div>
+
+  <hr class="divider">
+
+  <p class="section-label">Android</p>
+
+  <div class="android-section">
+    <p>naTiVeFS is not available as a native Android app. Use the PWA instead — it integrates with the system share dialog.</p>
+    <ol>
+      <li>Open Chrome</li>
+      <li>Go to <code>files.tomasekvalla.cz/upload</code></li>
+      <li>Tap ⋮ → Add to Home Screen</li>
+    </ol>
+    <p>After installation, TVFS appears in the Android share sheet. Tap Share on any file, then select TVFS to upload directly.</p>
+    <a class="dl-btn secondary" href="https://files.tomasekvalla.cz/upload">Open upload page →</a>
+  </div>
+
+</div>
+
+<footer>
+  <div class="footer-inner">
+    <button class="theme-btn" onclick="cycleTheme()" id="themeBtn">◐ Dark</button>
+    <span>naTiVeFS</span>
+    <a class="gh-link" href="https://github.com/TomasekValla/naTiVeFS" target="_blank" rel="noopener">github.com/TomasekValla/naTiVeFS</a>
+  </div>
+</footer>
+
+<script>
+var THEMES = ['dark', 'light', 'amoled'];
+var THEME_LABELS = { dark: '◐ Dark', light: '◑ Light', amoled: '● AMOLED' };
+var currentTheme = localStorage.getItem('nativefs_get_theme') || 'dark';
+
+function applyTheme(t) {
+  document.body.className = t;
+  document.getElementById('themeBtn').textContent = THEME_LABELS[t];
+  localStorage.setItem('nativefs_get_theme', t);
+  currentTheme = t;
+}
+
+function cycleTheme() {
+  var idx = (THEMES.indexOf(currentTheme) + 1) % THEMES.length;
+  applyTheme(THEMES[idx]);
+}
+
+function switchPlatform(id, btn) {
+  document.querySelectorAll('.platform-section').forEach(function(el) {
+    el.classList.remove('visible');
+  });
+  document.querySelectorAll('.platform-tabs button').forEach(function(el) {
+    el.classList.remove('active');
+  });
+  document.getElementById('plat-' + id).classList.add('visible');
+  btn.classList.add('active');
+}
+
+applyTheme(currentTheme);
+</script>
+</body>
+</html>

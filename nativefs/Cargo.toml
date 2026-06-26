@@ -1,0 +1,36 @@
+[package]
+name = "nativefs"
+version = "0.1.0"
+edition = "2021"
+authors = ["TomasekValla"]
+description = "naTiVeFS — native desktop client for TVFS file hosting"
+
+[[bin]]
+name = "nativefs"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["multipart", "stream", "cookies", "json"] }
+egui = "0.28"
+eframe = { version = "0.28", features = ["default_fonts"] }
+tray-icon = "0.19"
+rfd = "0.15"
+arboard = "3"
+notify-rust = "4"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+open = "5"
+dirs = "5"
+uuid = { version = "1", features = ["v4"] }
+mime_guess = "2"
+image = { version = "0.25", default-features = false, features = ["png"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+
+[build-dependencies]
