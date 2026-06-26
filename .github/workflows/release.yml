@@ -61,22 +61,22 @@ jobs:
 
       - name: Build (native)
         if: '!matrix.cross'
+        working-directory: nativefs
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Build (cross)
         if: matrix.cross
+        working-directory: nativefs
         run: cross build --release --target ${{ matrix.target }}
 
       # Rename output binary
-      - name: Rename output (Unix)
+     - name: Rename output (Unix)
         if: runner.os != 'Windows'
-        run: |
-          cp target/${{ matrix.target }}/release/nativefs ${{ matrix.output }}
+        run: cp nativefs/target/${{ matrix.target }}/release/nativefs ${{ matrix.output }}
 
       - name: Rename output (Windows)
         if: runner.os == 'Windows'
-        run: |
-          copy target\${{ matrix.target }}\release\nativefs.exe ${{ matrix.output }}
+        run: copy nativefs\target\${{ matrix.target }}\release\nativefs.exe ${{ matrix.output }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
