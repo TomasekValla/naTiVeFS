@@ -6,26 +6,91 @@ on:
       - 'v*'
 
 jobs:
-  build:
+  build-linux-x64:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: true
-
-      - name: Install dependencies
+      - name: Install deps
         run: sudo apt-get install -y libgtk-3-dev libxdo-dev libayatana-appindicator3-dev
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
+      - uses: dtolnay/rust-toolchain@stable
       - name: Build
         working-directory: nativefs
         run: cargo build --release
-
-      - name: Release
-        uses: softprops/action-gh-release@v2
+      - name: Rename
+        run: mv nativefs/target/release/nativefs nativefs-linux-x64
+      - uses: actions/upload-artifact@v4
         with:
-          files: nativefs/target/release/nativefs
+          name: nativefs-linux-x64
+          path: nativefs-linux-x64
+
+  build-linux-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: sudo apt-get install -y libgtk-3-dev libxdo-dev libayatana-appindicator3-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        working-directory: nativefs
+        run: cargo build --release
+      - name: Rename
+        run: mv nativefs/target/release/nativefs nativefs-linux-arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nativefs-linux-arm64
+          path: nativefs-linux-arm64
+
+  build-macos:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            artifact: nativefs-macos-x64
+          - target: aarch64-apple-darwin
+            artifact: nativefs-macos-arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Build
+        working-directory: nativefs
+        run: cargo build --release --target ${{ matrix.target }}
+      - name: Rename
+        run: mv nativefs/target/${{ matrix.target }}/release/nativefs ${{ matrix.artifact }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        working-directory: nativefs
+        run: cargo build --release
+      - name: Rename
+        run: mv nativefs/target/release/nativefs.exe nativefs-windows-x64.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nativefs-windows-x64
+          path: nativefs-windows-x64.exe
+
+  release:
+    needs: [build-linux-x64, build-linux-arm64, build-macos, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            nativefs-linux-x64/nativefs-linux-x64
+            nativefs-linux-arm64/nativefs-linux-arm64
+            nativefs-macos-x64/nativefs-macos-x64
+            nativefs-macos-arm64/nativefs-macos-arm64
+            nativefs-windows-x64/nativefs-windows-x64.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
