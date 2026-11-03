@@ -176,7 +176,7 @@ mod linux {
             let thread = std::thread::Builder::new()
                 .name("nativefs-mpris".into())
                 .spawn(move || {
-                    let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_time().build() else { return };
+                    let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_all().build() else { return };
                     let local = tokio::task::LocalSet::new();
                     local.block_on(&rt, serve(on, rx));
                 })
@@ -216,7 +216,7 @@ mod linux {
     async fn serve(on: OnButton, rx: mpsc::Receiver<Cmd>) {
         let Ok(player) = Player::builder(&format!("naTiVeFS.instance{}", std::process::id()))
             .identity("naTiVeFS")
-            .desktop_entry("nativefs")
+            .desktop_entry(crate::desktop_entry::APP_ID)
             .can_play(true)
             .can_pause(true)
             .can_seek(true)
