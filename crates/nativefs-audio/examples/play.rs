@@ -1,4 +1,4 @@
-//! Output test: `play --list`, or `play <file> [--device <id>] [--shared] [--silent] [--secs N] [--hash]`.
+//! Output test (WASAPI on Windows, ALSA on Linux): `play --list`, or `play <file> [--device <id>] [--shared] [--silent] [--secs N] [--hash]`.
 //! `--silent` negotiates the file's format but sends digital silence (format / stability tests
 //! without sound). `--hash` hashes the samples handed to the device (compare with `decode_raw`).
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use nativefs_audio::decode::Decoder;
-use nativefs_audio::output::wasapi::{devices, Stream};
+use nativefs_audio::output::sys::{devices, Stream};
 use nativefs_audio::output::{fidelity, ShareMode};
 use nativefs_audio::ring::ring;
 
@@ -16,7 +16,7 @@ fn main() {
     let value = |f: &str| args.iter().position(|a| a == f).and_then(|i| args.get(i + 1)).cloned();
     if flag("--list") {
         for d in devices().unwrap() {
-            let vol = nativefs_audio::output::wasapi::endpoint_volume(Some(&d.id));
+            let vol = nativefs_audio::output::sys::endpoint_volume(Some(&d.id));
             println!("{d:?} volume {vol:?}");
         }
         return;
