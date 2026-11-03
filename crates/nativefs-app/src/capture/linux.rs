@@ -59,7 +59,13 @@ pub struct Mic {
 
 impl Mic {
     pub fn start(id: &str, pcm: super::PcmSink, sink: Sink) -> Result<Self, String> {
-        let src = if id.is_empty() { "default" } else { id };
+        let chosen;
+        let src = if id.is_empty() || id == "default" {
+            chosen = default_source()?;
+            chosen.as_str()
+        } else {
+            id
+        };
         let mut child = ffmpeg()
             .args(["-f", "pulse", "-i", src, "-ac", "2", "-ar", "48000", "-f", "s16le", "pipe:1"])
             .stdout(Stdio::piped())
@@ -110,20 +116,75 @@ pub fn encode_aac(samples: &[i16], rate: u32, ch: u16, kbps: u32, path: &Path) -
 }
 
 pub fn microphones() -> Result<Vec<Device>, String> {
-    let out = ffmpeg().args(["-sources", "pulse"]).stderr(Stdio::null()).output().map_err(|e| missing_ffmpeg(&e))?;
-    let text = String::from_utf8_lossy(&out.stdout);
     let mut list = vec![Device { id: "default".into(), name: "Default microphone".into() }];
+    list.extend(real_sources()?.0);
+    Ok(list)
+}
+
+/// The real input sources (no ".monitor" loopbacks of outputs) and which one is the system default, if any.
+fn real_sources() -> Result<(Vec<Device>, Option<String>), String> {
+    let out = ffmpeg().args(["-sources", "pulse"]).stderr(Stdio::null()).output().map_err(|e| missing_ffmpeg(&e))?;
+    Ok(parse_sources(&String::from_utf8_lossy(&out.stdout)))
+}
+
+fn parse_sources(text: &str) -> (Vec<Device>, Option<String>) {
+    let (mut list, mut default) = (Vec::new(), None);
     for line in text.lines() {
-        // "* alsa_input.usb-HyperX_SoloCast-00.mono-fallback [HyperX SoloCast Mono]"
-        let line = line.trim().trim_start_matches('*').trim();
+        // "* alsa_input.usb-HyperX_SoloCast-00.mono-fallback [HyperX SoloCast Mono]" (`*` = the default)
+        let line = line.trim();
+        let is_default = line.starts_with('*');
+        let line = line.trim_start_matches('*').trim();
         let Some((id, rest)) = line.split_once(' ') else { continue };
         if id.ends_with(".monitor") || !id.contains('.') {
             continue;
         }
-        let name = rest.trim().trim_start_matches('[').trim_end_matches(']').to_owned();
+        if is_default {
+            default = Some(id.to_owned());
+        }
+        // "[Name] (none)": the name is inside the brackets, ffmpeg may add details after them
+        let rest = rest.trim();
+        let name = match (rest.find('['), rest.rfind(']')) {
+            (Some(a), Some(b)) if b > a => rest[a + 1..b].to_owned(),
+            _ => rest.to_owned(),
+        };
         list.push(Device { id: id.to_owned(), name });
     }
-    Ok(list)
+    (list, default)
+}
+
+/// "Default microphone": the system default when it is a real input, else the first microphone. The default can be
+/// an output's monitor (e.g. the sound card runs an output-only profile), which would record silence.
+fn default_source() -> Result<String, String> {
+    let (list, default) = real_sources()?;
+    default.or_else(|| list.first().map(|d| d.id.clone())).ok_or_else(|| {
+        "No microphone was found. In the system sound settings, check that the microphone is on (the sound card may be set to an output-only profile).".to_owned()
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn monitor_default_is_skipped() {
+        let (list, default) = parse_sources("Auto-detected sources for pulse:\n* alsa_output.pci-0000_05_00.6.analog-stereo.monitor [Monitor of Built-in Audio]\n  alsa_input.pci-0000_05_00.6.analog-stereo [Built-in Audio Analog Stereo]\n");
+        assert_eq!(default, None);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, "alsa_input.pci-0000_05_00.6.analog-stereo");
+    }
+
+    #[test]
+    fn only_monitors_means_no_microphone() {
+        let (list, default) = parse_sources("* alsa_output.pci-0000_05_00.6.analog-stereo.monitor [Monitor of Built-in Audio]\n");
+        assert!(list.is_empty() && default.is_none());
+    }
+
+    #[test]
+    fn names_drop_ffmpeg_details() {
+        let (list, default) = parse_sources("  bluez_output.03_00.1.monitor [Monitor of Headset] (none)\n* bluez_input.03:00:60 [Headset] (none)\n");
+        assert_eq!(default.as_deref(), Some("bluez_input.03:00:60"));
+        assert_eq!(list[0].name, "Headset");
+    }
 }
 
 struct Shared {
