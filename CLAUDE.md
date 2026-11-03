@@ -14,8 +14,8 @@ Naming — use exactly this, never invent other names:
 
 Rules:
 - Code, comments, commit messages and docs in **English**.
-- **Nothing personal in this repository**: no names, hardware, local paths, user / host names, quotes, personal test files or
-  screenshots with personal data, in files or in commit messages. Decisions and test findings are written anonymized.
+- **Nothing personal in this repository** except the owner's public name (Tomáš Valla / TomasekValla): no other names, hardware,
+  local paths, user / host names, quotes, personal test files or screenshots with personal data, in files or in commit messages. Decisions and test findings are written anonymized.
 - Never guess the UI: the native UI must match the web TVFS 1:1. Render the web (`tools/web-reference/`) and measure computed styles.
 - Say exactly what was compiled / run / measured, per OS. On errors, find the root cause by measuring; no speculative fixes.
 - Idle CPU/GPU ≈ 0 is a hard criterion; stop timers and polling when the window is hidden.
