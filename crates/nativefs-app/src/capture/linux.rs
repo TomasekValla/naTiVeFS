@@ -206,6 +206,12 @@ const MODES: [(Option<&str>, u32, u32); 4] = [(Some("mjpeg"), 1920, 1080), (Some
 
 impl Session {
     pub fn start(camera: &str, mic: Option<&str>, sink: Sink) -> Result<Self, String> {
+        // "Default microphone" like the voice note (never an output monitor); without a microphone: video only
+        let resolved = match mic {
+            Some(m) if m.is_empty() || m == "default" => default_source().ok(),
+            m => m.map(str::to_owned),
+        };
+        let mic = resolved.as_deref();
         let shared = Arc::new(Shared { stop: AtomicBool::new(false), latest: Mutex::new(None), encoder: Mutex::new(None) });
         let children: Arc<Mutex<Vec<Child>>> = Arc::default();
         let mut threads = Vec::new();
