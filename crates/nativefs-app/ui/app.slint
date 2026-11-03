@@ -389,7 +389,9 @@ export component MainWindow inherits Window {
     callback update-prefs-changed();
     callback check-updates();
 
-    property <string> password;
+    // in-out like `username`: as a private property, the two-way binding from the TextField inside `if !logged-in`
+    // never updated it (Slint 1.16), so the Log In button stayed disabled
+    in-out property <string> password;
     property <[string]> pills-a: ["5m", "30m", "1h", "6h", "12h", "1d"];
     property <[string]> pills-b: ["2d", "3d", "5d", "7d", "10d", "14d"];
     property <length> col-w: min(440px, root.width - 40px);
