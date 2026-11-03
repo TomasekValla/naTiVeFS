@@ -1,0 +1,97 @@
+name: Release
+
+# Tag `vX.Y.Z` -> builds all 5 targets, signs the archives with minisign
+# (free key, NOT an OS code-signing certificate) and publishes a GitHub release
+# that the in-app updater reads.
+#
+# One-time setup: `minisign -G`, put the public key into
+# crates/tvfs-core/src/update.rs (UPDATE_PUBLIC_KEY) and add the repo secrets
+# MINISIGN_KEY (contents of minisign.key) and MINISIGN_PASSWORD.
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    name: build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x64,     os: ubuntu-24.04,     ext: tar.gz }
+          - { name: linux-arm64,   os: ubuntu-24.04-arm, ext: tar.gz }
+          - { name: windows-x64,   os: windows-latest,   ext: zip }
+          - { name: windows-arm64, os: windows-11-arm,   ext: zip }
+          - { name: macos-arm64,   os: macos-latest,     ext: tar.gz }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux build dependencies
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libfontconfig1-dev libxkbcommon-dev \
+            libxkbcommon-x11-dev libwayland-dev libx11-dev libxcb1-dev \
+            libgl1-mesa-dev libegl1-mesa-dev libdbus-1-dev
+
+      - name: libmpv for the video player (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: bash tools/fetch-libmpv.sh ${{ contains(matrix.name, 'arm64') && 'aarch64' || 'x86_64' }}
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo build --release --locked -p nativefs-app -p nativefs-link
+
+      - name: Package (unix)
+        if: matrix.ext == 'tar.gz'
+        # Linux/macOS executables are lowercase: nativefs, nativefs-link
+        run: |
+          mkdir -p pkg
+          cp target/release/naTiVeFS pkg/nativefs
+          cp target/release/naTiVeFS-link pkg/nativefs-link
+          tar -czf naTiVeFS-${{ matrix.name }}.tar.gz -C pkg nativefs nativefs-link
+
+      - name: Package (windows)
+        if: matrix.ext == 'zip'
+        shell: pwsh
+        # libmpv-2.dll: the video player (vendor/libmpv/README.md)
+        run: Compress-Archive -Path target/release/naTiVeFS.exe, target/release/naTiVeFS-link.exe, target/release/libmpv-2.dll -DestinationPath naTiVeFS-${{ matrix.name }}.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: naTiVeFS-${{ matrix.name }}
+          path: naTiVeFS-${{ matrix.name }}.${{ matrix.ext }}
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Sign archives with minisign
+        env:
+          MINISIGN_KEY: ${{ secrets.MINISIGN_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          sudo apt-get update && sudo apt-get install -y minisign
+          printf '%s\n' "$MINISIGN_KEY" > "$RUNNER_TEMP/minisign.key"
+          for f in dist/naTiVeFS-*; do
+            printf '%s\n' "$MINISIGN_PASSWORD" | minisign -S -s "$RUNNER_TEMP/minisign.key" -m "$f"
+          done
+          rm -f "$RUNNER_TEMP/minisign.key"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          # 0.x tags are pre-releases; the first full release is v1.0.0
+          prerelease: ${{ startsWith(github.ref_name, 'v0.') }}

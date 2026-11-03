@@ -1,0 +1,2442 @@
+import { RecentItem, QueueRow, FileProgressRow, BatchRow, MetricTile, PillState, LibInfo, BrowserRow, CheckStat, CheckStatPair, CheckStream, Palette, Look, GlassCard, Ico, StatusChip, ModeCell, Pill, Eyebrow, TextField, ActionBtn, SmallBtn, Seg, SettingCard, Explain, ClampExplain, InfoCard, XMark, EmojiBtn, RecentRow, IconBtn, SettingRow, LibRow, CheckLabel, CheckStatCell, CheckGrid, CheckStreamCard, ProbeBtn, DashedOutline, QueueFileRow, CopyPill, PillPair, LinkBox, BatchFileRow, MetricCol, StatsTile, NumBox, Anim } from "common.slint";
+// re-exported for the Rust side (structs used in callbacks / models, globals set from Rust)
+export { ReaderWindow, ReaderBlock, ReaderRow } from "reader.slint";
+export { FileWindow, ListWindow, ListFile } from "files.slint";
+export { ImageWindow } from "image.slint";
+export { PlayerWindow, TrackItem, StatRow } from "player.slint";
+export { CameraWindow, DeviceItem } from "camera.slint";
+export { AudioWindow, OutputDevice, BufferedRange, KnobData, PresetChip, PresetLine, EqTick, EqCurve, EqPoint, EqCol, EqMenuItem } from "audio.slint";
+export { RecentItem, QueueRow, FileProgressRow, BatchRow, MetricTile, PillState, LibInfo, CheckStat, CheckStatPair, CheckStream, Palette, Look }
+
+// the voice recorder's buttons (web: 14 px radius, 12 x 16 padding, red primary)
+component VoiceBtn inherits Rectangle {
+    in property <string> label;
+    in property <bool> primary;
+    callback clicked();
+    horizontal-stretch: 1;
+    height: 42px;
+    border-radius: 14px;
+    background: root.primary ? (ta.pressed ? #e04343 : #ff4d4d) : (ta.has-hover ? Palette.border : Palette.glass);
+    border-width: 1px;
+    border-color: root.primary ? #ff4d4d : Palette.border;
+    animate background { duration: Anim.fast; }
+    Text {
+        text: root.label;
+        font-size: 14.08px;
+        font-weight: 700;
+        color: root.primary ? #ffffff : Palette.text;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+}
+
+// one browser in settings > Links (a radio row)
+component BrowserChoice inherits Rectangle {
+    in property <string> name;
+    in property <bool> selected;
+    callback clicked();
+    height: 30px;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: root.selected ? #2fffc4 : Palette.border;
+    background: root.selected ? #2fffc41a : (ta.has-hover ? #ffffff0d : transparent);
+    animate background, border-color { duration: Anim.fast; }
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 9px;
+        Rectangle {
+            width: 12px;
+            height: 12px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 6px;
+            border-width: 1.5px;
+            border-color: root.selected ? #2fffc4 : Palette.dim;
+            Rectangle { width: 6px; height: 6px; border-radius: 3px; background: #2fffc4; opacity: root.selected ? 1 : 0; animate opacity { duration: Anim.fast; } }
+        }
+        Text { text: root.name; font-size: 12.16px; font-weight: 600; color: root.selected ? Palette.text : Palette.dim; vertical-alignment: center; overflow: elide; }
+    }
+    ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+}
+
+export component MainWindow inherits Window {
+    in property <string> title-text: "naTiVeFS";
+    // short message at the bottom ("There is no TVFS link on the clipboard.")
+    in property <string> toast;
+    title: root.title-text;
+    icon: @image-url("../../../assets/app-256.png");
+    default-font-family: "Inter";
+    default-font-size: 16px;
+    default-font-weight: 400;
+    // the page is laid out for at least 480 logical px (the web's 440 px column + margins), so zooming in widens the
+    // window when needed instead of squeezing the page; the height is not forced (the page scrolls)
+    min-width: 480px;
+    min-height: 560px / root.zoom;
+    preferred-width: root.preferred-w * 1px;
+    preferred-height: root.preferred-h * 1px;
+    // the size a new window opens at (Rust re-applies it when the window is first shown later, from the tray)
+    out property <float> preferred-w: 520;
+    out property <float> preferred-h: 900;
+    background: Palette.bg;
+
+    in-out property <bool> logged-in: false;
+    in-out property <bool> busy: false;
+    // browser-like zoom (1.0 = 100 %), applied by Rust as the window scale factor
+    in property <float> zoom: 1.0;
+    // +1 zoom in, -1 zoom out, 0 back to 100 %
+    callback zoom-step(int);
+    // the other windows' zoom (set in each window, shown and reset on the settings page)
+    in property <float> reader-zoom: 1.0;
+    in property <float> audio-zoom: 1.0;
+    in property <float> video-zoom: 1.0;
+    // 0 = reader, 1 = audio player, 2 = video player: back to 100 %
+    callback viewer-zoom-reset(int);
+    in-out property <string> error-text;
+    in-out property <string> username;
+    in property <bool> backend-online: false;
+    in property <string> latency-text: "-";
+    in property <int> latency-level: 0;
+    in property <string> used-text: "-";
+    // 0 = good, 1 = warn (24 GB), 2 = bad (28.8 GB)
+    in property <int> used-level: 0;
+    in property <int> tier: 0;
+    in property <[RecentItem]> recent;
+    in-out property <int> expiry: 9;
+    in property <string> expiry-date-text;
+    in-out property <int> mode: 0;
+    in-out property <bool> close-to-tray: true;
+    // a tray icon could be created (GNOME without an AppIndicator extension has none)
+    in property <bool> tray-enabled: false;
+    // "Start with the computer" (the OS autostart entry) and "Start in the background" (hidden in the tray)
+    in-out property <bool> autostart;
+    in-out property <bool> start-background;
+    in-out property <string> browser-cmd;
+    // link router (settings > Links): switched on, a status line, the browsers found, which one is picked
+    // (-1 = the previous default, -2 = a typed command), examples for this OS, the previous default's name
+    in-out property <bool> router-on;
+    in property <string> router-status;
+    in property <[BrowserRow]> browsers;
+    in property <int> browser-pick: -1;
+    in property <string> browser-examples;
+    in property <string> router-prev-name;
+    // "Upload to TVFS" / "Open locally in naTiVeFS" in the file manager's menu (Windows, Linux)
+    in-out property <bool> file-menus;
+    in property <bool> file-menus-available;
+    // the first-run offer card on the main page (shown once)
+    in-out property <bool> router-offer;
+    callback theme-changed(bool);
+    // delete confirmation (empty id = dialog hidden)
+    // id / key / upload id the confirmation is about
+    in-out property <string> confirm-id;
+
+    // link opened from the OS / link router
+
+    // 0 = the TVFS page (1:1 with the web), 1 = naTiVeFS app settings
+    in-out property <int> page: 0;
+    // app settings page
+    in property <string> app-version;
+    in property <string> build-info;
+    in property <int> refresh-hz: 60;
+    // measured background frame rate, shown on the settings page
+    in property <int> bg-fps: 0;
+    // index into Off / 30 / 60 / Monitor
+    in-out property <int> motion: 3;
+    in-out property <bool> update-beta: false;
+    in-out property <bool> update-auto: true;
+    in property <bool> update-busy: false;
+    in property <string> update-status;
+    in property <string> update-url;
+    in property <[LibInfo]> libs;
+    property <bool> show-libs: false;
+
+    // middle-button autoscroll, driven from Rust
+    in property <bool> autoscroll: false;
+    in property <length> autoscroll-x;
+    in property <length> autoscroll-y;
+    in property <int> autoscroll-dir: 0;
+
+    // ── upload (stage 2) ──────────────────────────────────────────────
+    in property <[QueueRow]> queue;
+    in-out property <int> editing-index: -1;
+    in property <string> queue-total;
+    // nested scroll of the queue list (max 180 px like the web), driven by the wheel from Rust
+    in-out property <length> queue-scroll: 0px;
+    property <length> queue-max: max(0px, root.queue.length * 41px + max(0, root.queue.length - 1) * 4px - 180px);
+    // textarea of the Text mode: scroll position and how far it can go
+    in-out property <length> text-scroll: 0px;
+    in-out property <length> text-max: 0px;
+    // step of the wheel event being delivered, set by Rust just before (line steps scroll smoothly, touchpads do not)
+    in-out property <length> wheel-dy;
+    in-out property <bool> wheel-smooth;
+    // middle-click autoscroll: Rust sends a zero "probe" wheel event at the click position to learn what is under the
+    // cursor (0 = page, 1 = queue list, 2 = textarea, 3 = raw ffprobe JSON), then scrolls that with autoscroll-by
+    in-out property <bool> wheel-probe;
+    in-out property <int> autoscroll-target;
+
+    // ── File Check page (page 2, check.html) ──────────────────────────
+    in-out property <string> check-url;
+    in property <bool> check-busy;
+    in property <string> check-error;
+    in property <bool> check-has-result;
+    in property <bool> check-has-format;
+    in property <[CheckStatPair]> check-format;
+    in property <[CheckStream]> check-streams;
+    in property <string> check-raw;
+    in-out property <bool> check-raw-open;
+    in-out property <length> raw-scroll: 0px;
+    in-out property <length> raw-max: 0px;
+    callback check-probe(string);
+    // the page was opened: start empty like a fresh check.html
+    callback check-opened();
+    // Ctrl+V outside the URL field: a files.tomasekvalla.cz link from the clipboard fills it
+    callback check-paste();
+
+    // The wheel over a nested box: 1 = queue list, 2 = textarea, 3 = raw ffprobe JSON. False when the box is
+    // already at that end, so the page scrolls instead.
+    function nested-can(which: int) -> bool {
+        if (root.confirm-kind != 0) { return false; }
+        if (which == 1) { return root.queue-max > 0px; }
+        if (which == 2) { return root.text-max > 0px; }
+        if (which == 3) { return root.raw-max > 0px; }
+        return false;
+    }
+    public function autoscroll-by(dy: length) {
+        if (root.autoscroll-target == 1) { root.queue-scroll = clamp(clamp(root.queue-scroll, 0px, root.queue-max) + dy, 0px, root.queue-max); return; }
+        if (root.autoscroll-target == 2) { root.text-scroll = clamp(clamp(root.text-scroll, 0px, root.text-max) + dy, 0px, root.text-max); return; }
+        if (root.autoscroll-target == 3) { root.raw-scroll = clamp(clamp(root.raw-scroll, 0px, root.raw-max) + dy, 0px, root.raw-max); return; }
+        root.scroll-by(dy, false);
+    }
+    function nested-wheel(which: int) -> bool {
+        if (root.confirm-kind != 0) { return false; }
+        if (which == 1) {
+            if (clamp(root.queue-scroll + root.wheel-dy, 0px, root.queue-max) == clamp(root.queue-scroll, 0px, root.queue-max)) { return false; }
+            root.queue-scroll = clamp(root.queue-scroll + root.wheel-dy, 0px, root.queue-max);
+            return true;
+        }
+        if (which == 2) {
+            if (clamp(root.text-scroll + root.wheel-dy, 0px, root.text-max) == clamp(root.text-scroll, 0px, root.text-max)) { return false; }
+            root.text-scroll = clamp(root.text-scroll + root.wheel-dy, 0px, root.text-max);
+            return true;
+        }
+        if (which == 3) {
+            if (clamp(root.raw-scroll + root.wheel-dy, 0px, root.raw-max) == clamp(root.raw-scroll, 0px, root.raw-max)) { return false; }
+            root.raw-scroll = clamp(root.raw-scroll + root.wheel-dy, 0px, root.raw-max);
+            return true;
+        }
+        return false;
+    }
+    // a file is being dragged over the window
+    in property <bool> drop-hover;
+    // a dragged file is over the "Use TVFS tools locally" zone (it opens locally instead of being queued)
+    in property <bool> drop-local;
+    in-out property <bool> drop-probe;
+    in-out property <bool> drop-probe-hit;
+    in property <bool> uploading;
+    in property <bool> upload-cancelled;
+    in property <string> prog-status;
+    in property <bool> prog-dots;
+    in property <float> prog-frac;
+    in property <string> prog-pct;
+    in property <string> prog-size;
+    in property <string> prog-eta;
+    in property <string> prog-te;
+    in property <string> prog-mbps;
+    in property <string> prog-avg;
+    in property <color> prog-color: Palette.dot-good;
+    in property <[FileProgressRow]> per-file;
+    // "Upload Performance" card
+    in property <bool> stats-visible;
+    in property <string> stats-elapsed;
+    in property <string> stats-speed;
+    in property <string> stats-speed-mbps;
+    // 0 = none (first upload), 1 = faster, 2 = slower, 3 = same
+    in property <int> stats-cmp-kind;
+    in property <string> stats-cmp-badge;
+    in property <string> stats-cmp-headline;
+    in property <string> stats-cmp-sub;
+    in property <string> stats-fun-prefix;
+    in property <string> stats-fun-bold;
+    in property <[MetricTile]> stats-speed-tiles;
+    in property <[MetricTile]> stats-ping-tiles;
+    // 1 → 0 over 20 s, then the card dismisses itself
+    in property <float> stats-timer: 1.0;
+    in property <duration> stats-timer-anim: 0ms;
+    // upload error under the progress box (`.error-message`)
+    in property <string> upload-error;
+    // result box
+    in property <bool> result-visible;
+    in property <string> result-title;
+    in property <string> result-link;
+    in property <PillState> pill-link;
+    in property <PillState> pill-styled;
+    in property <string> reader-link;
+    in property <PillState> pill-reader;
+    in property <PillState> pill-reader-styled;
+    in property <string> player-link;
+    in property <PillState> pill-player;
+    in property <PillState> pill-player-styled;
+    in property <[BatchRow]> batch-rows;
+    // batch row copy feedback: row index and 0 = link / 1 = styled
+    in property <int> batch-copied-row: -1;
+    in property <int> batch-copied-kind;
+    // recents: "Show more (N)" / "Show less"
+    in property <int> recent-hidden: 0;
+    in property <bool> recent-expanded;
+    // copy feedback on a recent row: its id and 0 = link / 1 = styled
+    in property <string> recent-copied-id;
+    in property <int> recent-copied-kind;
+    // text mode
+    in-out property <string> text-name;
+    in-out property <string> text-content;
+    in property <bool> text-md;
+    in property <bool> text-md-manual;
+    in property <string> text-size: "0 B";
+    // TVFS settings card
+    in-out property <bool> users-only;
+    in-out property <bool> chunk-auto: true;
+    in-out property <string> chunk-count-text: "3";
+    in-out property <string> chunk-size-text: "30";
+    in property <bool> chunk-size-invalid;
+    // 0 = hidden, 1 = warn, 2 = caution, 3 = prevented
+    in property <int> chunk-msg-kind;
+    in property <string> chunk-msg-text;
+    in property <bool> chunk-msg-typing;
+    in property <string> chunk-auto-text;
+    in-out property <int> auto-copy: 2;
+    in-out property <bool> prefer-tool: true;
+    in-out property <bool> image-styled: false;
+    // Create mode: the capture menu inside the drop zone
+    in-out property <bool> capture-menu;
+    // voice recorder in the drop zone: 0 closed, 1 asking for the microphone, 2 ready, 3 recording, 4 review,
+    // 5 encoding
+    in property <int> voice-state;
+    in property <string> voice-status;
+    in property <bool> voice-error;
+    in property <string> voice-time: "0:00";
+    // the waveform: live levels while recording, the whole recording in review (0..1 each)
+    in property <[float]> voice-bars;
+    // review: how far the playback is (0..1)
+    in property <float> voice-progress;
+    in property <bool> voice-listening;
+    // review: jump to this point (0..1) and play
+    callback voice-seek(float);
+    in-out property <int> voice-format;
+    // 0 start, 1 stop, 2 use, 3 discard & retry, 4 cancel, 5 listen / stop listening
+    callback voice(int);
+    callback voice-format-picked(int);
+    // generic confirmation (the web's askToDelete): 0 = hidden, 1 = delete file, 2 = delete unfinished upload, 3 = cancel upload
+    in-out property <int> confirm-kind;
+    in-out property <string> confirm-title;
+    in-out property <string> confirm-text;
+    in-out property <string> confirm-note;
+
+    pure function pill-icon(i: int) -> image {
+        if (i == 1) { return @image-url("../../../assets/img/emoji-sparkles.png"); }
+        if (i == 2) { return @image-url("../../../assets/img/emoji-book.png"); }
+        if (i == 3) { return @image-url("../../../assets/img/emoji-note.png"); }
+        if (i == 4) { return @image-url("../../../assets/img/emoji-check.png"); }
+        if (i == 5) { return @image-url("../../../assets/img/emoji-hourglass.png"); }
+        return @image-url("../../../assets/img/emoji-doc.png");
+    }
+
+    callback pick-files();
+    // "Use TVFS tools locally": choose a file to open on this computer
+    callback pick-local();
+    callback queue-rename(int, string);
+    callback queue-anon(int);
+    callback queue-remove(int);
+    callback queue-clear();
+    callback start-upload();
+    callback cancel-clicked(bool);
+    callback confirm-answer(int, string, bool);
+    callback stats-dismiss();
+    callback copy-result(int);
+    callback open-result(string);
+    callback copy-batch(int, string, int);
+    callback copy-recent(string, string, int);
+    callback recent-toggle-more();
+    callback recent-open(RecentItem);
+    callback forget-unfinished(string);
+    callback text-edited(string);
+    callback text-mode-pick(bool);
+    callback add-text();
+    callback paste-files();
+    callback capture(int);
+    callback users-only-changed(bool);
+    callback chunk-mode-changed(bool);
+    callback chunk-inputs-edited();
+    callback chunk-inputs-commit();
+    callback auto-copy-changed();
+
+    callback login(string, string);
+    callback logout();
+    callback open-link(string);
+    callback copy-link(string);
+    callback copy-styled(string, string);
+    callback delete-file(string);
+    callback pick-expiry(int);
+    callback save-settings(bool, string);
+    callback startup-changed(bool, bool);
+    callback router-toggle(bool);
+    callback file-menus-changed(bool);
+    // the settings page opened (refreshes the link router's state and the browser list)
+    callback settings-opened();
+    // -1 = back to the previous default browser
+    callback pick-browser(int);
+    callback router-offer-answer(bool);
+    callback appearance-changed();
+    callback update-prefs-changed();
+    callback check-updates();
+
+    property <string> password;
+    property <[string]> pills-a: ["5m", "30m", "1h", "6h", "12h", "1d"];
+    property <[string]> pills-b: ["2d", "3d", "5d", "7d", "10d", "14d"];
+    property <length> col-w: min(440px, root.width - 40px);
+    property <length> inner-w: root.col-w - 82px;
+    property <color> latency-color: root.latency-level == 0 ? Palette.dot-good : (root.latency-level == 1 ? Palette.warn : Palette.bad);
+    property <bool> can-submit: root.logged-in || (!root.busy && root.username != "" && root.password != "");
+
+    // ── scrolling: wheel input comes from Rust (winit), animated here ─────
+    property <length> content-h: page-col.preferred-height;
+    property <length> max-scroll: max(0px, root.content-h - root.height);
+    // Rust only starts middle-button autoscroll on the page when there is something to scroll
+    out property <bool> can-scroll: root.max-scroll > 0px && root.confirm-kind == 0;
+    property <length> scroll-target: 0px;
+    property <duration> scroll-anim: 0ms;
+    property <length> scroll-pos: clamp(root.scroll-target, 0px, root.max-scroll);
+    animate scroll-pos { duration: root.scroll-anim; easing: cubic-bezier(0.2, 0.7, 0.3, 1); }
+    // remembered position of the TVFS page while the settings page is open
+    property <length> main-scroll: 0px;
+
+    public function scroll-by(dy: length, smooth: bool) {
+        if (root.confirm-kind != 0) { return; }
+        root.scroll-anim = smooth && Look.smooth-scroll ? 230ms : 0ms;
+        root.scroll-target = clamp(clamp(root.scroll-target, 0px, root.max-scroll) + dy, 0px, root.max-scroll);
+    }
+    public function scroll-to(y: length, smooth: bool) {
+        root.scroll-anim = smooth && Look.smooth-scroll ? 320ms : 0ms;
+        root.scroll-target = clamp(y, 0px, root.max-scroll);
+    }
+    function go-page(p: int) {
+        if (p == root.page) { return; }
+        if (root.page == 0) { root.main-scroll = root.scroll-pos; }
+        root.page = p;
+        if (p == 2) { root.check-opened(); }
+        if (p == 1) { root.settings-opened(); }
+        root.scroll-anim = 0ms;
+        root.scroll-target = p == 0 ? root.main-scroll : 0px;
+    }
+
+    init => {
+        Look.win-w = root.width;
+        Look.win-h = root.height;
+        keys.focus();
+    }
+    changed width => { Look.win-w = self.width; }
+    changed height => { Look.win-h = self.height; }
+
+    // ── page background ────────────────────────────────────────────────
+    // The animated orbs (web screensaver canvas) once Rust has rendered a frame,
+    // the web's static CSS gradient before that.
+    if Look.has-backdrop : Image {
+        width: root.width;
+        height: root.height;
+        source: Look.backdrop;
+        image-fit: fill;
+    }
+    if !Look.has-backdrop && !Palette.light : Rectangle {
+        Rectangle { background: @linear-gradient(165deg, #04231d 0%, #03070a 42%, #14082e 72%, #1d0a40 100%); }
+        Rectangle {
+            property <length> r: max(root.width, root.height) * 0.36;
+            x: root.width * 0.12 - self.r;
+            y: root.height * -0.08 - self.r;
+            width: self.r * 2;
+            height: self.r * 2;
+            background: @radial-gradient(circle, #0a8a78 0%, #0a8a7800 70%);
+        }
+        Rectangle {
+            property <length> r: max(root.width, root.height) * 0.36;
+            x: root.width * 1.08 - self.r;
+            y: root.height * 0.12 - self.r;
+            width: self.r * 2;
+            height: self.r * 2;
+            background: @radial-gradient(circle, #6b2bdb 0%, #6b2bdb00 70%);
+        }
+        Rectangle {
+            property <length> r: max(root.width, root.height) * 0.5;
+            x: root.width * 0.5 - self.r;
+            y: root.height * 1.18 - self.r;
+            width: self.r * 2;
+            height: self.r * 2;
+            background: @radial-gradient(circle, #3d1690 0%, #3d169000 70%);
+        }
+    }
+    if !Look.has-backdrop && Palette.light : Rectangle {
+        Rectangle { background: @linear-gradient(165deg, #e8fbf6 0%, #f3f0fb 50%, #e9def9 100%); }
+        Rectangle {
+            property <length> r: max(root.width, root.height) * 0.36;
+            x: root.width * 0.1 - self.r;
+            y: root.height * -0.1 - self.r;
+            width: self.r * 2;
+            height: self.r * 2;
+            background: @radial-gradient(circle, #7ee8d4 0%, #7ee8d400 70%);
+        }
+        Rectangle {
+            property <length> r: max(root.width, root.height) * 0.36;
+            x: root.width * 1.05 - self.r;
+            y: root.height * 0.08 - self.r;
+            width: self.r * 2;
+            height: self.r * 2;
+            background: @radial-gradient(circle, #c19bff 0%, #c19bff00 70%);
+        }
+    }
+
+    // ── page content (keyboard scrolling: PgUp/PgDn, arrows, Home/End, Space) ─
+    keys := FocusScope {
+        key-pressed(e) => {
+            if (e.text == Key.Escape && root.confirm-kind != 0) { root.confirm-answer(root.confirm-kind, root.confirm-id, false); root.confirm-kind = 0; return accept; }
+            if (e.text == Key.Escape && root.page != 0) { root.go-page(0); return accept; }
+            // Ctrl (Cmd on macOS, which Slint reports as control) + plus / minus / 0 zoom like a browser
+            if (e.modifiers.control && (e.text == "=" || e.text == "+")) { root.zoom-step(1); return accept; }
+            if (e.modifiers.control && (e.text == "-" || e.text == "_")) { root.zoom-step(-1); return accept; }
+            // "é" = the 0 key on a Czech keyboard (browsers go by the physical key)
+            if (e.modifiers.control && (e.text == "0" || e.text == "é")) { root.zoom-step(0); return accept; }
+            // paste files / a screenshot (text fields handle Ctrl+V themselves)
+            if (e.modifiers.control && (e.text == "v" || e.text == "V") && root.page == 0) { root.paste-files(); return accept; }
+            if (e.modifiers.control && (e.text == "v" || e.text == "V") && root.page == 2) { root.check-paste(); return accept; }
+            if (e.text == Key.PageDown || (e.text == " " && !e.modifiers.shift)) { root.scroll-by(root.height * 0.85, true); return accept; }
+            if (e.text == Key.PageUp || (e.text == " " && e.modifiers.shift)) { root.scroll-by(-root.height * 0.85, true); return accept; }
+            if (e.text == Key.DownArrow) { root.scroll-by(80px, true); return accept; }
+            if (e.text == Key.UpArrow) { root.scroll-by(-80px, true); return accept; }
+            if (e.text == Key.Home) { root.scroll-to(0px, true); return accept; }
+            if (e.text == Key.End) { root.scroll-to(root.max-scroll, true); return accept; }
+            return reject;
+        }
+
+        // the wheel no nested box took scrolls the page (Ctrl + wheel zoom and autoscroll are handled in Rust)
+        TouchArea {
+            width: root.width;
+            height: root.height;
+            scroll-event(e) => {
+                if (root.wheel-probe) { root.autoscroll-target = 0; return accept; }
+                root.scroll-by(root.wheel-dy, root.wheel-smooth);
+                return accept;
+            }
+        }
+
+        Rectangle {
+            clip: true;
+            page-col := VerticalLayout {
+                x: (root.width - self.width) / 2;
+                y: -root.scroll-pos;
+                width: root.col-w;
+                height: self.preferred-height;
+                padding-top: 40px;
+                padding-bottom: 40px;
+                spacing: 18px;
+
+                if root.page == 0 : VerticalLayout {
+                    spacing: 18px;
+                    // ── main card ─────────────────────────────────────────────────
+                    GlassCard {
+                        height: lay1.preferred-height;
+                        lay1 := VerticalLayout {
+                            padding: 41px;
+                            spacing: 24px;
+
+                            if !root.logged-in : Rectangle {
+                                height: lay-w.preferred-height;
+                                border-radius: 20px;
+                                border-width: 1px;
+                                border-color: #ffaa2859;
+                                background: #ff9b281c;
+                                lay-w := VerticalLayout {
+                                    padding-top: 20px;
+                                    padding-bottom: 20px;
+                                    padding-left: 24px;
+                                    padding-right: 24px;
+                                    spacing: 10px;
+                                    Text { text: "New to TVFS?"; color: #ffd27a; font-size: 16px; font-weight: 700; letter-spacing: -0.16px; }
+                                    Text { text: "This site is a private and unlisted part of the TomasekValla network. Uploading to the network is only possible with a special access token given only to me and selected people."; color: #ffd278d9; font-size: 12.8px; wrap: word-wrap; }
+                                    Text { text: "Don't have the access token? If you believe this is a mistake or you were invited, please contact Tomasek."; color: #ffd27899; font-size: 12.8px; font-italic: true; wrap: word-wrap; }
+                                    Text { text: "Don't have the access token and weren't told about or invited to this service? There is nothing exciting for you to find out and I am kindly asking you to leave."; color: #ffd27899; font-size: 12.8px; font-italic: true; wrap: word-wrap; }
+                                    Text { text: "You got the access token? Enter it down for the first time and after verifying it is correct, this will be never shown to you again on this device."; color: #ffd27899; font-size: 12.8px; font-italic: true; wrap: word-wrap; }
+                                }
+                            }
+
+                            // brand card
+                            Rectangle {
+                                height: 94px;
+                                border-radius: 22px;
+                                background: Palette.glass;
+                                border-width: 1px;
+                                border-color: Palette.border;
+                                HorizontalLayout {
+                                    padding-left: 24px;
+                                    padding-right: 24px;
+                                    VerticalLayout {
+                                        alignment: center;
+                                        spacing: 5px;
+                                        horizontal-stretch: 1;
+                                        Rectangle {
+                                            height: 34px;
+                                            Image { x: 0px; y: 0px; width: 268px; height: 34px; source: @image-url("../../../assets/img/logo-text.png"); }
+                                        }
+                                        Text {
+                                            text: "TOMASEKVALLA FILESTREAM SYSTEM";
+                                            font-family: "Space Grotesk";
+                                            font-size: 9.6px;
+                                            font-weight: 700;
+                                            letter-spacing: 0.96px;
+                                            color: Palette.dim;
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        HorizontalLayout {
+                                            spacing: 2px;
+                                            IconBtn {
+                                                src: @image-url("../../../assets/img/icon-gear.svg");
+                                                size: 18px;
+                                                tint: Palette.dim;
+                                                clicked => { root.go-page(1); }
+                                            }
+                                            IconBtn {
+                                                src: Palette.light ? @image-url("../../../assets/img/emoji-sun.png") : @image-url("../../../assets/img/emoji-moon.png");
+                                                clicked => { Palette.light = !Palette.light; root.theme-changed(Palette.light); }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // status chips
+                            HorizontalLayout {
+                                spacing: 10px;
+                                StatusChip {
+                                    width: (root.inner-w - 20px) / 3;
+                                    label: "System";
+                                    value: root.backend-online ? "Online" : "Offline";
+                                    dot: root.backend-online ? Palette.dot-good : Palette.bad;
+                                }
+                                StatusChip { width: (root.inner-w - 20px) / 3; label: "Latency"; value: root.latency-text; dot: root.latency-color; }
+                                StatusChip { width: (root.inner-w - 20px) / 3; label: "Used"; value: root.used-text; dot: root.used-level == 0 ? Palette.dot-good : (root.used-level == 1 ? Palette.warn : Palette.bad); }
+                            }
+
+                            // mode toggle (2 x 2)
+                            VerticalLayout {
+                                padding-bottom: 14px;
+                                Rectangle {
+                                    height: 76px;
+                                    border-radius: 16px;
+                                    background: Palette.glass;
+                                    border-width: 1px;
+                                    border-color: Palette.border;
+                                    clip: true;
+                                    VerticalLayout {
+                                        HorizontalLayout {
+                                            ModeCell { width: (root.inner-w - 2px) / 2; label: "Files"; icon: @image-url("../../../assets/img/emoji-doc.png"); active: root.mode == 0; sep-right: true; clicked => { root.mode = 0; } }
+                                            ModeCell { width: (root.inner-w - 2px) / 2; label: "Folders"; icon: @image-url("../../../assets/img/emoji-folder.png"); active: root.mode == 1; clicked => { root.mode = 1; } }
+                                        }
+                                        HorizontalLayout {
+                                            ModeCell { width: (root.inner-w - 2px) / 2; label: "Create"; icon: @image-url("../../../assets/img/emoji-camera.png"); active: root.mode == 2; sep-top: true; sep-right: true; clicked => { root.mode = 2; } }
+                                            ModeCell { width: (root.inner-w - 2px) / 2; label: "Text"; icon: @image-url("../../../assets/img/emoji-pencil.png"); active: root.mode == 3; sep-top: true; clicked => { root.mode = 3; } }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // drop zone (hidden in Text mode)
+                            if root.mode != 3 : Rectangle {
+                                property <bool> lit: dz.has-hover || (root.drop-hover && !root.drop-local);
+                                height: root.voice-state == 4 ? 420px : root.voice-state > 0 ? 380px : root.capture-menu ? 300px : 182px;
+                                animate height { duration: 220ms; easing: ease-out; }
+                                border-radius: 22px;
+                                background: self.lit ? #2fffc408 : Palette.glass;
+                                animate background { duration: 200ms; }
+                                // the dashed border cross-fades to the accent (web: 0.2 s on the border colour)
+                                Image {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    image-fit: fill;
+                                    source: Palette.light ? @image-url("../../../assets/img/dash-normal-light.png") : @image-url("../../../assets/img/dash-normal.png");
+                                }
+                                Image {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    image-fit: fill;
+                                    source: Palette.light ? @image-url("../../../assets/img/dash-hover-light.png") : @image-url("../../../assets/img/dash-hover.png");
+                                    opacity: parent.lit ? 1 : 0;
+                                    animate opacity { duration: 200ms; easing: ease-out; }
+                                }
+                                if !root.capture-menu && root.voice-state == 0 : VerticalLayout {
+                                    alignment: center;
+                                    spacing: 12px;
+                                    padding-left: 38px;
+                                    padding-right: 38px;
+                                    Rectangle {
+                                        height: 40px;
+                                        Ico { x: (parent.width - self.width) / 2; src: @image-url("../../../assets/img/emoji-cloud.png"); size: 40px; opacity: 0.8; }
+                                    }
+                                    Text {
+                                        text: root.mode == 1 ? "Drop a folder here or click to browse"
+                                            : root.mode == 2 ? "Take a photo or record a video to upload"
+                                            : "Drop your files here, paste them or click to browse";
+                                        font-size: 15.2px;
+                                        font-weight: 700;
+                                        color: Palette.text;
+                                        horizontal-alignment: center;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                                dz := TouchArea {
+                                    mouse-cursor: MouseCursor.pointer;
+                                    enabled: !root.capture-menu && root.voice-state == 0;
+                                    clicked => {
+                                        if (root.mode == 2) { root.capture-menu = true; } else { root.pick-files(); }
+                                    }
+                                }
+                                // Create: the web's voice recorder inside the drop zone (#voiceRecorder)
+                                if root.voice-state > 0 : Rectangle {
+                                    border-radius: 22px;
+                                    background: #03070ab8;
+                                    opacity: 0;
+                                    init => { self.opacity = 1; }
+                                    animate opacity { duration: 220ms; }
+                                    TouchArea { }
+                                    VerticalLayout {
+                                        padding: 20px;
+                                        spacing: 16px;
+                                        alignment: center;
+                                        HorizontalLayout {
+                                            alignment: center;
+                                            spacing: 8px;
+                                            if root.voice-state == 3 : VerticalLayout {
+                                                alignment: center;
+                                                Rectangle { width: 10px; height: 10px; border-radius: 5px; background: #ff4d4d; }
+                                            }
+                                            Text {
+                                                text: root.voice-status;
+                                                font-size: 13.6px;
+                                                font-weight: 600;
+                                                color: root.voice-error ? #ff6b6b : Palette.dim;
+                                                horizontal-alignment: center;
+                                                wrap: word-wrap;
+                                            }
+                                        }
+                                        Text {
+                                            text: root.voice-time;
+                                            font-size: 28.8px;
+                                            font-weight: 800;
+                                            color: Palette.text;
+                                            horizontal-alignment: center;
+                                        }
+                                        // waveform (naTiVeFS): live while recording, the whole take in review (click = play from there)
+                                        if root.voice-state == 3 || root.voice-state == 4 : HorizontalLayout {
+                                            alignment: center;
+                                            wave := Rectangle {
+                                                width: min(280px, parent.width);
+                                                height: 56px;
+                                                property <float> n: max(1, root.voice-bars.length);
+                                                for b[i] in root.voice-bars : Rectangle {
+                                                    property <length> slot: wave.width / wave.n;
+                                                    property <bool> played: root.voice-state == 4 && (i + 0.5) / wave.n <= root.voice-progress;
+                                                    x: i * self.slot + self.slot * 0.2;
+                                                    width: self.slot * 0.6;
+                                                    height: max(self.width, wave.height * b);
+                                                    y: (wave.height - self.height) / 2;
+                                                    border-radius: self.width / 2;
+                                                    background: root.voice-state == 3 ? #ff4d4d : (self.played ? #2fffc4 : Palette.dim);
+                                                    opacity: root.voice-state == 3 ? 0.55 + 0.45 * b : (self.played ? 1 : 0.55);
+                                                    animate height { duration: 70ms; }
+                                                }
+                                                TouchArea {
+                                                    enabled: root.voice-state == 4;
+                                                    mouse-cursor: root.voice-state == 4 ? MouseCursor.pointer : MouseCursor.default;
+                                                    clicked => { root.voice-seek(clamp(self.mouse-x / self.width, 0, 1)); }
+                                                }
+                                            }
+                                        }
+                                        // format (remembered); the web records whatever the browser offers
+                                        if root.voice-state == 2 || root.voice-state == 4 : VerticalLayout {
+                                            spacing: 6px;
+                                            HorizontalLayout {
+                                                alignment: center;
+                                                Seg {
+                                                    controlled: true;
+                                                    pad: 18px;
+                                                    options: ["Opus", "AAC 96", "AAC 160", "AAC 192", "FLAC"];
+                                                    selected: root.voice-format;
+                                                    picked(i) => { root.voice-format = i; root.voice-format-picked(i); }
+                                                }
+                                            }
+                                            Text {
+                                                text: root.voice-format == 0 ? "Opus 128 kbit/s · small, plays in every browser"
+                                                    : root.voice-format == 4 ? "FLAC · lossless, the biggest file"
+                                                    : "AAC " + (root.voice-format == 1 ? "96" : root.voice-format == 2 ? "160" : "192") + " kbit/s · M4A, plays everywhere";
+                                                font-size: 11.2px;
+                                                color: Palette.dim;
+                                                horizontal-alignment: center;
+                                            }
+                                        }
+                                        HorizontalLayout {
+                                            alignment: center;
+                                            HorizontalLayout {
+                                                spacing: 12px;
+                                                width: min(320px, parent.width);
+                                                if root.voice-state == 2 : VoiceBtn { label: "● Start recording"; primary: true; clicked => { root.voice(0); } }
+                                                if root.voice-state == 3 : VoiceBtn { label: "■ Stop"; primary: true; clicked => { root.voice(1); } }
+                                                if root.voice-state == 4 : VoiceBtn { label: root.voice-listening ? "Pause" : "▶ Listen"; clicked => { root.voice(5); } }
+                                            }
+                                        }
+                                        if root.voice-state == 4 : HorizontalLayout {
+                                            alignment: center;
+                                            HorizontalLayout {
+                                                spacing: 12px;
+                                                width: min(320px, parent.width);
+                                                VoiceBtn { label: "✓ Use recording"; primary: true; clicked => { root.voice(2); } }
+                                                VoiceBtn { label: "Discard & retry"; clicked => { root.voice(3); } }
+                                            }
+                                        }
+                                        Rectangle {
+                                            height: 20px;
+                                            Text {
+                                                text: "Cancel";
+                                                font-size: 12.8px;
+                                                color: vcl.has-hover ? Palette.text : Palette.dim;
+                                                animate color { duration: Anim.fast; }
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                            }
+                                            vcl := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.voice(4); } }
+                                        }
+                                    }
+                                }
+                                // Create: the web's capture sub-menu inside the drop zone
+                                if root.capture-menu : Rectangle {
+                                    border-radius: 22px;
+                                    background: #03070ab8;
+                                    TouchArea { }
+                                    VerticalLayout {
+                                        padding: 20px;
+                                        spacing: 14px;
+                                        alignment: center;
+                                        for cap[i] in [
+                                            { icon: @image-url("../../../assets/img/emoji-camera.png"), label: "Take a photo" },
+                                            { icon: @image-url("../../../assets/img/emoji-camera.png"), label: "Record a video" },
+                                            { icon: @image-url("../../../assets/img/emoji-note.png"), label: "Record a voice note" },
+                                        ] : Rectangle {
+                                            height: 52px;
+                                            border-radius: 14px;
+                                            background: Palette.glass;
+                                            border-width: 1px;
+                                            border-color: Palette.border;
+                                            HorizontalLayout {
+                                                alignment: center;
+                                                spacing: 10px;
+                                                Ico { src: cap.icon; size: 22px; }
+                                                Text { text: cap.label; font-size: 14.4px; font-weight: 700; color: Palette.text; vertical-alignment: center; }
+                                            }
+                                            TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.capture-menu = false; root.capture(i); } }
+                                        }
+                                        Rectangle {
+                                            height: 20px;
+                                            Text {
+                                                text: "Cancel";
+                                                font-size: 12.8px;
+                                                color: ccl.has-hover ? Palette.text : Palette.dim;
+                                                animate color { duration: Anim.fast; }
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                            }
+                                            ccl := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.capture-menu = false; } }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Text mode panel (`.text-mode-panel`)
+                            if root.mode == 3 : VerticalLayout {
+                                spacing: 12px;
+                                VerticalLayout {
+                                    spacing: 6px;
+                                    HorizontalLayout {
+                                        spacing: 4px;
+                                        alignment: start;
+                                        Text { text: "NAME YOUR TEXT"; font-size: 11.52px; font-weight: 700; letter-spacing: 0.81px; color: Palette.dim; vertical-alignment: center; }
+                                        Text { text: "(optional · plain name only, no .txt)"; font-size: 10.4px; font-weight: 500; color: Palette.dim; opacity: 0.7; vertical-alignment: center; }
+                                    }
+                                    Rectangle {
+                                        height: 43px;
+                                        border-radius: 14px;
+                                        background: Palette.glass;
+                                        border-width: 1px;
+                                        border-color: tn.has-focus ? Palette.accent : Palette.border;
+                                        tn := TextInput {
+                                            x: 17px;
+                                            width: parent.width - 34px;
+                                            text <=> root.text-name;
+                                            font-size: 14.08px;
+                                            font-weight: 600;
+                                            color: Palette.text;
+                                            vertical-alignment: center;
+                                            single-line: true;
+                                        }
+                                        Text {
+                                            x: 17px;
+                                            width: parent.width - 34px;
+                                            height: parent.height;
+                                            visible: root.text-name == "";
+                                            text: "e.g. my-note or leave empty for random name";
+                                            font-size: 14.08px;
+                                            color: Palette.dim.with-alpha(0.6);
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+                                    }
+                                }
+                                VerticalLayout {
+                                    spacing: 6px;
+                                    Text { text: "CONTENT"; font-size: 11.52px; font-weight: 700; letter-spacing: 0.81px; color: Palette.dim; }
+                                    ta-box := Rectangle {
+                                        property <length> view-h: self.height - 30px;
+                                        height: 160px;
+                                        border-radius: 14px;
+                                        background: Palette.glass;
+                                        border-width: 1px;
+                                        border-color: tc.has-focus ? Palette.accent : Palette.border;
+                                        TouchArea {
+                                            width: parent.width;
+                                            height: parent.height;
+                                            // Slint delivers the wheel to what is under the cursor: this box scrolls, and at either end the wheel
+                                            // goes on to the page (like the web's overflow boxes)
+                                            scroll-event(e) => {
+                                                // middle-click probe from Rust: autoscroll this box if it can scroll
+                                                if (root.wheel-probe) {
+                                                    if (root.nested-can(2)) { root.autoscroll-target = 2; return accept; }
+                                                    return reject;
+                                                }
+                                                if (root.nested-wheel(2)) { return accept; }
+                                                return reject;
+                                            }
+                                            Rectangle {
+                                                x: 17px;
+                                                y: 15px;
+                                                width: parent.width - 34px;
+                                                height: ta-box.view-h;
+                                                clip: true;
+                                                tc := TextInput {
+                                                    y: -root.text-scroll;
+                                                    changed preferred-height => { root.text-max = max(0px, self.preferred-height - ta-box.view-h); }
+                                                    width: parent.width;
+                                                    height: max(parent.height, self.preferred-height);
+                                                    text <=> root.text-content;
+                                                    single-line: false;
+                                                    vertical-alignment: top;
+                                                    wrap: word-wrap;
+                                                    font-size: 13.6px;
+                                                    font-weight: 500;
+                                                    color: Palette.text;
+                                                    edited => { root.text-edited(self.text); }
+                                                    // keep the cursor in view (the web's textarea scrolls by itself)
+                                                    cursor-position-changed(p) => {
+                                                        if (p.y - root.text-scroll < 0px) { root.text-scroll = max(0px, p.y); }
+                                                        if (p.y + 22px - root.text-scroll > ta-box.view-h) { root.text-scroll = p.y + 22px - ta-box.view-h; }
+                                                    }
+                                                }
+                                                Text {
+                                                    y: 0px;
+                                                    width: parent.width;
+                                                    visible: root.text-content == "";
+                                                    text: "Paste or type your text here...";
+                                                    vertical-alignment: top;
+                                                    font-size: 13.6px;
+                                                    color: Palette.dim.with-alpha(0.5);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    // TXT / MD switch (`.magix-row`)
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        padding-top: 6px;
+                                        Seg {
+                                            controlled: true;
+                                            options: ["TXT", "MD"];
+                                            selected: root.text-md ? 1 : 0;
+                                            picked(i) => { root.text-mode-pick(i == 1); }
+                                        }
+                                        Text { text: root.text-md-manual ? "manual" : "auto-detected"; font-size: 9.6px; font-italic: true; color: Palette.dim; opacity: 0.6; vertical-alignment: center; }
+                                        Rectangle { horizontal-stretch: 1; }
+                                        Text { text: root.text-size; font-size: 10.4px; font-weight: 600; color: Palette.dim; opacity: 0.7; vertical-alignment: top; }
+                                    }
+                                }
+                                Rectangle {
+                                    height: 45px;
+                                    border-radius: 14px;
+                                    background: tab.has-hover ? #b083ff1a : Palette.glass;
+                                    animate background { duration: Anim.fast; }
+                                    border-width: 1px;
+                                    border-color: Palette.accent;
+                                    Text { text: "Add as a file"; font-size: 14.08px; font-weight: 700; color: Palette.accent; horizontal-alignment: center; vertical-alignment: center; }
+                                    tab := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.add-text(); } }
+                                }
+                            }
+
+                            // selected files (`.file-list-section`)
+                            if root.queue.length > 0 : VerticalLayout {
+                                spacing: 6px;
+                                HorizontalLayout {
+                                    height: 22px;
+                                    Text {
+                                        text: root.queue.length + (root.queue.length == 1 ? " FILE" : " FILES");
+                                        font-size: 12px;
+                                        font-weight: 700;
+                                        letter-spacing: 0.6px;
+                                        color: Palette.dim;
+                                        vertical-alignment: center;
+                                    }
+                                    Rectangle { horizontal-stretch: 1; }
+                                    Rectangle {
+                                        width: ca.preferred-width + 16px;
+                                        border-radius: 8px;
+                                        background: cat.has-hover ? #ff76751a : transparent;
+                                        animate background { duration: Anim.fast; }
+                                        opacity: root.uploading ? 0.5 : 1.0;
+                                        ca := Text { text: "Clear all"; font-size: 11.2px; font-weight: 600; color: Palette.bad; horizontal-alignment: center; vertical-alignment: center; }
+                                        cat := TouchArea { enabled: !root.uploading; mouse-cursor: MouseCursor.pointer; clicked => { root.queue-clear(); } }
+                                    }
+                                }
+                                queue-view := Rectangle {
+                                    property <length> list-h: root.queue.length * 41px + max(0, root.queue.length - 1) * 4px;
+                                    height: min(180px, self.list-h);
+                                    clip: true;
+                                    TouchArea {
+                                        width: parent.width;
+                                        height: parent.height;
+                                        // Slint delivers the wheel to what is under the cursor: this box scrolls, and at either end the wheel
+                                        // goes on to the page (like the web's overflow boxes)
+                                        scroll-event(e) => {
+                                            // middle-click probe from Rust: autoscroll this box if it can scroll
+                                            if (root.wheel-probe) {
+                                                if (root.nested-can(1)) { root.autoscroll-target = 1; return accept; }
+                                                return reject;
+                                            }
+                                            if (root.nested-wheel(1)) { return accept; }
+                                            return reject;
+                                        }
+                                        VerticalLayout {
+                                            y: -clamp(root.queue-scroll, 0px, max(0px, queue-view.list-h - 180px));
+                                            height: queue-view.list-h;
+                                            spacing: 4px;
+                                            for qr[i] in root.queue : QueueFileRow {
+                                                entry: qr;
+                                                editing: root.editing-index == i;
+                                                locked: root.uploading;
+                                                rename-clicked => { root.editing-index = i; }
+                                                rename-commit(t) => { root.editing-index = -1; root.queue-rename(i, t); }
+                                                rename-cancel => { root.editing-index = -1; }
+                                                anon-clicked => { root.editing-index = -1; root.queue-anon(i); }
+                                                remove-clicked => { root.editing-index = -1; root.queue-remove(i); }
+                                            }
+                                        }
+                                    }
+                                }
+                                Text {
+                                    text: root.queue-total;
+                                    font-size: 11.52px;
+                                    color: Palette.dim;
+                                    horizontal-alignment: center;
+                                    height: 18px;
+                                    vertical-alignment: bottom;
+                                }
+                            }
+
+                            // options
+                            VerticalLayout {
+                                spacing: 12px;
+                                Eyebrow { text: "OPTIONS"; }
+                                VerticalLayout {
+                                    spacing: 8px;
+                                    Text { text: "Expires after:"; font-size: 11.52px; font-weight: 600; color: Palette.dim; horizontal-alignment: center; }
+                                    VerticalLayout {
+                                        spacing: 6px;
+                                        HorizontalLayout {
+                                            spacing: 6px;
+                                            alignment: center;
+                                            for lab[i] in root.pills-a : Pill { label: lab; active: root.expiry == i; clicked => { root.pick-expiry(i); } }
+                                        }
+                                        HorizontalLayout {
+                                            spacing: 6px;
+                                            alignment: center;
+                                            for lab[i] in root.pills-b : Pill { label: lab; active: root.expiry == i + 6; clicked => { root.pick-expiry(i + 6); } }
+                                        }
+                                    }
+                                    Text { text: root.expiry-date-text; font-size: 10.88px; color: Palette.dim; opacity: 0.8; horizontal-alignment: center; }
+                                }
+                            }
+
+                            // access
+                            VerticalLayout {
+                                spacing: 12px;
+                                Eyebrow { text: "ACCESS"; }
+                                if !root.logged-in : VerticalLayout {
+                                    spacing: 10px;
+                                    TextField { placeholder: "Username"; value <=> root.username; }
+                                    TextField {
+                                        placeholder: "Access password";
+                                        secret: true;
+                                        value <=> root.password;
+                                        accepted => { if (root.can-submit) { root.login(root.username, root.password); } }
+                                    }
+                                    if root.error-text != "" : Text { text: root.error-text; color: Palette.bad; font-size: 12px; font-weight: 600; wrap: word-wrap; }
+                                }
+                                if root.logged-in : Rectangle {
+                                    height: 49px;
+                                    border-radius: 14px;
+                                    background: #2fffc414;
+                                    border-width: 1px;
+                                    border-color: #2fffc433;
+                                    HorizontalLayout {
+                                        alignment: center;
+                                        spacing: 8px;
+                                        Ico { src: @image-url("../../../assets/img/emoji-check.png"); size: 14px; }
+                                        Text { text: "Authenticated (Tier " + root.tier + ")"; font-size: 13.12px; font-weight: 600; color: Palette.good; vertical-alignment: center; }
+                                        Rectangle { width: 69px; SmallBtn { y: (parent.height - self.height) / 2; label: "Logout"; clicked => { root.logout(); } } }
+                                    }
+                                }
+                            }
+
+                            if !root.uploading : ActionBtn {
+                                label: root.logged-in ? "Upload Files" : (root.busy ? "Signing in…" : "Log In");
+                                active: root.can-submit;
+                                clicked => { if (root.logged-in) { root.start-upload(); } else { root.login(root.username, root.password); } }
+                            }
+
+                            // `.upload-live-controls`: Cancel upload (pauses first, then asks)
+                            if root.uploading : Rectangle {
+                                height: 45px;
+                                border-radius: 14px;
+                                property <bool> lit: cub.has-hover && !root.upload-cancelled;
+                                background: self.lit ? #b083ff14 : Palette.glass;
+                                border-width: 1px;
+                                border-color: self.lit ? Palette.accent : Palette.border;
+                                opacity: root.upload-cancelled ? 0.6 : 1.0;
+                                Text {
+                                    text: root.upload-cancelled ? "Cancelled" : "Cancel upload";
+                                    font-size: 14.08px;
+                                    font-weight: 700;
+                                    color: Palette.text;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                                property <bool> shift-down;
+                                cub := TouchArea {
+                                    enabled: !root.upload-cancelled;
+                                    mouse-cursor: MouseCursor.pointer;
+                                    pointer-event(e) => { if (e.kind == PointerEventKind.down) { parent.shift-down = e.modifiers.shift; } }
+                                    clicked => { root.cancel-clicked(parent.shift-down); }
+                                }
+                            }
+
+                            // `.progress-container`
+                            if root.uploading : VerticalLayout {
+                                spacing: 8px;
+                                HorizontalLayout {
+                                    Text {
+                                        horizontal-stretch: 1;
+                                        text: root.prog-status + (root.prog-dots ? "..." : "");
+                                        font-size: 12.8px;
+                                        font-weight: 600;
+                                        color: Palette.text;
+                                        overflow: elide;
+                                    }
+                                    Text { text: root.prog-pct; font-size: 12.8px; font-weight: 600; color: Palette.text; }
+                                }
+                                Rectangle {
+                                    height: 6px;
+                                    border-radius: 3px;
+                                    background: Palette.border;
+                                    Rectangle {
+                                        x: 0px;
+                                        width: max(0px, min(1.0, root.prog-frac) * parent.width);
+                                        height: parent.height;
+                                        border-radius: 3px;
+                                        background: root.prog-color;
+                                        drop-shadow-color: root.prog-color;
+                                        drop-shadow-blur: 10px;
+                                        animate width { duration: 200ms; easing: ease-out; }
+                                    }
+                                }
+                                HorizontalLayout {
+                                    Text { horizontal-stretch: 1; text: root.prog-size; font-size: 12px; color: Palette.dim; }
+                                    Text { text: root.prog-eta; font-size: 12px; color: Palette.dim; }
+                                }
+                                HorizontalLayout {
+                                    padding-top: 2px;
+                                    Text { horizontal-stretch: 1; text: root.prog-te; font-size: 12px; color: Palette.dim; }
+                                    Text { text: root.prog-mbps + " • " + root.prog-avg; font-size: 12px; color: Palette.dim; }
+                                }
+                                if root.per-file.length > 1 : VerticalLayout {
+                                    padding-top: 4px;
+                                    spacing: 6px;
+                                    for pf in root.per-file : HorizontalLayout {
+                                        height: 14px;
+                                        spacing: 8px;
+                                        Text { width: 100px; text: pf.name; font-size: 11.2px; color: Palette.dim; overflow: elide; vertical-alignment: center; }
+                                        Rectangle {
+                                            horizontal-stretch: 1;
+                                            Rectangle {
+                                                y: (parent.height - self.height) / 2;
+                                                height: 4px;
+                                                border-radius: 2px;
+                                                background: Palette.border;
+                                                clip: true;
+                                                Rectangle {
+                                                    x: 0px;
+                                                    width: (pf.state == 2 ? 1.0 : (pf.state == 0 ? 0.0 : pf.pct)) * parent.width;
+                                                    height: parent.height;
+                                                    border-radius: 2px;
+                                                    background: pf.state == 2 ? Palette.dot-good : (pf.state == 3 ? Palette.bad : (pf.state == 1 ? Palette.warn : Palette.border));
+                                                    animate width { duration: 200ms; easing: ease-out; }
+                                                }
+                                            }
+                                        }
+                                        Text { width: 40px; text: pf.status; font-size: 9.92px; color: Palette.dim; horizontal-alignment: right; vertical-alignment: center; }
+                                    }
+                                }
+                            }
+
+                            // `.upload-stats-card` ("Upload Performance", dismisses itself after 20 s)
+                            if root.stats-visible : Rectangle {
+                                height: st-lay.preferred-height;
+                                border-radius: 20px;
+                                background: Palette.glass;
+                                border-width: 1px;
+                                border-color: Palette.border;
+                                clip: true;
+                                st-lay := VerticalLayout {
+                                    padding-top: 17px;
+                                    padding-bottom: 19px;
+                                    padding-left: 19px;
+                                    padding-right: 19px;
+                                    spacing: 12px;
+                                    HorizontalLayout {
+                                        height: 20px;
+                                        spacing: 7px;
+                                        Ico { src: @image-url("../../../assets/img/emoji-bolt.png"); size: 17px; }
+                                        Text { text: "UPLOAD PERFORMANCE"; font-size: 10.56px; font-weight: 800; letter-spacing: 1.16px; color: Palette.dim; vertical-alignment: center; }
+                                        Rectangle { horizontal-stretch: 1; }
+                                        Rectangle {
+                                            width: 25px;
+                                            border-radius: 8px;
+                                            background: scl.has-hover ? #ffffff17 : transparent;
+                                            animate background { duration: Anim.fast; }
+                                            XMark { x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; size: 9px; color: scl.has-hover ? Palette.text : Palette.dim; }
+                                            scl := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.stats-dismiss(); } }
+                                        }
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 10px;
+                                        StatsTile { label: "DURATION"; value: root.stats-elapsed; sub: "time elapsed"; }
+                                        StatsTile { label: "AVERAGE SPEED"; value: root.stats-speed; sub: root.stats-speed-mbps; }
+                                    }
+                                    if root.stats-cmp-kind != 0 : Rectangle {
+                                        height: cmp-lay.preferred-height;
+                                        border-radius: 12px;
+                                        background: #ffffff08;
+                                        border-width: 1px;
+                                        border-color: Palette.border;
+                                        cmp-lay := VerticalLayout {
+                                            padding-top: 8px;
+                                            padding-bottom: 8px;
+                                            padding-left: 12px;
+                                            padding-right: 12px;
+                                            spacing: 4px;
+                                            HorizontalLayout {
+                                                spacing: 8px;
+                                                alignment: start;
+                                                Rectangle {
+                                                    property <color> c: root.stats-cmp-kind == 1 ? Palette.dot-good : (root.stats-cmp-kind == 2 ? Palette.bad : Palette.accent);
+                                                    width: badge.preferred-width + 16px;
+                                                    height: 19px;
+                                                    border-radius: 6px;
+                                                    background: self.c.with-alpha(0.16);
+                                                    border-width: 1px;
+                                                    border-color: self.c.with-alpha(0.35);
+                                                    badge := Text { text: root.stats-cmp-badge; font-size: 10.88px; font-weight: 800; color: parent.c; horizontal-alignment: center; vertical-alignment: center; }
+                                                }
+                                                Text { text: root.stats-cmp-headline; font-size: 12.16px; font-weight: 700; color: Palette.text; vertical-alignment: center; }
+                                            }
+                                            Text { text: root.stats-cmp-sub; font-size: 10.88px; font-weight: 500; color: Palette.dim; }
+                                        }
+                                    }
+                                    Rectangle {
+                                        height: 37px;
+                                        border-radius: 12px;
+                                        background: @linear-gradient(135deg, #2fffc414 0%, #b083ff14 100%);
+                                        border-width: 1px;
+                                        border-color: Palette.border;
+                                        HorizontalLayout {
+                                            padding-left: 13px;
+                                            padding-right: 13px;
+                                            spacing: 8px;
+                                            Ico { src: @image-url("../../../assets/img/emoji-package.png"); size: 17px; }
+                                            HorizontalLayout {
+                                                alignment: start;
+                                                Text { text: root.stats-fun-prefix; font-size: 11.84px; color: Palette.text; vertical-alignment: center; }
+                                                Text { text: root.stats-fun-bold; font-size: 11.84px; font-weight: 700; color: Palette.text; vertical-alignment: center; }
+                                            }
+                                        }
+                                    }
+                                    if root.stats-speed-tiles.length > 0 || root.stats-ping-tiles.length > 0 : VerticalLayout {
+                                        spacing: 10px;
+                                        Rectangle { height: 1px; background: Palette.border; }
+                                        if root.stats-speed-tiles.length > 0 : VerticalLayout {
+                                            spacing: 5px;
+                                            Text { text: "SPEED DETAILS"; font-size: 9.6px; font-weight: 700; letter-spacing: 0.77px; color: Palette.dim; }
+                                            HorizontalLayout { spacing: 6px; for t in root.stats-speed-tiles : MetricCol { tile: t; } }
+                                        }
+                                        if root.stats-ping-tiles.length > 0 : VerticalLayout {
+                                            spacing: 5px;
+                                            Text { text: "UPLOAD LATENCY"; font-size: 9.6px; font-weight: 700; letter-spacing: 0.77px; color: Palette.dim; }
+                                            HorizontalLayout { spacing: 6px; for t in root.stats-ping-tiles : MetricCol { tile: t; } }
+                                        }
+                                    }
+                                }
+                                // 20 s timer bar
+                                Rectangle {
+                                    y: parent.height - 3px;
+                                    height: 3px;
+                                    background: #ffffff0f;
+                                    Rectangle {
+                                        x: 0px;
+                                        width: parent.width * root.stats-timer;
+                                        background: Palette.brand;
+                                        animate width { duration: root.stats-timer-anim; easing: linear; }
+                                    }
+                                }
+                            }
+
+                            // `.error-message`
+                            if root.upload-error != "" : Text {
+                                text: root.upload-error;
+                                font-size: 13.6px;
+                                color: Palette.bad;
+                                horizontal-alignment: center;
+                                wrap: word-wrap;
+                            }
+
+                            // `.result-box`
+                            if root.result-visible : VerticalLayout {
+                                spacing: 0px;
+                                Text {
+                                    text: root.result-title;
+                                    font-size: 18.72px;
+                                    font-weight: 700;
+                                    color: Palette.good;
+                                    horizontal-alignment: center;
+                                }
+                                VerticalLayout {
+                                    padding-top: 15px;
+                                    padding-bottom: 15px;
+                                    LinkBox { text: root.result-link; clicked => { root.open-result(root.result-link); } }
+                                }
+                                if root.pill-link.show : PillPair {
+                                    icon-a: root.pill-icon(root.pill-link.icon);
+                                    label-a: root.pill-link.label;
+                                    enabled-a: root.pill-link.enabled;
+                                    show-b: root.pill-styled.show;
+                                    icon-b: root.pill-icon(root.pill-styled.icon);
+                                    label-b: root.pill-styled.label;
+                                    enabled-b: root.pill-styled.enabled;
+                                    clicked-a => { root.copy-result(0); }
+                                    clicked-b => { root.copy-result(1); }
+                                }
+                                // audio player box comes first in the web (inserted right after the buttons last)
+                                if root.player-link != "" : VerticalLayout {
+                                    padding-top: 15px;
+                                    VerticalLayout {
+                                        padding-bottom: 15px;
+                                        LinkBox { text: root.player-link; clicked => { root.open-result(root.player-link); } }
+                                    }
+                                    PillPair {
+                                        icon-a: root.pill-icon(root.pill-player.icon);
+                                        label-a: root.pill-player.label;
+                                        show-b: root.pill-player-styled.show;
+                                        icon-b: root.pill-icon(root.pill-player-styled.icon);
+                                        label-b: root.pill-player-styled.label;
+                                        clicked-a => { root.copy-result(4); }
+                                        clicked-b => { root.copy-result(5); }
+                                    }
+                                }
+                                if root.reader-link != "" : VerticalLayout {
+                                    padding-top: 15px;
+                                    VerticalLayout {
+                                        padding-bottom: 15px;
+                                        LinkBox { text: root.reader-link; clicked => { root.open-result(root.reader-link); } }
+                                    }
+                                    PillPair {
+                                        icon-a: root.pill-icon(root.pill-reader.icon);
+                                        label-a: root.pill-reader.label;
+                                        show-b: root.pill-reader-styled.show;
+                                        icon-b: root.pill-icon(root.pill-reader-styled.icon);
+                                        label-b: root.pill-reader-styled.label;
+                                        clicked-a => { root.copy-result(2); }
+                                        clicked-b => { root.copy-result(3); }
+                                    }
+                                }
+                                if root.batch-rows.length > 0 : VerticalLayout {
+                                    padding-top: 10px;
+                                    spacing: 6px;
+                                    for br[i] in root.batch-rows : BatchFileRow {
+                                        entry: br;
+                                        copied-link: root.batch-copied-row == i && root.batch-copied-kind == 0;
+                                        copied-styled: root.batch-copied-row == i && root.batch-copied-kind == 1;
+                                        open(url) => { root.open-result(url); }
+                                        copy(text, kind) => { root.copy-batch(i, text, kind); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // ── recently uploaded ─────────────────────────────────────────
+                    GlassCard {
+                        height: lay2.preferred-height;
+                        lay2 := VerticalLayout {
+                            padding: 41px;
+                            spacing: 0px;
+                            Text { text: "Recently uploaded"; height: 34px; font-size: 16px; font-weight: 800; letter-spacing: -0.16px; color: Palette.text; vertical-alignment: top; }
+                            if root.recent.length == 0 : Text {
+                                height: 36px;
+                                text: "Nothing uploaded in the last 14 days.";
+                                font-size: 13.12px;
+                                color: Palette.dim;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            VerticalLayout {
+                                spacing: 10px;
+                                for item in root.recent : RecentRow {
+                                    item: item;
+                                    copied-kind: root.recent-copied-id == item.id ? root.recent-copied-kind : -1;
+                                    copy => { root.copy-recent(item.id, item.link, 0); }
+                                    copy-styled => { root.copy-recent(item.id, "[" + item.name + "](" + item.link + ")", 1); }
+                                    open => { root.recent-open(item); }
+                                    forget => { root.forget-unfinished(item.key); }
+                                    remove(shift) => {
+                                        root.confirm-id = item.kind == 0 || item.kind == 3 ? item.id : item.key;
+                                        if (shift) {
+                                            root.confirm-answer(item.kind == 0 || item.kind == 3 ? 1 : 2, root.confirm-id, true);
+                                        } else if (item.kind == 0 || item.kind == 3) {
+                                            root.confirm-title = "Delete this file?";
+                                            root.confirm-text = "\"" + item.name + "\" will be permanently deleted from the server right now.";
+                                            root.confirm-note = "Tip: hold Shift while clicking delete next time to skip this prompt.";
+                                            root.confirm-kind = 1;
+                                        } else {
+                                            root.confirm-title = "Delete unfinished upload?";
+                                            root.confirm-text = "This will delete everything already uploaded for \"" + item.name + "\" from the server right now.";
+                                            root.confirm-note = "Tip: hold Shift while clicking delete next time to skip this prompt.";
+                                            root.confirm-kind = 2;
+                                        }
+                                    }
+                                }
+                            }
+                            if root.recent-hidden > 0 || root.recent-expanded : VerticalLayout {
+                                padding-top: 12px;
+                                Rectangle {
+                                    height: 40px;
+                                    border-radius: 14px;
+                                    background: smb.has-hover ? #ffffff0f : Palette.glass;
+                                    animate background { duration: Anim.fast; }
+                                    border-width: 1px;
+                                    border-color: Palette.border;
+                                    Text {
+                                        text: root.recent-expanded ? "Show less" : "Show more (" + root.recent-hidden + ")";
+                                        font-size: 13.12px;
+                                        font-weight: 700;
+                                        color: smb.has-hover ? Palette.text : Palette.dim;
+                                        animate color { duration: Anim.fast; }
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    smb := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.recent-toggle-more(); } }
+                                }
+                            }
+                        }
+                    }
+                    // ── settings / info ───────────────────────────────────────────
+                    GlassCard {
+                        height: lay3.preferred-height;
+                        lay3 := VerticalLayout {
+                            padding: 41px;
+                            spacing: 24px;
+
+                            VerticalLayout {
+                                spacing: 10px;
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    InfoCard { width: (root.inner-w - 10px) / 2; icon: @image-url("../../../assets/img/github.png"); title: "View source on GitHub"; sub: "Don't trust, verify"; clicked => { root.open-link("https://github.com/TomasekValla/TVFS"); } }
+                                    InfoCard { width: (root.inner-w - 10px) / 2; icon: @image-url("../../../assets/img/paper.png"); title: "View official whitepaper"; sub: ""; clicked => { root.open-link("https://files.tomasekvalla.cz/whitepaper.pdf"); } }
+                                }
+                                InfoCard { height: 54px; icon: @image-url("../../../assets/img/tvfs-logo.png"); title: "Check files"; sub: ""; clicked => { root.go-page(2); } }
+                            }
+
+                            // first-run offer (owner, 2026-11-03): the link router, default off; answered once
+                            if root.router-offer : VerticalLayout {
+                                Rectangle {
+                                    height: offl.preferred-height;
+                                    border-radius: 14px;
+                                    background: #2fffc40d;
+                                    border-width: 1px;
+                                    border-color: #2fffc459;
+                                    offl := VerticalLayout {
+                                        padding: 18px;
+                                        padding-left: 20px;
+                                        spacing: 8px;
+                                        Text {
+                                            text: "Open TVFS links in naTiVeFS?";
+                                            font-size: 13.6px;
+                                            font-weight: 700;
+                                            color: Palette.text;
+                                            wrap: word-wrap;
+                                        }
+                                        Text {
+                                            text: "naTiVeFS can be your default browser: TVFS links you click anywhere open here, every other link goes straight on to " + (root.router-prev-name != "" ? root.router-prev-name : "your browser") + ". You can switch it off any time in Settings > Links.";
+                                            font-size: 11.84px;
+                                            color: Palette.dim;
+                                            wrap: word-wrap;
+                                        }
+                                        HorizontalLayout {
+                                            alignment: start;
+                                            spacing: 8px;
+                                            SmallBtn { label: "Set it up"; clicked => { root.router-offer-answer(true); } }
+                                            SmallBtn { label: "Not now"; clicked => { root.router-offer-answer(false); } }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // "Use TVFS tools locally": a file from this computer opens in its viewer, nothing is uploaded
+                            Rectangle {
+                                property <bool> lit: lz.has-hover || root.drop-local;
+                                height: lzl.preferred-height;
+                                // the info cards' look (.info-card), lit like them on hover and while a file is over it
+                                border-radius: 14px;
+                                background: self.lit ? #b083ff0f : #ffffff08;
+                                border-width: 1px;
+                                border-color: self.lit ? Palette.accent : Palette.border;
+                                animate background, border-color { duration: 200ms; }
+                                lzl := HorizontalLayout {
+                                    padding: 18px;
+                                    padding-left: 20px;
+                                    spacing: 14px;
+                                    Ico { src: @image-url("../../../assets/img/emoji-folder.png"); size: 30px; opacity: 0.85; }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        spacing: 5px;
+                                        Text {
+                                            text: "Use TVFS tools locally on your files, without touching the cloud.";
+                                            font-size: 13.6px;
+                                            font-weight: 700;
+                                            color: Palette.text;
+                                            wrap: word-wrap;
+                                        }
+                                        Text {
+                                            text: "Drop a file here or click to open it on this computer: audio, video, text, Markdown or an image, one at a time. Nothing is uploaded.";
+                                            font-size: 11.84px;
+                                            color: Palette.dim;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+                                }
+                                lz := TouchArea {
+                                    mouse-cursor: MouseCursor.pointer;
+                                    clicked => { root.pick-local(); }
+                                    // a file dragged over the window: Rust asks with a zero wheel event whether it is here
+                                    scroll-event(e) => {
+                                        if (root.drop-probe) { root.drop-probe-hit = true; return accept; }
+                                        return reject;
+                                    }
+                                }
+                            }
+
+                            VerticalLayout {
+                                spacing: 14px;
+                                // web .disclaimer-paragraphs: bold headings, links to the privacy pages
+                                StyledText {
+                                    text: @markdown("**IMPORTANT NOTICE:** You are uploading files to the publicly accessible internet. Anyone with the link can access them. To protect your privacy, never upload sensitive data and set the expiration date as short as possible. Please note that the site administrator has direct access to all stored files for maintenance and moderation purposes. More information about how we handle your data can be found on our [privacy page](https://files.tomasekvalla.cz/privacy).");
+                                    default-color: Palette.dim;
+                                    default-font-size: 11.84px;
+                                    link-color: #2fffc4;
+                                    link-clicked(url) => { root.open-link(url); }
+                                }
+                                StyledText {
+                                    text: @markdown("**CONTENT POLICY:** Please do not upload any content that is illegal, copyrighted (piracy), or violates our terms. Doing so puts the platform at risk. If any illegal content is found, it will be immediately deleted, and the user will likely be warned or restricted. Keep in mind that if law enforcement or legal authorities come knocking on our door, we will not hesitate to use and provide all stored metadata against the responsible person. A good rule of thumb: if you wouldn't want to be publicly confronted or held accountable for a file, it does not belong here.");
+                                    default-color: Palette.dim;
+                                    default-font-size: 11.84px;
+                                    link-color: #2fffc4;
+                                    link-clicked(url) => { root.open-link(url); }
+                                }
+                                StyledText {
+                                    text: @markdown("**DATA COLLECTION NOTICE:** We only collect data that is essential to keep the service functional, stable, and secure. This includes session tokens (so you don't have to log in every time) and your upload history for cross-device syncing. For security reasons, we also automatically log certain metadata for every transaction (including initiated or unfinished uploads). This includes the precise time, expiration date, file details, and network routing information (including your IP address and geographic location data). This data is securely stored for 4 months. It is never shared with third parties, and the site administrator (more details on who that is can be found on the [privacy page](https://files.tomasekvalla.cz/privacy)) does not intentionally inspect it unless a violation occurs. *Note on Cloudflare:* We use Cloudflare to ensure security and connectivity. They automatically process basic network metadata to protect the site from attacks. You can learn more about how they handle data in their [privacy policy](https://www.cloudflare.com/privacypolicy/).");
+                                    default-color: Palette.dim;
+                                    default-font-size: 11.84px;
+                                    link-color: #2fffc4;
+                                    link-clicked(url) => { root.open-link(url); }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ── naTiVeFS app settings (not part of the web UI) ────────
+                // (wrapped in a layout: an `if` element placed directly in a layout gets
+                // a wrong `absolute-position` in Slint 1.16, which the glass relies on)
+                if root.page == 1 : VerticalLayout {
+                    GlassCard {
+                        height: lay-app.preferred-height;
+                        lay-app := VerticalLayout {
+                            padding: 41px;
+                            spacing: 24px;
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                VerticalLayout {
+                                    alignment: center;
+                                    IconBtn {
+                                        src: @image-url("../../../assets/img/icon-back.svg");
+                                        size: 18px;
+                                        tint: Palette.text;
+                                        clicked => { root.go-page(0); }
+                                    }
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    spacing: 3px;
+                                    horizontal-stretch: 1;
+                                    Text { text: "naTiVeFS"; font-size: 20px; font-weight: 800; letter-spacing: -0.2px; color: Palette.text; }
+                                    Text {
+                                        text: "SETTINGS";
+                                        font-family: "Space Grotesk";
+                                        font-size: 9.6px;
+                                        font-weight: 700;
+                                        letter-spacing: 0.96px;
+                                        color: Palette.dim;
+                                    }
+                                }
+                            }
+
+                            VerticalLayout {
+                                spacing: 12px;
+                                Eyebrow { text: "APPEARANCE"; }
+                                SettingCard {
+                                    height: lay-a1.preferred-height;
+                                    lay-a1 := VerticalLayout {
+                                        padding-top: 16px;
+                                        padding-bottom: 16px;
+                                        padding-left: 18px;
+                                        padding-right: 18px;
+                                        spacing: 8px;
+                                        SettingRow {
+                                            label: "Theme";
+                                            Seg {
+                                                controlled: true;
+                                                options: ["Dark", "Light"];
+                                                selected: Palette.light ? 1 : 0;
+                                                picked(i) => { Palette.light = i == 1; root.theme-changed(Palette.light); }
+                                            }
+                                        }
+                                        Explain { text: "Same switch as the moon / sun button on the main page."; }
+                                    }
+                                }
+                                SettingCard {
+                                    height: lay-a2.preferred-height;
+                                    lay-a2 := VerticalLayout {
+                                        padding-top: 16px;
+                                        padding-bottom: 16px;
+                                        padding-left: 18px;
+                                        padding-right: 18px;
+                                        spacing: 8px;
+                                        SettingRow {
+                                            label: "Glass";
+                                            Seg {
+                                                controlled: true;
+                                                options: ["Off", "On"];
+                                                selected: Look.glass ? 1 : 0;
+                                                picked(i) => { Look.glass = i == 1; root.appearance-changed(); }
+                                            }
+                                        }
+                                        Explain { text: "Frosted glass cards like the web: the cards show the saturated, softened background behind them. Off = flat translucent cards."; }
+                                    }
+                                }
+                                SettingCard {
+                                    height: lay-az.preferred-height;
+                                    lay-az := VerticalLayout {
+                                        padding-top: 16px;
+                                        padding-bottom: 16px;
+                                        padding-left: 18px;
+                                        padding-right: 18px;
+                                        spacing: 8px;
+                                        SettingRow {
+                                            label: "Zoom";
+                                            Text {
+                                                text: round(root.zoom * 100) + " %";
+                                                font-size: 12.16px;
+                                                font-weight: 700;
+                                                color: Palette.dim;
+                                                vertical-alignment: center;
+                                            }
+                                            VerticalLayout {
+                                                alignment: center;
+                                                SmallBtn { label: "Reset"; clicked => { root.zoom-step(0); } }
+                                            }
+                                        }
+                                        SettingRow {
+                                            label: "Reader zoom";
+                                            Text {
+                                                text: round(root.reader-zoom * 100) + " %";
+                                                font-size: 12.16px;
+                                                font-weight: 700;
+                                                color: Palette.dim;
+                                                vertical-alignment: center;
+                                            }
+                                            VerticalLayout {
+                                                alignment: center;
+                                                SmallBtn { label: "Reset"; clicked => { root.viewer-zoom-reset(0); } }
+                                            }
+                                        }
+                                        SettingRow {
+                                            label: "Audio player zoom";
+                                            Text {
+                                                text: round(root.audio-zoom * 100) + " %";
+                                                font-size: 12.16px;
+                                                font-weight: 700;
+                                                color: Palette.dim;
+                                                vertical-alignment: center;
+                                            }
+                                            VerticalLayout {
+                                                alignment: center;
+                                                SmallBtn { label: "Reset"; clicked => { root.viewer-zoom-reset(1); } }
+                                            }
+                                        }
+                                        SettingRow {
+                                            label: "Video player zoom";
+                                            Text {
+                                                text: round(root.video-zoom * 100) + " %";
+                                                font-size: 12.16px;
+                                                font-weight: 700;
+                                                color: Palette.dim;
+                                                vertical-alignment: center;
+                                            }
+                                            VerticalLayout {
+                                                alignment: center;
+                                                SmallBtn { label: "Reset"; clicked => { root.viewer-zoom-reset(2); } }
+                                            }
+                                        }
+                                        Explain { text: "Ctrl + mouse wheel, Ctrl + plus / minus and Ctrl + 0 like in a browser (Cmd on macOS), in this window and in each kind of window on its own. Kept for the next start."; }
+                                    }
+                                }
+                                SettingCard {
+                                    height: lay-a3.preferred-height;
+                                    lay-a3 := VerticalLayout {
+                                        padding-top: 16px;
+                                        padding-bottom: 16px;
+                                        padding-left: 18px;
+                                        padding-right: 18px;
+                                        spacing: 8px;
+                                        Text { text: "Background motion"; font-size: 13.12px; font-weight: 700; color: Palette.text; }
+                                        HorizontalLayout {
+                                            alignment: start;
+                                            Seg {
+                                                controlled: true;
+                                                options: ["Off", "30 FPS", "60 FPS", "Monitor"];
+                                                selected: root.motion;
+                                                picked(i) => { root.motion = i; root.appearance-changed(); }
+                                            }
+                                        }
+                                        Text {
+                                            text: root.motion == 0 ? "Now: still" : "Now: " + root.bg-fps + " FPS";
+                                            font-size: 11.52px;
+                                            font-weight: 600;
+                                            color: Palette.text;
+                                        }
+                                        Explain {
+                                            text: "The moving \"screensaver\" orbs of the web. They drift only a few pixels per second, so the frame rate is hard to see: a lower rate mainly saves CPU/GPU. Monitor = one frame per screen refresh (" + root.refresh-hz + " Hz here), never more. Off = still background, no CPU/GPU use. The animation always pauses while the window is hidden or minimized.";
+                                        }
+                                    }
+                                }
+                                SettingCard {
+                                    height: lay-a4.preferred-height;
+                                    lay-a4 := VerticalLayout {
+                                        padding-top: 16px;
+                                        padding-bottom: 16px;
+                                        padding-left: 18px;
+                                        padding-right: 18px;
+                                        spacing: 8px;
+                                        SettingRow {
+                                            label: "Smooth scrolling";
+                                            Seg {
+                                                controlled: true;
+                                                options: ["Off", "On"];
+                                                selected: Look.smooth-scroll ? 1 : 0;
+                                                picked(i) => { Look.smooth-scroll = i == 1; root.appearance-changed(); }
+                                            }
+                                        }
+                                        Explain { text: "Animated mouse-wheel scrolling. Middle-click anywhere to autoscroll (over a box with its own scrollbar, like the queue or the raw JSON, that box scrolls): move the mouse up or down, click again (or release after holding) to stop."; }
+                                    }
+                                }
+                            }
+
+                            VerticalLayout {
+                                spacing: 12px;
+                                Eyebrow { text: "SHARING"; }
+                                SettingCard {
+                                    height: lay-s1.preferred-height;
+                                    lay-s1 := VerticalLayout {
+                                        padding-top: 16px;
+                                        padding-bottom: 16px;
+                                        padding-left: 18px;
+                                        padding-right: 18px;
+                                        spacing: 8px;
+                                        HorizontalLayout {
+                                            Text { text: "TVFS Users Only"; font-size: 13.12px; font-weight: 700; color: Palette.text; vertical-alignment: center; }
+                                            Rectangle { }
+                                            Seg {
+                                                controlled: true;
+                                                options: ["Off", "On"];
+                                                selected: root.users-only ? 1 : 0;
+                                                picked(i) => { root.users-only = i == 1; root.users-only-changed(root.users-only); }
+                                            }
+                                        }
+                                        Explain { text: "Reveals a standalone sharing mode — files are shared as-is (no client-side encryption), and the server refuses to hand out the file bytes to anyone who isn't logged in to TVFS. Off by default."; }
+                                    }
+                                }
+                            }
+
+                            VerticalLayout {
+                                spacing: 12px;
+                                Eyebrow { text: "UPLOADS"; }
+                                SettingCard {
+                                    height: lay-s2.preferred-height;
+                                    lay-s2 := VerticalLayout {
+                                        padding-top: 16px;
+                                        padding-bottom: 16px;
+                                        padding-left: 18px;
+                                        padding-right: 18px;
+                                        spacing: 8px;
+                                        Text { text: "Chunk configuration"; font-size: 13.12px; font-weight: 700; color: Palette.text; }
+                                        HorizontalLayout {
+                                            alignment: start;
+                                            Seg {
+                                                controlled: true;
+                                                options: ["Fixed", "Manage automatically"];
+                                                selected: root.chunk-auto ? 1 : 0;
+                                                picked(i) => { root.chunk-auto = i == 1; root.chunk-mode-changed(root.chunk-auto); }
+                                            }
+                                        }
+                                        if root.chunk-auto : ClampExplain { text: root.chunk-auto-text; }
+                                        // Fixed: connections x size (`.chunk-config-inputs`)
+                                        if !root.chunk-auto : HorizontalLayout {
+                                            alignment: start;
+                                            spacing: 7px;
+                                            NumBox {
+                                                value <=> root.chunk-count-text;
+                                                edited => { root.chunk-inputs-edited(); }
+                                                commit => { root.chunk-inputs-commit(); }
+                                            }
+                                            Text { text: "×"; font-size: 16px; font-weight: 700; color: Palette.dim; opacity: 0.7; vertical-alignment: center; }
+                                            NumBox {
+                                                value <=> root.chunk-size-text;
+                                                invalid: root.chunk-size-invalid;
+                                                edited => { root.chunk-inputs-edited(); }
+                                                commit => { root.chunk-inputs-commit(); }
+                                            }
+                                            Text { text: "MB"; font-size: 11.52px; color: Palette.dim; opacity: 0.8; vertical-alignment: center; }
+                                        }
+                                        if !root.chunk-auto && root.chunk-msg-kind != 0 : HorizontalLayout {
+                                            spacing: 6px;
+                                            opacity: 0.95;
+                                            VerticalLayout { alignment: start; Ico { src: @image-url("../../../assets/img/emoji-warn.png"); size: 14px; height: 16px; opacity: 0.85; } }
+                                            Text {
+                                                horizontal-stretch: 1;
+                                                text: root.chunk-msg-text + (root.chunk-msg-typing ? "|" : "");
+                                                font-size: 11.52px;
+                                                color: root.chunk-msg-kind == 1 ? #ffb84d : (root.chunk-msg-kind == 2 ? #ffe066 : Palette.bad);
+                                                wrap: word-wrap;
+                                            }
+                                        }
+                                        if !root.chunk-auto : ClampExplain { text: "EXPERIENCED USERS ONLY: Configure the sizes of chunks uploaded to the server and the amount of parallel connections held to the server. Due to browser technology, we are not able to achieve a perfect parallel upload in the way that we would like to, however, setting more parallel connections means less time spent between chunks on handshakes with the server. Keep in mind that the connection to our server does not allow more than 100 MB to be sent at once, and based on our testing, it is better if connections times size stays comfortably under that number too. We recommend keeping the size under 50 MB under any conditions. The default, tested setting we recommend is 3 × 30, and if you're on a weak connection, you may want to lower the size so that you have more backup if the connection drops — try lowering to as low as 1, for example 3 × 1 on hotel wifis. Keep in mind that switching takes time though, so if it's not that bad, 5 or 10 would be a better choice."; }
+                                    }
+                                }
+                            }
+
+                            VerticalLayout {
+                                spacing: 12px;
+                                Eyebrow { text: "AUTO COPY"; }
+                                SettingCard {
+                                    height: lay-s3.preferred-height;
+                                    lay-s3 := VerticalLayout {
+                                        padding-top: 16px;
+                                        padding-bottom: 16px;
+                                        padding-left: 18px;
+                                        padding-right: 18px;
+                                        spacing: 8px;
+                                        HorizontalLayout {
+                                            Text { text: "Auto copy"; font-size: 13.12px; font-weight: 700; color: Palette.text; vertical-alignment: center; }
+                                            Rectangle { }
+                                            Seg {
+                                                controlled: true;
+                                                options: ["Off", "Normal", "Styled"];
+                                                selected: root.auto-copy;
+                                                picked(i) => { root.auto-copy = i; root.auto-copy-changed(); }
+                                            }
+                                        }
+                                        ClampExplain { text: "All users: Our site automatically copies the link to your upload whenever it is done. While it may seem inconvenient, it sometimes does ask whether you allow it to access your clipboard on the first time — that is fine and you can accept it. We DO NOT access any contents in your clipboard unless you manually paste a file or text."; }
+                                        HorizontalLayout {
+                                            Text { text: "When a tool link is available"; font-size: 13.12px; font-weight: 700; color: Palette.text; vertical-alignment: center; }
+                                            Rectangle { }
+                                            Seg {
+                                                controlled: true;
+                                                options: ["File", "Tool"];
+                                                selected: root.prefer-tool ? 1 : 0;
+                                                picked(i) => { root.prefer-tool = i == 1; root.auto-copy-changed(); }
+                                            }
+                                        }
+                                        ClampExplain { text: "Some uploads also generate a dedicated \"tool\" page alongside the regular file link — currently that's the text/markdown reader or the audio player, with more kinds possibly added later. This decides which one auto copy grabs by default when both exist — the Off/Normal/Styled choice above still applies on top of whichever one is picked."; }
+                                        HorizontalLayout {
+                                            Text { text: "If an image was uploaded"; font-size: 13.12px; font-weight: 700; color: Palette.text; vertical-alignment: center; }
+                                            Rectangle { }
+                                            Seg {
+                                                controlled: true;
+                                                options: ["Normal", "Styled"];
+                                                selected: root.image-styled ? 1 : 0;
+                                                picked(i) => { root.image-styled = i == 1; root.auto-copy-changed(); }
+                                            }
+                                        }
+                                        ClampExplain { text: "Images already embed nicely as plain links almost everywhere (chat apps, forums, etc. generate their own preview), so you don't need the Styled markdown link nearly as often. This overrides the Normal/Styled choice above specifically for images — default is Normal."; }
+                                    }
+                                }
+                            }
+
+                            VerticalLayout {
+                                spacing: 12px;
+                                Eyebrow { text: "BEHAVIOUR"; }
+                                SettingCard {
+                                    height: lay-a5.preferred-height;
+                                    lay-a5 := VerticalLayout {
+                                        padding-top: 16px;
+                                        padding-bottom: 16px;
+                                        padding-left: 18px;
+                                        padding-right: 18px;
+                                        spacing: 10px;
+                                        if root.tray-enabled : VerticalLayout {
+                                            spacing: 10px;
+                                            HorizontalLayout {
+                                                Text { text: "Run in the tray"; font-size: 13.12px; font-weight: 700; color: Palette.text; vertical-alignment: center; }
+                                                Rectangle { }
+                                                Seg {
+                                                    controlled: true;
+                                                    options: ["Off", "On"];
+                                                    selected: root.close-to-tray ? 1 : 0;
+                                                    picked(i) => { root.close-to-tray = i == 1; root.save-settings(root.close-to-tray, root.browser-cmd); }
+                                                }
+                                            }
+                                            Explain { text: "Closing the window hides naTiVeFS to the tray instead of quitting. The tray icon's menu controls the audio player, opens local files, uploads and opens the TVFS link on the clipboard."; }
+                                        }
+                                        HorizontalLayout {
+                                            Text { text: "Start with the computer"; font-size: 13.12px; font-weight: 700; color: Palette.text; vertical-alignment: center; }
+                                            Rectangle { }
+                                            Seg {
+                                                controlled: true;
+                                                options: ["Off", "On"];
+                                                selected: root.autostart ? 1 : 0;
+                                                picked(i) => { root.startup-changed(i == 1, root.start-background); }
+                                            }
+                                        }
+                                        if root.file-menus-available : VerticalLayout {
+                                            spacing: 10px;
+                                            HorizontalLayout {
+                                                Text { text: "File manager menu"; font-size: 13.12px; font-weight: 700; color: Palette.text; vertical-alignment: center; }
+                                                Rectangle { }
+                                                Seg {
+                                                    controlled: true;
+                                                    options: ["Off", "On"];
+                                                    selected: root.file-menus ? 1 : 0;
+                                                    picked(i) => { root.file-menus-changed(i == 1); }
+                                                }
+                                            }
+                                            Explain { text: "Right-click files and folders: \"Upload to TVFS\", and \"Open locally in naTiVeFS\" for audio, video, text and images. On Windows 11 they are under \"Show more options\"; Send To has the upload too."; }
+                                        }
+                                        if root.tray-enabled && root.autostart : VerticalLayout {
+                                            spacing: 10px;
+                                            HorizontalLayout {
+                                                Text { text: "Start in the background"; font-size: 13.12px; font-weight: 700; color: Palette.text; vertical-alignment: center; }
+                                                Rectangle { }
+                                                Seg {
+                                                    controlled: true;
+                                                    options: ["Off", "On"];
+                                                    selected: root.start-background ? 1 : 0;
+                                                    picked(i) => { root.start-background = i == 1; root.startup-changed(root.autostart, root.start-background); }
+                                                }
+                                            }
+                                            Explain { text: "When the computer starts, naTiVeFS waits in the tray without opening its window."; }
+                                        }
+                                    }
+                                }
+                            }
+
+                            VerticalLayout {
+                                spacing: 12px;
+                                Eyebrow { text: "LINKS"; }
+                                SettingCard {
+                                    height: lay-links.preferred-height;
+                                    lay-links := VerticalLayout {
+                                        padding-top: 16px;
+                                        padding-bottom: 16px;
+                                        padding-left: 18px;
+                                        padding-right: 18px;
+                                        spacing: 10px;
+                                        HorizontalLayout {
+                                            spacing: 10px;
+                                            Text { text: "Use naTiVeFS as the default browser"; font-size: 13.12px; font-weight: 700; color: Palette.text; vertical-alignment: center; wrap: word-wrap; }
+                                            Seg {
+                                                controlled: true;
+                                                options: ["Off", "On"];
+                                                selected: root.router-on ? 1 : 0;
+                                                picked(i) => { root.router-toggle(i == 1); }
+                                            }
+                                        }
+                                        ClampExplain { text: "TVFS links you click anywhere (chat, mail, documents) open right here in naTiVeFS, like the web would, and every other link goes on to your real browser in a split second. Switching it off gives the default back to that browser."; }
+                                        if root.router-status != "" : Text { text: root.router-status; font-size: 11.52px; font-weight: 600; color: #2fffc4; wrap: word-wrap; }
+                                        Text { text: "Browser for other links"; font-size: 13.12px; font-weight: 700; color: Palette.text; }
+                                        VerticalLayout {
+                                            spacing: 4px;
+                                            BrowserChoice {
+                                                name: root.router-prev-name != "" ? "Previous default (" + root.router-prev-name + ")" : "Previous default browser";
+                                                selected: root.browser-pick == -1;
+                                                clicked => { root.pick-browser(-1); }
+                                            }
+                                            for b[i] in root.browsers : BrowserChoice {
+                                                name: b.name;
+                                                selected: root.browser-pick == i;
+                                                clicked => { root.pick-browser(i); }
+                                            }
+                                        }
+                                        Explain { text: "Or type the command yourself:"; }
+                                        TextField { placeholder: "Browser command (e.g. brave)"; value <=> root.browser-cmd; accepted => { root.save-settings(root.close-to-tray, root.browser-cmd); } }
+                                        HorizontalLayout { alignment: start; SmallBtn { label: "Save"; clicked => { root.save-settings(root.close-to-tray, root.browser-cmd); } } }
+                                        ClampExplain { text: root.browser-examples; }
+                                    }
+                                }
+                            }
+
+                            VerticalLayout {
+                                spacing: 12px;
+                                Eyebrow { text: "UPDATES"; }
+                                SettingCard {
+                                    height: lay-a6.preferred-height;
+                                    lay-a6 := VerticalLayout {
+                                        padding-top: 16px;
+                                        padding-bottom: 16px;
+                                        padding-left: 18px;
+                                        padding-right: 18px;
+                                        spacing: 10px;
+                                        VerticalLayout {
+                                            spacing: 3px;
+                                            Text { text: "naTiVeFS " + root.app-version; font-size: 14.4px; font-weight: 800; color: Palette.text; }
+                                            Text { text: root.build-info; font-size: 10.88px; color: Palette.dim; wrap: word-wrap; }
+                                        }
+                                        SettingRow {
+                                            label: "Channel";
+                                            Seg {
+                                                controlled: true;
+                                                options: ["Stable", "Beta"];
+                                                selected: root.update-beta ? 1 : 0;
+                                                picked(i) => { root.update-beta = i == 1; root.update-prefs-changed(); }
+                                            }
+                                        }
+                                        SettingRow {
+                                            label: "Check at startup";
+                                            Seg {
+                                                controlled: true;
+                                                options: ["Off", "On"];
+                                                selected: root.update-auto ? 1 : 0;
+                                                picked(i) => { root.update-auto = i == 1; root.update-prefs-changed(); }
+                                            }
+                                        }
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            alignment: start;
+                                            SmallBtn {
+                                                label: root.update-busy ? "Checking…" : "Check for updates";
+                                                clicked => { if (!root.update-busy) { root.check-updates(); } }
+                                            }
+                                            if root.update-url != "" : SmallBtn { label: "Open release page"; clicked => { root.open-link(root.update-url); } }
+                                        }
+                                        if root.update-status != "" : Text { text: root.update-status; font-size: 11.52px; font-weight: 600; color: Palette.text; wrap: word-wrap; }
+                                        Explain { text: "Updates come from GitHub releases of TomasekValla/naTiVeFS and are only accepted with a valid minisign signature. Beta also offers pre-releases (0.9.x release candidates). In-app download and install arrives together with the installers; until then the release page opens in your browser."; }
+                                    }
+                                }
+                            }
+
+                            VerticalLayout {
+                                spacing: 12px;
+                                Eyebrow { text: "ABOUT"; }
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    InfoCard { width: (root.inner-w - 10px) / 2; icon: @image-url("../../../assets/img/github.png"); title: "naTiVeFS source"; sub: "This app"; clicked => { root.open-link("https://github.com/TomasekValla/naTiVeFS"); } }
+                                    InfoCard { width: (root.inner-w - 10px) / 2; icon: @image-url("../../../assets/img/github.png"); title: "TVFS source"; sub: "Web + server"; clicked => { root.open-link("https://github.com/TomasekValla/TVFS"); } }
+                                }
+                                InfoCard { icon: @image-url("../../../assets/img/paper.png"); title: "License: GPL-3.0-or-later"; sub: "Free software: use, study, share, change"; clicked => { root.open-link("https://www.gnu.org/licenses/gpl-3.0.html"); } }
+                            }
+
+                            VerticalLayout {
+                                spacing: 12px;
+                                Eyebrow { text: "OPEN-SOURCE LIBRARIES"; }
+                                Explain {
+                                    opacity: 0.9;
+                                    text: "Built on " + root.libs.length + " open-source Rust crates (list generated from Cargo.lock at build time; click one to open its source), the Inter, Syne, Space Grotesk and JetBrains Mono fonts and Noto Color Emoji (all SIL Open Font License 1.1).";
+                                }
+                                HorizontalLayout {
+                                    alignment: start;
+                                    SmallBtn { label: root.show-libs ? "Hide the list" : "Show all " + root.libs.length; clicked => { root.show-libs = !root.show-libs; } }
+                                }
+                                if root.show-libs : VerticalLayout {
+                                    for lib in root.libs : LibRow {
+                                        lib: lib;
+                                        clicked => { if (lib.url != "") { root.open-link(lib.url); } }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if root.page == 2 : VerticalLayout {
+                    GlassCard {
+                        height: lay-chk.preferred-height;
+                        lay-chk := VerticalLayout {
+                            padding: 41px;
+                            spacing: 24px;
+
+                            VerticalLayout {
+                                spacing: 12px;
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    VerticalLayout {
+                                        alignment: center;
+                                        IconBtn {
+                                            src: @image-url("../../../assets/img/icon-back.svg");
+                                            size: 18px;
+                                            tint: Palette.text;
+                                            clicked => { root.go-page(0); }
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        spacing: 3px;
+                                        horizontal-stretch: 1;
+                                        Text { text: "TVFS"; font-size: 20px; font-weight: 800; letter-spacing: -0.2px; color: Palette.text; }
+                                        Text {
+                                            text: "FILE CHECK";
+                                            font-family: "Space Grotesk";
+                                            font-size: 9.6px;
+                                            font-weight: 700;
+                                            letter-spacing: 0.96px;
+                                            color: Palette.dim;
+                                        }
+                                    }
+                                }
+                                // `.subtitle`
+                                Text {
+                                    text: "Paste a files.tomasekvalla.cz link to inspect codec, bitrate, resolution, frame rate and more via ffprobe.";
+                                    font-size: 12.8px;
+                                    color: Palette.dim;
+                                    wrap: word-wrap;
+                                }
+                            }
+
+                            // `.input-row`
+                            HorizontalLayout {
+                                spacing: 10px;
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    height: 52px;
+                                    border-radius: 16px;
+                                    background: Palette.glass;
+                                    border-width: 1px;
+                                    border-color: url-in.has-focus ? Palette.accent : Palette.border;
+                                    url-in := TextInput {
+                                        x: 16px;
+                                        width: parent.width - 32px;
+                                        height: parent.height;
+                                        vertical-alignment: center;
+                                        single-line: true;
+                                        text <=> root.check-url;
+                                        color: Palette.text;
+                                        font-family: "JetBrains Mono";
+                                        font-size: 14.4px;
+                                        accepted => { root.check-probe(self.text); }
+                                    }
+                                    Text {
+                                        x: 16px;
+                                        width: parent.width - 32px;
+                                        height: parent.height;
+                                        vertical-alignment: center;
+                                        visible: root.check-url == "";
+                                        text: "https://files.tomasekvalla.cz/files/videos/...";
+                                        color: Palette.dim.with-alpha(0.5);
+                                        font-size: 14.4px;
+                                        overflow: elide;
+                                    }
+                                }
+                                ProbeBtn {
+                                    busy: root.check-busy;
+                                    clicked => { root.check-probe(root.check-url); }
+                                }
+                            }
+
+                            // `.error-box`
+                            if root.check-error != "" : Rectangle {
+                                height: err-t.preferred-height + 32px;
+                                border-radius: 16px;
+                                background: Palette.bad.with-alpha(0.1);
+                                border-width: 1px;
+                                border-color: Palette.bad.with-alpha(0.3);
+                                err-t := Text {
+                                    x: 16px;
+                                    y: 16px;
+                                    width: parent.width - 32px;
+                                    text: root.check-error;
+                                    font-size: 13.6px;
+                                    color: Palette.bad;
+                                    wrap: word-wrap;
+                                }
+                            }
+
+                            // `.results`
+                            if root.check-has-result : VerticalLayout {
+                                spacing: 16px;
+                                VerticalLayout {
+                                    spacing: 8px;
+                                    CheckLabel { text: "CONTAINER / FORMAT"; }
+                                    Rectangle {
+                                        height: fmt-lay.preferred-height;
+                                        border-radius: 16px;
+                                        background: Palette.light ? #ffffff80 : #00000033;
+                                        border-width: 1px;
+                                        border-color: Palette.border;
+                                        fmt-lay := VerticalLayout {
+                                            padding: 16px;
+                                            if root.check-has-format : CheckGrid { rows: root.check-format; }
+                                            if !root.check-has-format : Text { text: "No format info"; font-size: 12.8px; color: Palette.dim; }
+                                        }
+                                    }
+                                }
+                                Rectangle { height: 1px; background: Palette.border; }
+                                VerticalLayout {
+                                    spacing: 8px;
+                                    CheckLabel { text: "STREAMS"; }
+                                    VerticalLayout {
+                                        spacing: 10px;
+                                        for st in root.check-streams : CheckStreamCard { stream: st; }
+                                    }
+                                }
+                                // `.raw-toggle`
+                                HorizontalLayout {
+                                    alignment: end;
+                                    Rectangle {
+                                        width: raw-t.preferred-width;
+                                        height: raw-t.preferred-height + 2px;
+                                        raw-t := Text {
+                                            y: 0px;
+                                            text: root.check-raw-open ? "Hide raw ffprobe JSON" : "Show raw ffprobe JSON";
+                                            font-size: 10.4px;
+                                            color: raw-ta.has-hover ? Palette.good : Palette.dim;
+                                            animate color { duration: Anim.fast; }
+                                        }
+                                        Rectangle { y: raw-t.preferred-height; height: 1px; background: raw-t.color; }
+                                        raw-ta := TouchArea {
+                                            mouse-cursor: MouseCursor.pointer;
+                                            clicked => { root.check-raw-open = !root.check-raw-open; root.raw-scroll = 0px; }
+                                        }
+                                    }
+                                }
+                                // `.raw-box`: max 300 px, scrolls inside (wheel from Rust), text selectable
+                                if root.check-raw-open : raw-box := Rectangle {
+                                    property <length> view-h: min(300px, raw-in.preferred-height + 28px) - 28px;
+                                    height: self.view-h + 28px;
+                                    border-radius: 12px;
+                                    background: Palette.light ? #0000000d : #00000059;
+                                    border-width: 1px;
+                                    border-color: Palette.border;
+                                    TouchArea {
+                                        width: parent.width;
+                                        height: parent.height;
+                                        // Slint delivers the wheel to what is under the cursor: this box scrolls, and at either end the wheel
+                                        // goes on to the page (like the web's overflow boxes)
+                                        scroll-event(e) => {
+                                            // middle-click probe from Rust: autoscroll this box if it can scroll
+                                            if (root.wheel-probe) {
+                                                if (root.nested-can(3)) { root.autoscroll-target = 3; return accept; }
+                                                return reject;
+                                            }
+                                            if (root.nested-wheel(3)) { return accept; }
+                                            return reject;
+                                        }
+                                        Rectangle {
+                                            x: 14px;
+                                            y: 14px;
+                                            width: parent.width - 28px;
+                                            height: raw-box.view-h;
+                                            clip: true;
+                                            raw-in := TextInput {
+                                                y: -root.raw-scroll;
+                                                init => { root.raw-max = max(0px, self.preferred-height - 272px); }
+                                                changed preferred-height => { root.raw-max = max(0px, self.preferred-height - 272px); }
+                                                width: parent.width;
+                                                height: max(parent.height, self.preferred-height);
+                                                text: root.check-raw;
+                                                read-only: true;
+                                                single-line: false;
+                                                wrap: word-wrap;
+                                                vertical-alignment: top;
+                                                font-family: "JetBrains Mono";
+                                                font-size: 11.2px;
+                                                color: Palette.dim;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── scrollbar (thin overlay, draggable) ───────────────────────────────
+    if root.max-scroll > 0px : Rectangle {
+        x: root.width - self.width;
+        width: 14px;
+        height: root.height;
+        property <length> track: root.height - 8px;
+        property <length> thumb-h: max(36px, self.track * root.height / max(1px, root.content-h));
+        property <length> thumb-y: 4px + (self.track - self.thumb-h) * root.scroll-pos / root.max-scroll;
+        property <bool> dragging: false;
+        property <length> drag-from: 0px;
+        sb := TouchArea {
+            pointer-event(ev) => {
+                if (ev.button == PointerEventButton.left && ev.kind == PointerEventKind.down) {
+                    if (self.mouse-y >= parent.thumb-y && self.mouse-y <= parent.thumb-y + parent.thumb-h) {
+                        parent.dragging = true;
+                        parent.drag-from = root.scroll-pos;
+                    } else {
+                        root.scroll-by((self.mouse-y < parent.thumb-y ? -1 : 1) * root.height * 0.85, true);
+                    }
+                }
+                if (ev.button == PointerEventButton.left && ev.kind == PointerEventKind.up) {
+                    parent.dragging = false;
+                }
+            }
+            moved => {
+                if (parent.dragging) {
+                    root.scroll-anim = 0ms;
+                    root.scroll-target = clamp(parent.drag-from + (self.mouse-y - self.pressed-y) * root.max-scroll / max(1px, parent.track - parent.thumb-h), 0px, root.max-scroll);
+                }
+            }
+        }
+        Rectangle {
+            property <bool> lit: sb.has-hover || parent.dragging;
+            x: parent.width - self.width - 3px;
+            y: parent.thumb-y;
+            width: self.lit ? 8px : 5px;
+            height: parent.thumb-h;
+            border-radius: self.width / 2;
+            background: Palette.text.with-alpha(self.lit ? 0.38 : 0.2);
+            animate width, background { duration: 120ms; }
+        }
+    }
+
+    // ── middle-button autoscroll indicator ────────────────────────────────
+    if root.autoscroll : TouchArea {
+        mouse-cursor: root.autoscroll-dir < 0 ? MouseCursor.n-resize : (root.autoscroll-dir > 0 ? MouseCursor.s-resize : MouseCursor.ns-resize);
+    }
+    if root.autoscroll : Image {
+        x: root.autoscroll-x - 16px;
+        y: root.autoscroll-y - 16px;
+        width: 32px;
+        height: 32px;
+        source: @image-url("../../../assets/img/icon-scroll.svg");
+    }
+
+    // ── confirmation (the web's askToDelete modal) ───────────────────
+    if root.confirm-kind != 0 : Rectangle {
+        background: #00000099;
+        TouchArea { clicked => { root.confirm-answer(root.confirm-kind, root.confirm-id, false); root.confirm-kind = 0; } }
+        Rectangle {
+            width: min(340px, root.width * 0.9);
+            height: dlg.preferred-height;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: 24px;
+            background: Palette.dialog;
+            border-width: 1px;
+            border-color: Palette.border;
+            drop-shadow-color: Palette.shadow;
+            drop-shadow-blur: 48px;
+            drop-shadow-offset-y: 24px;
+            TouchArea { }
+            dlg := VerticalLayout {
+                padding: 33px;
+                spacing: 16px;
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: 6px;
+                    Ico { src: root.confirm-kind == 3 ? @image-url("../../../assets/img/emoji-cross.png") : @image-url("../../../assets/img/emoji-trash.png"); size: 18px; }
+                    Text { text: root.confirm-title; font-size: 16px; font-weight: 700; color: Palette.text; vertical-alignment: center; }
+                }
+                Text { text: root.confirm-text; font-size: 12.48px; color: Palette.dim; horizontal-alignment: center; wrap: word-wrap; }
+                Text { text: root.confirm-note; font-size: 10.88px; color: Palette.dim; opacity: 0.75; horizontal-alignment: center; wrap: word-wrap; }
+                Rectangle {
+                    height: 38px;
+                    border-radius: 12px;
+                    background: yes.has-hover ? #ff636338 : #ff63631f;
+                    animate background { duration: Anim.fast; }
+                    border-width: 1px;
+                    border-color: #ff636366;
+                    Text { text: "Yes, delete it"; font-size: 13.12px; font-weight: 700; color: #ff6b6b; horizontal-alignment: center; vertical-alignment: center; }
+                    yes := TouchArea {
+                        mouse-cursor: MouseCursor.pointer;
+                        clicked => { root.confirm-answer(root.confirm-kind, root.confirm-id, true); root.confirm-kind = 0; }
+                    }
+                }
+                Rectangle {
+                    height: 26px;
+                    Text { text: "Cancel"; font-size: 11.2px; color: no.has-hover ? Palette.text : Palette.dim; horizontal-alignment: center; vertical-alignment: center; }
+                    no := TouchArea {
+                        mouse-cursor: MouseCursor.pointer;
+                        clicked => { root.confirm-answer(root.confirm-kind, root.confirm-id, false); root.confirm-kind = 0; }
+                    }
+                }
+            }
+        }
+    }
+
+    if root.toast != "" : Rectangle {
+        // fades in (web: 0.22 s on overlays)
+        opacity: 0;
+        init => { self.opacity = 1; }
+        animate opacity { duration: Anim.overlay; }
+        x: (root.width - self.width) / 2;
+        y: root.height - 64px;
+        width: toast-t.preferred-width + 32px;
+        height: 34px;
+        border-radius: 17px;
+        background: Palette.light ? #1a1a1ae6 : #2a2a2ae6;
+        toast-t := Text { text: root.toast; color: #ffffff; font-size: 12.5px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+    }
+}

@@ -1,0 +1,63 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/tvfs-core",
+    "crates/nativefs-ipc",
+    "crates/nativefs-link",
+    "crates/nativefs-app",
+    "crates/nativefs-audio",
+]
+exclude = ["vendor"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/TomasekValla/naTiVeFS"
+authors = ["TomasekValla"]
+rust-version = "1.98"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util", "sync", "time"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "cookies", "json", "multipart", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+url = "2"
+tvfs-core = { path = "crates/tvfs-core" }
+nativefs-ipc = { path = "crates/nativefs-ipc" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+
+# Thumbnail decoding stays usable in debug builds.
+[profile.dev.package.rav1d]
+opt-level = 2
+debug-assertions = false
+
+[profile.dev.package.yuv]
+opt-level = 2
+debug-assertions = false
+
+# Audio decoding and analysis run in real time (and over whole files) in debug builds too.
+[profile.dev.package.ebur128]
+opt-level = 2
+debug-assertions = false
+
+[profile.dev.package.nativefs-audio]
+opt-level = 2
+
+[profile.dev.package.rustfft]
+opt-level = 2
+debug-assertions = false
+
+[profile.dev.package.symphonia-bundle-flac]
+opt-level = 2
+debug-assertions = false
+
+[patch.crates-io]
+# rav1d without x86 assembly (no NASM needed), see vendor/README.md
+avif-decode = { path = "vendor/avif-decode" }

@@ -1,0 +1,8 @@
+/target
+*.log
+*.minisig
+.DS_Store
+.claude/
+vendor/libmpv/dl/
+vendor/libmpv/win-*/
+CLAUDE.local.md

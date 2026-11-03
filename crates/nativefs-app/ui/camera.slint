@@ -1,0 +1,312 @@
+// Camera window of Create mode ("Take a photo" / "Record a video"): live preview (mirrored like a selfie
+// camera), camera and microphone pickers with a level meter, shutter / record, then "Use" or "Retake"
+// like a phone browser. The result goes into the upload queue.
+
+import { Palette, GlassCard, StaticBackdrop, Anim } from "common.slint";
+
+export struct DeviceItem {
+    id: string,
+    name: string,
+}
+
+component Picker inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <bool> open;
+    in property <bool> enabled: true;
+    callback clicked();
+    height: 40px;
+    border-radius: 12px;
+    background: ta.has-hover && root.enabled ? #ffffff14 : #ffffff0a;
+    animate background { duration: Anim.fast; }
+    border-width: 1px;
+    border-color: root.open ? Palette.accent : Palette.border;
+    opacity: root.enabled ? 1 : 0.5;
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 8px;
+        Text { text: root.label; color: Palette.dim; font-size: 11.5px; font-weight: 700; vertical-alignment: center; }
+        Text { horizontal-stretch: 1; text: root.value; color: Palette.text; font-size: 12.5px; font-weight: 600; vertical-alignment: center; overflow: elide; }
+        Path {
+            width: 10px;
+            height: 10px;
+            y: (parent.height - 10px) / 2;
+            viewbox-width: 10;
+            viewbox-height: 10;
+            commands: root.open ? "M 1 7 L 5 3 L 9 7" : "M 1 3 L 5 7 L 9 3";
+            stroke: Palette.dim;
+            stroke-width: 1.5px;
+        }
+    }
+    ta := TouchArea { enabled: root.enabled; mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+}
+
+component PillButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> primary;
+    callback clicked();
+    height: 46px;
+    border-radius: 14px;
+    background: root.primary ? Palette.brand : (ta.has-hover ? #ffffff1f : #ffffff0f);
+    animate background { duration: Anim.fast; }
+    border-width: root.primary ? 0px : 1px;
+    border-color: Palette.border;
+    drop-shadow-color: root.primary ? #00d9b559 : transparent;
+    drop-shadow-blur: 16px;
+    drop-shadow-offset-y: 6px;
+    Text {
+        text: root.label;
+        color: root.primary ? Palette.on-brand : Palette.text;
+        font-size: 14px;
+        font-weight: 800;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+}
+
+export component CameraWindow inherits Window {
+    in-out property <bool> light <=> Palette.light;
+    // false = photo, true = video
+    in property <bool> video;
+    // 0 starting, 1 live, 2 recording, 3 review, 4 failed
+    in property <int> state;
+    in property <image> preview;
+    in property <bool> has-preview;
+    in property <float> preview-aspect: 16 / 9;
+    in property <string> mode-text;
+    in property <string> status;
+    in property <string> error;
+    in property <[DeviceItem]> cameras;
+    in property <[DeviceItem]> mics;
+    in property <string> camera-name;
+    in property <string> mic-name;
+    in property <float> level;
+    in property <string> rec-time: "0:00";
+    in property <string> rec-size;
+    // review: the photo, or a frame of the video + its length / size
+    in property <string> review-text;
+    in-out property <int> picker;
+    callback pick-camera(string);
+    callback pick-mic(string);
+    callback shutter();
+    callback record();
+    callback stop();
+    callback use-result();
+    callback retake();
+    callback pick-file();
+    title: root.video ? "Record a video — naTiVeFS" : "Take a photo — naTiVeFS";
+    icon: @image-url("../../../assets/app-64.png");
+    default-font-family: "Inter";
+    background: Palette.bg;
+    min-width: 420px;
+    min-height: 480px;
+    preferred-width: 760px;
+    preferred-height: 760px;
+
+    StaticBackdrop { }
+    card := GlassCard {
+        x: 18px;
+        y: 18px;
+        width: root.width - 36px;
+        height: root.height - 36px;
+        border-radius: 28px;
+        TouchArea { clicked => { root.picker = 0; } }
+        VerticalLayout {
+            padding: 20px;
+            spacing: 14px;
+            HorizontalLayout {
+                spacing: 10px;
+                Text { text: root.video ? "Record a video" : "Take a photo"; color: Palette.text; font-size: 17px; font-weight: 800; vertical-alignment: center; }
+                Rectangle { horizontal-stretch: 1; }
+                Text { text: root.mode-text; color: Palette.dim; font-size: 11.5px; vertical-alignment: center; }
+            }
+            // preview / review
+            Rectangle {
+                vertical-stretch: 1;
+                border-radius: 18px;
+                background: #000000;
+                clip: true;
+                property <float> fit-w: min(self.width, self.height * root.preview-aspect) / 1px;
+                if root.has-preview : Image {
+                    width: min(parent.width, parent.height * root.preview-aspect);
+                    height: self.width / root.preview-aspect;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    source: root.preview;
+                    image-fit: fill;
+                }
+                if root.state == 0 || root.state == 4 : Text {
+                    width: parent.width - 40px;
+                    x: 20px;
+                    text: root.state == 0 ? "Starting the camera…" : root.error;
+                    color: root.state == 4 ? Palette.bad : #ffffffb3;
+                    font-size: 13.5px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                }
+                if root.state == 2 : Rectangle {
+                    x: 14px;
+                    y: 14px;
+                    width: rec-l.preferred-width + 24px;
+                    height: 32px;
+                    border-radius: 16px;
+                    background: #000000a6;
+                    rec-l := HorizontalLayout {
+                        x: 12px;
+                        spacing: 8px;
+                        Rectangle {
+                            width: 10px;
+                            Rectangle { y: (parent.height - 10px) / 2; width: 10px; height: 10px; border-radius: 5px; background: #ff3b3b; }
+                        }
+                        Text { text: root.rec-time; color: #ffffff; font-size: 13px; font-weight: 800; font-family: "JetBrains Mono"; vertical-alignment: center; }
+                        Text { text: root.rec-size; color: #ffffffb3; font-size: 11.5px; vertical-alignment: center; }
+                    }
+                }
+                if root.state == 3 && root.review-text != "" : Rectangle {
+                    x: 14px;
+                    y: parent.height - 46px;
+                    width: rv.preferred-width + 24px;
+                    height: 32px;
+                    border-radius: 16px;
+                    background: #000000a6;
+                    rv := Text { x: 12px; text: root.review-text; color: #ffffff; font-size: 12px; font-weight: 700; vertical-alignment: center; height: parent.height; }
+                }
+            }
+            // devices
+            if root.state != 3 : VerticalLayout {
+                spacing: 8px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Picker {
+                        label: "Camera";
+                        value: root.camera-name == "" ? "—" : root.camera-name;
+                        open: root.picker == 1;
+                        enabled: root.state != 2;
+                        clicked => { root.picker = root.picker == 1 ? 0 : 1; }
+                    }
+                    if root.video : Picker {
+                        label: "Microphone";
+                        value: root.mic-name == "" ? "—" : root.mic-name;
+                        open: root.picker == 2;
+                        enabled: root.state != 2;
+                        clicked => { root.picker = root.picker == 2 ? 0 : 2; }
+                    }
+                }
+                // microphone level (audio preview)
+                if root.video : HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: "Mic level"; color: Palette.dim; font-size: 11px; vertical-alignment: center; width: 62px; }
+                    Rectangle {
+                        height: 8px;
+                        y: 3px;
+                        border-radius: 4px;
+                        background: Palette.border;
+                        Rectangle {
+                            x: 0px;
+                            width: parent.width * clamp(root.level, 0, 1);
+                            border-radius: 4px;
+                            background: root.level > 0.95 ? Palette.bad : (root.level > 0.7 ? Palette.warn : Palette.good);
+                        }
+                    }
+                }
+            }
+            if root.status != "" : Text { text: root.status; color: Palette.dim; font-size: 12px; wrap: word-wrap; horizontal-alignment: center; }
+            // actions
+            HorizontalLayout {
+                alignment: center;
+                spacing: 12px;
+                height: 72px;
+                if root.state == 1 && !root.video : Rectangle {
+                    width: 68px;
+                    height: 68px;
+                    border-radius: 34px;
+                    border-width: 4px;
+                    border-color: #ffffff;
+                    background: transparent;
+                    Rectangle {
+                        width: 54px;
+                        height: 54px;
+                        border-radius: 27px;
+                        background: shutter-ta.pressed ? #d9d9d9 : #ffffff;
+                        animate background { duration: Anim.fast; }
+                    }
+                    shutter-ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.shutter(); } }
+                }
+                if (root.state == 1 || root.state == 2) && root.video : Rectangle {
+                    width: 68px;
+                    height: 68px;
+                    border-radius: 34px;
+                    border-width: 4px;
+                    border-color: #ffffff;
+                    Rectangle {
+                        width: root.state == 2 ? 26px : 54px;
+                        height: self.width;
+                        border-radius: root.state == 2 ? 6px : 27px;
+                        background: #ff3b3b;
+                        animate width, border-radius { duration: 160ms; }
+                    }
+                    TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { if (root.state == 2) { root.stop(); } else { root.record(); } } }
+                }
+                if root.state == 3 : PillButton { width: 160px; label: "Retake"; clicked => { root.retake(); } }
+                if root.state == 3 : PillButton { width: 200px; primary: true; label: root.video ? "Use video" : "Use photo"; clicked => { root.use-result(); } }
+                if root.state == 4 : PillButton { width: 160px; label: "Try again"; clicked => { root.retake(); } }
+                if root.state == 4 : PillButton { width: 190px; label: "Choose a file…"; clicked => { root.pick-file(); } }
+            }
+        }
+    }
+
+    // device lists
+    if root.picker == 1 : Rectangle {
+        x: 38px;
+        y: root.height - 18px - 20px - 72px - 14px - 40px - (root.video ? 28px : 0px) - self.height - 6px;
+        width: root.video ? (root.width - 76px - 8px) / 2 : root.width - 76px;
+        height: min(cam-l.preferred-height, 300px);
+        border-radius: 14px;
+        background: Palette.dialog;
+        border-width: 1px;
+        border-color: Palette.border;
+        drop-shadow-color: #00000080;
+        drop-shadow-blur: 20px;
+        clip: true;
+        cam-l := VerticalLayout {
+            padding: 6px;
+            for d in root.cameras : Rectangle {
+                height: 34px;
+                border-radius: 9px;
+                background: dta.has-hover ? #ffffff14 : transparent;
+                animate background { duration: Anim.fast; }
+                Text { x: 10px; width: parent.width - 20px; text: d.name; color: d.name == root.camera-name ? Palette.good : Palette.text; font-size: 12.5px; vertical-alignment: center; height: parent.height; overflow: elide; }
+                dta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.picker = 0; root.pick-camera(d.id); } }
+            }
+            if root.cameras.length == 0 : Text { text: "  No camera found."; color: Palette.dim; font-size: 12px; height: 34px; vertical-alignment: center; }
+        }
+    }
+    if root.picker == 2 : Rectangle {
+        x: 38px + (root.width - 76px - 8px) / 2 + 8px;
+        y: root.height - 18px - 20px - 72px - 14px - 40px - 28px - self.height - 6px;
+        width: (root.width - 76px - 8px) / 2;
+        height: min(mic-l.preferred-height, 300px);
+        border-radius: 14px;
+        background: Palette.dialog;
+        border-width: 1px;
+        border-color: Palette.border;
+        drop-shadow-color: #00000080;
+        drop-shadow-blur: 20px;
+        clip: true;
+        mic-l := VerticalLayout {
+            padding: 6px;
+            for d in root.mics : Rectangle {
+                height: 34px;
+                border-radius: 9px;
+                background: mta.has-hover ? #ffffff14 : transparent;
+                animate background { duration: Anim.fast; }
+                Text { x: 10px; width: parent.width - 20px; text: d.name; color: d.name == root.mic-name ? Palette.good : Palette.text; font-size: 12.5px; vertical-alignment: center; height: parent.height; overflow: elide; }
+                mta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.picker = 0; root.pick-mic(d.id); } }
+            }
+            if root.mics.length == 0 : Text { text: "  No microphone found."; color: Palette.dim; font-size: 12px; height: 34px; vertical-alignment: center; }
+        }
+    }
+}

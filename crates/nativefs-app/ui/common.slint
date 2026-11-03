@@ -1,0 +1,1414 @@
+import "../../../assets/fonts/Inter-Regular.ttf";
+import "../../../assets/fonts/Inter-SemiBold.ttf";
+import "../../../assets/fonts/Inter-Bold.ttf";
+import "../../../assets/fonts/Inter-ExtraBold.ttf";
+import "../../../assets/fonts/Syne-ExtraBold.ttf";
+import "../../../assets/fonts/SpaceGrotesk-Bold.ttf";
+import "../../../assets/fonts/JetBrainsMono-Regular.ttf";
+import "../../../assets/fonts/JetBrainsMono-SemiBold.ttf";
+
+export struct RecentItem {
+    id: string,
+    name: string,
+    category: string,
+    sub-text: string,
+    expired: bool,
+    link: string,
+    has-thumb: bool,
+    thumb: image,
+    // 0 = uploaded file, 1 = NOT FINISHED (this device), 2 = OTHER DEVICE, 3 = "TVFS Users Only" share (kept locally)
+    kind: int,
+    // NOT FINISHED: the resume key; OTHER DEVICE: the upload id
+    key: string,
+    // reader / audio player page the server made for this upload (known for uploads from this device)
+    tool-link: string,
+    // 1 = reader, 2 = audio player
+    tool-kind: int,
+}
+
+// One file in the upload queue (the web's `.file-row`).
+export struct QueueRow {
+    // shown name: the base name without the extension (or the random name when anonymized)
+    base: string,
+    // extension badge text, e.g. "MP4" ("…" shortened like the web above 6 characters)
+    ext-label: string,
+    size: string,
+    anon: bool,
+}
+
+// Per-file progress row of a multi-file upload (`.per-file-row`).
+export struct FileProgressRow {
+    name: string,
+    pct: float,
+    // 0 = waiting, 1 = active, 2 = done, 3 = failed
+    state: int,
+    status: string,
+}
+
+// One file of a batch result (`.batch-file-link`).
+export struct BatchRow {
+    name: string,
+    link: string,
+    styled: string,
+    reader: string,
+    player: string,
+}
+
+// Speed / latency breakdown tile of the stats card.
+export struct MetricTile {
+    key: string,
+    value: string,
+    unit: string,
+}
+
+// A copy pill of the result box. icon: 0 doc, 1 sparkles, 2 book, 3 note, 4 check, 5 hourglass
+export struct PillState {
+    show: bool,
+    icon: int,
+    label: string,
+    enabled: bool,
+}
+
+// One open-source dependency (generated at build time from `cargo metadata`).
+// a browser found on this computer (settings > Links)
+export struct BrowserRow {
+    name: string,
+    command: string,
+}
+
+export struct LibInfo {
+    name: string,
+    version: string,
+    license: string,
+    url: string,
+}
+
+// File Check page (check.html): one label/value of a card, two per grid row.
+export struct CheckStat {
+    label: string,
+    value: string,
+    accent: bool,
+}
+
+export struct CheckStatPair {
+    a: CheckStat,
+    b: CheckStat,
+    has-b: bool,
+}
+
+// kind: 0 video, 1 audio, 2 anything else
+export struct CheckStream {
+    kind: int,
+    badge: string,
+    codec: string,
+    codec-long: string,
+    rows: [CheckStatPair],
+}
+
+// Values measured from the web UI's computed styles (upload.html, `:root` = dark, `.light-mode` = light).
+// Animation timings shared by every window, taken from the web client: `transition: all 0.15s` on controls,
+// 0.22 s opacity on overlays, `cubic-bezier(0.16, 1, 0.3, 1)` on bigger panels. Animations only run while a value
+// changes, so an idle window still draws nothing.
+export global Anim {
+    out property <duration> fast: 150ms;
+    out property <duration> overlay: 220ms;
+    out property <duration> panel: 350ms;
+}
+
+export global Palette {
+    in-out property <bool> light: false;
+    out property <color> bg: light ? #eef6f5 : #03070a;
+    out property <color> glass: light ? #f5f8fc6b : #1c202a61;
+    out property <color> border: light ? #1414281f : #ffffff24;
+    out property <color> text: light ? #12121a : #ffffff;
+    out property <color> dim: light ? #525870 : #9aa6bd;
+    out property <color> accent: light ? #7c4dff : #b083ff;
+    // `--accent-secondary`: text/borders. Status dots keep the dark value in both themes (fixed in the web CSS).
+    out property <color> good: light ? #00a886 : #2fffc4;
+    out property <color> dot-good: #2fffc4;
+    out property <color> warn: #ffd866;
+    out property <color> bad: light ? #e0524a : #ff6b6b;
+    // text on the teal→violet gradient is white in both themes
+    out property <color> on-brand: #ffffff;
+    out property <color> shadow: light ? #7c4dff38 : #000000b3;
+    out property <color> scrim: light ? #12121a66 : #000000a6;
+    out property <color> dialog: light ? #f6f8fc : #14111f;
+    out property <brush> brand: @linear-gradient(135deg, #00e6bd 0%, #8455ff 100%);
+}
+
+// Look & feel switches and the animated backdrop, driven from Rust.
+export global Look {
+    // frosted glass cards (web `backdrop-filter: blur() saturate(150%)`)
+    in-out property <bool> glass: true;
+    in-out property <bool> smooth-scroll: true;
+    // the web's screensaver canvas, rendered on the CPU at low resolution
+    in property <bool> has-backdrop: false;
+    in property <image> backdrop;
+    // the same frame saturated x1.5: what a glass card sees behind itself
+    in property <image> backdrop-glass;
+    // window size, so cards can line their backdrop up with the page background
+    in-out property <length> win-w;
+    in-out property <length> win-h;
+}
+
+// Top-level glass card. With glass on it shows the (saturated) page backdrop
+// that lies behind it, so it reads as frosted glass instead of a flat fill.
+// "Use TVFS tools locally": every viewer says that the file is on this computer only
+export component LocalBadge inherits Rectangle {
+    height: 22px;
+    width: lb.preferred-width + 26px;
+    border-radius: 11px;
+    background: #ffffff0d;
+    border-width: 1px;
+    border-color: Palette.border;
+    Rectangle {
+        x: 9px;
+        width: 6px;
+        height: 6px;
+        border-radius: 3px;
+        background: Palette.dim;
+    }
+    lb := Text {
+        x: 20px;
+        text: "Local file, not uploaded";
+        font-size: 11px;
+        font-weight: 600;
+        color: Palette.dim;
+        vertical-alignment: center;
+    }
+}
+
+export component GlassCard inherits Rectangle {
+    property <bool> frosted: Look.glass && Look.has-backdrop;
+    background: root.frosted ? transparent : Palette.glass;
+    border-radius: 32px;
+    drop-shadow-color: Palette.shadow;
+    drop-shadow-blur: 48px;
+    drop-shadow-offset-y: 24px;
+    if root.frosted : Rectangle {
+        border-radius: root.border-radius;
+        clip: true;
+        Image {
+            x: -root.absolute-position.x;
+            y: -root.absolute-position.y;
+            width: Look.win-w;
+            height: Look.win-h;
+            source: Look.backdrop-glass;
+            image-fit: fill;
+        }
+        Rectangle { background: Palette.glass; }
+    }
+    @children
+    Rectangle {
+        border-radius: root.border-radius;
+        border-width: 1px;
+        border-color: Palette.border;
+    }
+}
+
+// Small square icon box, vertically centred inside layouts.
+export component Ico inherits Rectangle {
+    in property <image> src;
+    in property <length> size: 14px;
+    in property <brush> tint: transparent;
+    width: root.size;
+    Image {
+        source: root.src;
+        width: root.size;
+        height: root.size;
+        y: (parent.height - self.height) / 2;
+        colorize: root.tint;
+    }
+}
+
+export component StatusChip inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <color> dot: Palette.dot-good;
+    horizontal-stretch: 1;
+    preferred-width: 0px;
+    border-radius: 16px;
+    background: Palette.glass;
+    border-width: 1px;
+    border-color: Palette.border;
+    VerticalLayout {
+        padding: 14px;
+        spacing: 6px;
+        alignment: center;
+        Text {
+            text: root.label.to-uppercase();
+            font-size: 9.92px;
+            font-weight: 700;
+            color: Palette.dim;
+            letter-spacing: 0.69px;
+        }
+        HorizontalLayout {
+            spacing: 7px;
+            alignment: start;
+            Rectangle {
+                width: 8px;
+                Rectangle {
+                    y: (parent.height - self.height) / 2;
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 4px;
+                    background: root.dot;
+                    drop-shadow-color: root.dot;
+                    drop-shadow-blur: 8px;
+                }
+            }
+            Text {
+                text: root.value;
+                font-size: 15.2px;
+                font-weight: 800;
+                letter-spacing: -0.15px;
+                color: Palette.text;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+export component ModeCell inherits Rectangle {
+    in property <string> label;
+    in property <image> icon;
+    in property <bool> active;
+    in property <bool> sep-right;
+    in property <bool> sep-top;
+    callback clicked();
+    height: 37px;
+    horizontal-stretch: 1;
+    preferred-width: 0px;
+    Rectangle { background: Palette.brand; opacity: root.active ? 1 : 0; animate opacity { duration: Anim.fast; } }
+    Rectangle { background: #ffffff0d; opacity: !root.active && ta.has-hover ? 1 : 0; animate opacity { duration: Anim.fast; } }
+    Rectangle { visible: !root.active && root.sep-right; x: parent.width - 1px; width: 1px; background: Palette.border; }
+    Rectangle { visible: !root.active && root.sep-top; y: 0px; height: 1px; background: Palette.border; }
+    HorizontalLayout {
+        alignment: center;
+        spacing: 6px;
+        Ico { src: root.icon; size: 14px; }
+        Text {
+            text: root.label;
+            font-size: 12.48px;
+            font-weight: 700;
+            color: root.active ? Palette.on-brand : (ta.has-hover ? Palette.text : Palette.dim);
+            animate color { duration: Anim.fast; }
+            vertical-alignment: center;
+        }
+    }
+    ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+}
+
+export component Pill inherits Rectangle {
+    in property <string> label;
+    in property <bool> active;
+    callback clicked();
+    height: 30px;
+    width: t.preferred-width + 30px;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: root.active ? Palette.good : (ta.has-hover ? Palette.accent : Palette.border);
+    background: root.active ? #2fffc41f : #ffffff0a;
+    animate border-color, background { duration: Anim.fast; }
+    t := Text {
+        x: 15px;
+        y: (parent.height - self.height) / 2;
+        text: root.label;
+        font-size: 11.84px;
+        font-weight: 700;
+        color: root.active ? Palette.text : (ta.has-hover ? Palette.accent : Palette.dim);
+        animate color { duration: Anim.fast; }
+    }
+    ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+}
+
+export component Eyebrow inherits Text {
+    font-size: 10.4px;
+    font-weight: 800;
+    letter-spacing: 1.25px;
+    color: Palette.dim;
+    opacity: 0.85;
+}
+
+export component TextField inherits Rectangle {
+    in property <string> placeholder;
+    in property <bool> secret: false;
+    in-out property <string> value;
+    callback accepted();
+    height: 52px;
+    border-radius: 16px;
+    background: Palette.glass;
+    border-width: 1px;
+    border-color: inp.has-focus ? Palette.accent : Palette.border;
+    animate border-color { duration: Anim.fast; }
+    Rectangle {
+        opacity: inp.has-focus ? 1 : 0;
+        animate opacity { duration: Anim.fast; }
+        x: -3px;
+        y: -3px;
+        width: parent.width + 6px;
+        height: parent.height + 6px;
+        border-radius: 19px;
+        border-width: 3px;
+        border-color: #b083ff26;
+    }
+    inp := TextInput {
+        x: 18px;
+        width: parent.width - 36px;
+        height: parent.height;
+        vertical-alignment: center;
+        text <=> root.value;
+        color: Palette.text;
+        font-size: 14.72px;
+        font-weight: 600;
+        input-type: root.secret ? InputType.password : InputType.text;
+        accepted => { root.accepted(); }
+    }
+    Text {
+        x: 18px;
+        width: parent.width - 36px;
+        height: parent.height;
+        vertical-alignment: center;
+        visible: root.value == "";
+        text: root.placeholder;
+        color: Palette.dim.with-alpha(0.7);
+        font-size: 14.72px;
+        font-weight: 600;
+    }
+}
+
+export component ActionBtn inherits Rectangle {
+    in property <string> label;
+    in property <bool> active: true;
+    callback clicked();
+    height: 55px;
+    border-radius: 16px;
+    background: root.active ? Palette.brand : Palette.border;
+    opacity: root.active ? (ata.pressed ? 0.88 : 1.0) : 0.5;
+    drop-shadow-color: root.active ? (ata.has-hover ? #00d9b580 : #00d9b559) : #00000000;
+    drop-shadow-blur: ata.has-hover && root.active ? 26px : 20px;
+    animate opacity, drop-shadow-color, drop-shadow-blur { duration: Anim.fast; }
+    drop-shadow-offset-y: 10px;
+    Text {
+        text: root.label;
+        color: Palette.on-brand;
+        font-size: 16px;
+        font-weight: 800;
+        letter-spacing: 0.16px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ata := TouchArea {
+        enabled: root.active;
+        mouse-cursor: root.active ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component SmallBtn inherits Rectangle {
+    in property <string> label;
+    in property <bool> danger: false;
+    callback clicked();
+    height: 23px;
+    width: t.preferred-width + 24px;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: root.danger ? #ff6b6b73 : Palette.border;
+    background: ta.has-hover ? #ffffff14 : transparent;
+    animate background { duration: Anim.fast; }
+    t := Text {
+        x: 12px;
+        y: (parent.height - self.height) / 2;
+        text: root.label;
+        font-size: 10.88px;
+        font-weight: 600;
+        color: root.danger ? Palette.bad : Palette.dim;
+    }
+    ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+}
+
+export component Seg inherits Rectangle {
+    in property <[string]> options;
+    in-out property <int> selected: 0;
+    // controlled: the parent owns `selected` (bound to app state); only `picked` fires
+    in property <bool> controlled: false;
+    callback picked(int);
+    // horizontal padding of each segment (narrow places use less)
+    in property <length> pad: 28px;
+    height: 28px;
+    width: seg-lay.preferred-width;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: Palette.border;
+    background: Palette.glass;
+    clip: true;
+    // Each segment is as wide as its label (+ padding), so labels never clip.
+    seg-lay := HorizontalLayout {
+        for opt[i] in root.options : Rectangle {
+            preferred-width: lbl.preferred-width + root.pad;
+            Rectangle { background: Palette.brand; opacity: i == root.selected ? 1 : 0; animate opacity { duration: Anim.fast; } }
+            lbl := Text {
+                text: opt;
+                font-size: 11.2px;
+                font-weight: 700;
+                color: i == root.selected ? Palette.on-brand : Palette.dim;
+                animate color { duration: Anim.fast; }
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                x: 0px;
+                width: parent.width;
+                height: parent.height;
+            }
+            TouchArea {
+                mouse-cursor: MouseCursor.pointer;
+                clicked => {
+                    if (!root.controlled) { root.selected = i; }
+                    root.picked(i);
+                }
+            }
+        }
+    }
+}
+
+export component SettingCard inherits Rectangle {
+    border-radius: 16px;
+    background: #ffffff08;
+    border-width: 1px;
+    border-color: Palette.border;
+}
+
+export component Explain inherits Text {
+    font-size: 10.56px;
+    color: Palette.dim;
+    opacity: 0.75;
+    wrap: word-wrap;
+}
+
+// a long explanation folds to two lines with "Read more" (web .setting-explain-text.clamped + .setting-readmore)
+export component ClampExplain inherits VerticalLayout {
+    in property <string> text;
+    property <bool> expanded;
+    property <length> two-lines: one.preferred-height * 2;
+    property <bool> long: m.preferred-height > self.two-lines + 1px;
+    spacing: 2px;
+    // measuring copies, outside the layout (one line, and the whole text at this width)
+    Rectangle {
+        height: 0px;
+        one := Explain { text: "X"; visible: false; }
+        m := Explain { width: parent.width; text: root.text; visible: false; }
+    }
+    Explain {
+        text: root.text;
+        height: root.expanded || !root.long ? m.preferred-height : root.two-lines;
+        overflow: elide;
+    }
+    if root.long : HorizontalLayout {
+        alignment: start;
+        Text {
+            text: root.expanded ? "Read less" : "Read more";
+            font-size: 10.56px;
+            color: #2fffc4;
+            TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.expanded = !root.expanded; } }
+        }
+    }
+}
+
+export component InfoCard inherits Rectangle {
+    callback clicked();
+    in property <image> icon;
+    in property <string> title;
+    in property <string> sub;
+    horizontal-stretch: 1;
+    preferred-width: 0px;
+    border-radius: 14px;
+    background: ta.has-hover ? #b083ff0f : #ffffff08;
+    border-width: 1px;
+    border-color: ta.has-hover ? Palette.accent : Palette.border;
+    animate background, border-color { duration: Anim.fast; }
+    HorizontalLayout {
+        padding: 12px;
+        padding-left: 14px;
+        padding-right: 14px;
+        spacing: 10px;
+        Ico { src: root.icon; size: 28px; }
+        VerticalLayout {
+            alignment: center;
+            spacing: 1px;
+            Text { text: root.title; font-size: 12.48px; font-weight: 700; color: Palette.text; wrap: word-wrap; }
+            if root.sub != "" : Text { text: root.sub; font-size: 10.08px; color: Palette.dim; }
+        }
+    }
+    ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+}
+
+// A thin multiplication-x close mark (the web uses the OS symbol font; Inter has no U+2715).
+export component XMark inherits Path {
+    in property <length> size: 10px;
+    in property <color> color;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 10;
+    viewbox-height: 10;
+    commands: "M 1 1 L 9 9 M 9 1 L 1 9";
+    stroke: root.color;
+    stroke-width: 1.4px;
+}
+
+// Emoji button with an optional frame (`.file-row-rename`, `.file-row-anon`, `.recent-copy-btn`, ...).
+export component EmojiBtn inherits Rectangle {
+    in property <image> src;
+    in property <length> icon: 14px;
+    in property <length> pad-x: 6px;
+    in property <bool> enabled: true;
+    callback clicked();
+    width: root.icon + 2 * root.pad-x;
+    Image {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: root.icon;
+        height: root.icon;
+        source: root.src;
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { root.clicked(); }
+    }
+    out property <bool> hover: ta.has-hover;
+}
+
+// `.recent-item`: thumbnail, name, countdown, badge, actions. Kinds: uploaded file, NOT FINISHED
+// (this device), OTHER DEVICE, TVFS Users Only share.
+export component RecentRow inherits Rectangle {
+    in property <RecentItem> item;
+    // copy feedback: 0 = link copied, 1 = styled copied, -1 = none
+    in property <int> copied-kind: -1;
+    callback copy();
+    callback copy-styled();
+    callback remove(bool);
+    callback forget();
+    callback open();
+    property <bool> unfinished: root.item.kind == 1 || root.item.kind == 2;
+    height: max(62px, info.preferred-height + 20px);
+    border-radius: 16px;
+    background: Palette.glass;
+    border-width: 1px;
+    border-color: Palette.border;
+    opacity: root.item.expired ? 0.55 : (root.unfinished ? 0.85 : 1.0);
+    // the thumbnail + name area opens the reader / player page when there is one, else the file
+    // (NOT FINISHED: puts the file back into the queue)
+    TouchArea {
+        x: 0px;
+        width: info.x + info.width;
+        enabled: root.item.kind != 2 && !root.item.expired;
+        mouse-cursor: self.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { root.open(); }
+    }
+    HorizontalLayout {
+        padding-top: 10px;
+        padding-bottom: 10px;
+        padding-left: 13px;
+        padding-right: 13px;
+        spacing: 12px;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 42px;
+                height: 42px;
+                border-radius: 10px;
+                background: #ffffff0f;
+                clip: true;
+                if root.item.has-thumb : Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: root.item.thumb;
+                    image-fit: cover;
+                }
+                if !root.item.has-thumb : Image {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 22px;
+                    height: 22px;
+                    colorize: Palette.accent;
+                    opacity: 0.85;
+                    source: root.unfinished ? @image-url("../../../assets/img/icon-file.svg")
+                        : root.item.category == "audio" ? @image-url("../../../assets/img/icon-audio.svg")
+                        : root.item.category == "video" || root.item.category == "videos" ? @image-url("../../../assets/img/icon-video.svg")
+                        : root.item.category == "image" || root.item.category == "pictures" ? @image-url("../../../assets/img/icon-image.svg")
+                        : @image-url("../../../assets/img/icon-file.svg");
+                }
+            }
+        }
+        info := VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            Text { text: root.item.name; font-size: 13.6px; font-weight: 700; color: Palette.text; overflow: elide; }
+            Text { text: root.item.sub-text; font-size: 11.2px; color: Palette.dim; wrap: word-wrap; }
+        }
+        if root.item.expired || root.unfinished : VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            Rectangle {
+                property <color> c: root.item.expired ? #ff6b6b : #ffc107;
+                width: badge.preferred-width + 14px;
+                height: 16px;
+                border-radius: 8px;
+                background: root.item.expired ? #ff636329 : #ffc10729;
+                badge := Text {
+                    text: root.item.expired ? "EXPIRED" : (root.item.kind == 1 ? "NOT FINISHED" : "OTHER DEVICE");
+                    font-size: 9.92px;
+                    font-weight: 800;
+                    letter-spacing: 0.5px;
+                    color: parent.c;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+        HorizontalLayout {
+            spacing: 4px;
+            horizontal-stretch: 0;
+            // uploaded files: copy link, copy styled, (reader / player), delete
+            if !root.unfinished : VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 35px;
+                    height: 32px;
+                    border-radius: 8px;
+                    background: c1.hover && !root.item.expired ? #ffffff14 : transparent;
+                    opacity: root.item.expired ? 0.3 : 1.0;
+                    c1 := EmojiBtn {
+                        width: parent.width;
+                        height: parent.height;
+                        src: root.copied-kind == 0 ? @image-url("../../../assets/img/emoji-check.png") : @image-url("../../../assets/img/emoji-doc.png");
+                        icon: 17px;
+                        enabled: !root.item.expired;
+                        clicked => { root.copy(); }
+                    }
+                }
+            }
+            if !root.unfinished : VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 35px;
+                    height: 32px;
+                    border-radius: 8px;
+                    background: c2.hover && !root.item.expired ? #ffffff14 : transparent;
+                    opacity: root.item.expired ? 0.3 : 1.0;
+                    c2 := EmojiBtn {
+                        width: parent.width;
+                        height: parent.height;
+                        src: root.copied-kind == 1 ? @image-url("../../../assets/img/emoji-check.png") : @image-url("../../../assets/img/emoji-sparkles.png");
+                        icon: 17px;
+                        enabled: !root.item.expired;
+                        clicked => { root.copy-styled(); }
+                    }
+                }
+            }
+            // NOT FINISHED: forget locally
+            if root.item.kind == 1 : VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 35px;
+                    height: 32px;
+                    border-radius: 8px;
+                    background: fg.has-hover ? #ffffff14 : transparent;
+                    animate background { duration: Anim.fast; }
+                    XMark { x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; size: 10px; color: Palette.text; }
+                    fg := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.forget(); } }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    property <bool> shift-down;
+                    width: 35px;
+                    height: 32px;
+                    border-radius: 8px;
+                    background: dl.has-hover ? #ff63631f : transparent;
+                    animate background { duration: Anim.fast; }
+                    opacity: root.item.kind == 2 && root.item.key == "" ? 0.3 : 1.0;
+                    Ico { x: 9px; src: @image-url("../../../assets/img/emoji-trash.png"); size: 17px; }
+                    dl := TouchArea {
+                        enabled: !(root.item.kind == 2 && root.item.key == "");
+                        mouse-cursor: MouseCursor.pointer;
+                        pointer-event(e) => { if (e.kind == PointerEventKind.down) { parent.shift-down = e.modifiers.shift; } }
+                        clicked => { root.remove(parent.shift-down); }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Round icon button (moon / sun, gear, back), like the web brand card's theme toggle.
+export component IconBtn inherits Rectangle {
+    in property <image> src;
+    in property <length> size: 19px;
+    in property <brush> tint: transparent;
+    callback clicked();
+    width: 38px;
+    height: 38px;
+    border-radius: 19px;
+    background: ta.has-hover ? Palette.border : transparent;
+    animate background { duration: Anim.fast; }
+    Image {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: root.size;
+        height: root.size;
+        source: root.src;
+        colorize: root.tint;
+    }
+    ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+}
+
+// "Label ............ [control]" row of a settings card.
+export component SettingRow inherits HorizontalLayout {
+    in property <string> label;
+    spacing: 10px;
+    Text {
+        text: root.label;
+        font-size: 13.12px;
+        font-weight: 700;
+        color: Palette.text;
+        vertical-alignment: center;
+        horizontal-stretch: 1;
+        wrap: word-wrap;
+    }
+    @children
+}
+
+export component LibRow inherits Rectangle {
+    in property <LibInfo> lib;
+    callback clicked();
+    height: 28px;
+    border-radius: 8px;
+    background: ta.has-hover ? #ffffff0d : transparent;
+    animate background { duration: Anim.fast; }
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 8px;
+        Text { text: root.lib.name; font-size: 11.84px; font-weight: 700; color: Palette.text; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+        Text { text: root.lib.version; font-size: 10.88px; color: Palette.dim; vertical-alignment: center; }
+        Text { text: root.lib.license; width: 120px; font-size: 10.88px; color: Palette.dim; vertical-alignment: center; horizontal-alignment: right; overflow: elide; }
+    }
+    ta := TouchArea {
+        mouse-cursor: root.lib.url != "" ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { root.clicked(); }
+    }
+}
+
+// ── File Check components (content and sizes from check.html, colours of this app) ──
+
+// `.section-label`
+export component CheckLabel inherits Text {
+    font-size: 9.6px;
+    font-weight: 700;
+    letter-spacing: 1.15px;
+    color: Palette.dim;
+}
+
+// `.stat-row`: uppercase label over a monospace value
+export component CheckStatCell inherits VerticalLayout {
+    in property <CheckStat> stat;
+    spacing: 2px;
+    alignment: start;
+    Text {
+        text: root.stat.label;
+        font-size: 9.92px;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        color: Palette.dim;
+    }
+    Text {
+        text: root.stat.value;
+        font-family: "JetBrains Mono";
+        font-size: 13.12px;
+        font-weight: 600;
+        color: root.stat.accent ? Palette.good : Palette.text;
+        wrap: word-wrap;
+    }
+}
+
+// `.format-grid` / `.stream-body`: two columns
+export component CheckGrid inherits VerticalLayout {
+    in property <[CheckStatPair]> rows;
+    in property <length> gap: 8px;
+    spacing: root.gap;
+    for pr in root.rows : HorizontalLayout {
+        spacing: root.gap;
+        CheckStatCell { stat: pr.a; horizontal-stretch: 1; width: (parent.width - root.gap) / 2; }
+        if pr.has-b : CheckStatCell { stat: pr.b; horizontal-stretch: 1; width: (parent.width - root.gap) / 2; }
+        if !pr.has-b : Rectangle { horizontal-stretch: 1; width: (parent.width - root.gap) / 2; }
+    }
+}
+
+// `.stream-card`: tinted header (type badge, codec, long codec name) + the stats
+export component CheckStreamCard inherits Rectangle {
+    in property <CheckStream> stream;
+    property <color> tint: root.stream.kind == 0 ? Palette.accent : root.stream.kind == 1 ? Palette.good : Palette.dim;
+    border-radius: 16px;
+    clip: true;
+    height: lay.preferred-height;
+    lay := VerticalLayout {
+        Rectangle {
+            background: root.stream.kind == 2 ? (Palette.light ? #0000000d : #ffffff12) : root.tint.with-alpha(Palette.light ? 0.12 : 0.22);
+            height: head.preferred-height;
+            head := HorizontalLayout {
+                padding-top: 12px;
+                padding-bottom: 12px;
+                padding-left: 16px;
+                padding-right: 16px;
+                spacing: 10px;
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: badge.preferred-width + 16px;
+                        height: badge.preferred-height + 4px;
+                        border-radius: 6px;
+                        background: root.stream.kind == 2 ? (Palette.light ? #0000000d : #ffffff12) : root.tint.with-alpha(Palette.light ? 0.2 : 0.35);
+                        badge := Text {
+                            text: root.stream.badge;
+                            font-size: 10.4px;
+                            font-weight: 700;
+                            letter-spacing: 0.83px;
+                            color: root.tint;
+                        }
+                    }
+                }
+                Text {
+                    text: root.stream.codec;
+                    font-family: "JetBrains Mono";
+                    font-size: 13.6px;
+                    font-weight: 600;
+                    color: Palette.text;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: root.stream.codec-long;
+                    font-size: 11.2px;
+                    color: Palette.dim;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+            }
+            Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
+        }
+        if root.stream.rows.length > 0 : Rectangle {
+            background: Palette.light ? #ffffff4d : #0000001a;
+            height: body.preferred-height;
+            body := VerticalLayout {
+                padding-top: 14px;
+                padding-bottom: 14px;
+                padding-left: 16px;
+                padding-right: 16px;
+                CheckGrid { rows: root.stream.rows; gap: 10px; }
+            }
+        }
+    }
+    Rectangle {
+        border-radius: root.border-radius;
+        border-width: 1px;
+        border-color: Palette.border;
+    }
+}
+
+// `.probe-btn`: gradient button with a spinner while the probe runs
+export component ProbeBtn inherits Rectangle {
+    in property <bool> busy;
+    callback clicked();
+    width: row.preferred-width + 48px;
+    height: 52px;
+    border-radius: 16px;
+    background: Palette.brand;
+    opacity: root.busy ? 0.5 : 1.0;
+    animate opacity { duration: Anim.fast; }
+    drop-shadow-color: root.busy ? #00000000 : #00d9b559;
+    drop-shadow-blur: 20px;
+    drop-shadow-offset-y: 10px;
+    row := HorizontalLayout {
+        alignment: center;
+        spacing: 8px;
+        if root.busy : VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 16px;
+                height: 16px;
+                border-radius: 8px;
+                border-width: 2px;
+                border-color: #ffffff33;
+                // the turning quarter (`border-top-color`), redrawn only while probing
+                Path {
+                    width: 16px;
+                    height: 16px;
+                    viewbox-width: 16;
+                    viewbox-height: 16;
+                    stroke: Palette.dot-good;
+                    stroke-width: 2px;
+                    commands: "M 3.05 3.05 A 7 7 0 0 1 12.95 3.05";
+                    transform-origin: { x: 8px, y: 8px };
+                    transform-rotation: (animation-tick() / 800ms) * 360deg;
+                }
+            }
+        }
+        Text {
+            text: root.busy ? "Probing..." : "Inspect";
+            color: Palette.on-brand;
+            font-size: 14.4px;
+            font-weight: 700;
+            letter-spacing: 0.29px;
+            vertical-alignment: center;
+        }
+    }
+    TouchArea {
+        enabled: !root.busy;
+        mouse-cursor: root.busy ? MouseCursor.not-allowed : MouseCursor.pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// ── upload components (measured from upload.html, see docs/handoff/HANDOFF_STAGE_2.md) ──
+
+// A dashed rectangle outline (the web's anonymized row: 6 px dashes every 14 px, grey .45).
+export component DashedOutline inherits Rectangle {
+    in property <color> dash: #a0a0a073;
+    for i in floor(root.width / 14px) + 1 : Rectangle { x: i * 14px; y: 0px; width: min(6px, root.width - i * 14px); height: 1px; background: root.dash; }
+    for i in floor(root.width / 14px) + 1 : Rectangle { x: i * 14px; y: root.height - 1px; width: min(6px, root.width - i * 14px); height: 1px; background: root.dash; }
+    for i in floor(root.height / 14px) + 1 : Rectangle { x: 0px; y: i * 14px; width: 1px; height: min(6px, root.height - i * 14px); background: root.dash; }
+    for i in floor(root.height / 14px) + 1 : Rectangle { x: root.width - 1px; y: i * 14px; width: 1px; height: min(6px, root.height - i * 14px); background: root.dash; }
+}
+
+// `.file-row`: [EXT] name, rename, anonymize, size, remove
+export component QueueFileRow inherits Rectangle {
+    in property <QueueRow> entry;
+    in property <bool> editing;
+    in property <bool> locked;
+    callback rename-clicked();
+    callback rename-commit(string);
+    callback rename-cancel();
+    callback anon-clicked();
+    callback remove-clicked();
+    height: 41px;
+    border-radius: 13px;
+    background: Palette.glass;
+    border-width: root.entry.anon ? 0px : 1px;
+    border-color: Palette.border;
+    // dashes are the row's background in the web, so the rounded corners clip them
+    if root.entry.anon : Rectangle {
+        border-radius: root.border-radius;
+        clip: true;
+        DashedOutline { width: root.width; height: root.height; }
+    }
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 8px;
+        // extension badge
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                height: 19px;
+                width: clamp(ext.preferred-width + 14px, 34px, 52px);
+                border-radius: 7px;
+                background: #b083ff2e;
+                border-width: 1px;
+                border-color: #b083ff52;
+                ext := Text {
+                    x: 7px;
+                    width: parent.width - 14px;
+                    text: root.entry.ext-label;
+                    font-size: 9.6px;
+                    font-weight: 800;
+                    letter-spacing: 0.384px;
+                    color: Palette.accent;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+        }
+        // name (or the rename field)
+        Rectangle {
+            horizontal-stretch: 1;
+            min-width: 20px;
+            clip: true;
+            if !root.editing : Text {
+                x: 14px;
+                width: parent.width - 14px;
+                text: root.entry.base;
+                font-size: 12.48px;
+                font-weight: 600;
+                color: Palette.text;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            if root.editing : Rectangle {
+                height: 21px;
+                border-radius: 8px;
+                background: Palette.light ? #ffffff80 : #0f0c1c59;
+                border-width: 1px;
+                border-color: Palette.good;
+                TextInput {
+                    x: 10px;
+                    width: parent.width - 20px;
+                    text: root.entry.base;
+                    font-size: 12.48px;
+                    font-weight: 600;
+                    color: Palette.text;
+                    vertical-alignment: center;
+                    single-line: true;
+                    edited => { root.pending-name = self.text; }
+                    accepted => { root.rename-commit(self.text); }
+                    key-pressed(e) => {
+                        if (e.text == Key.Escape) { root.rename-cancel(); return accept; }
+                        return reject;
+                    }
+                    init => { self.focus(); self.select-all(); }
+                }
+            }
+        }
+        // rename (a check mark while editing)
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                height: 21px;
+                width: 29.6px;
+                border-radius: 7px;
+                property <bool> lit: rn.hover && !root.entry.anon && !root.locked;
+                border-width: root.editing || self.lit ? 0px : 1px;
+                border-color: Palette.border;
+                background: root.editing ? @linear-gradient(135deg, #0a8a78d9 0%, #7c4dffd9 100%) : (self.lit ? @linear-gradient(135deg, #0a8a78b3 0%, #7c4dffb3 100%) : transparent);
+                opacity: root.entry.anon ? 0.3 : 1.0;
+                drop-shadow-color: root.editing ? #2fffc433 : transparent;
+                drop-shadow-blur: root.editing ? 2px : 0px;
+                rn := EmojiBtn {
+                    width: parent.width;
+                    height: parent.height;
+                    src: root.editing ? @image-url("../../../assets/img/emoji-checkmark.png") : @image-url("../../../assets/img/emoji-pencil.png");
+                    icon: 12px;
+                    enabled: !root.entry.anon && !root.locked;
+                    clicked => {
+                        if (root.editing) { root.rename-commit(root.pending-name); } else { root.pending-name = root.entry.base; root.rename-clicked(); }
+                    }
+                }
+            }
+        }
+        // anonymize
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                height: 21px;
+                width: 32px;
+                border-radius: 7px;
+                border-width: 1px;
+                border-color: root.entry.anon ? #c8c8c880 : (an.hover ? #ffffff40 : Palette.border);
+                background: root.entry.anon ? #dcdcdc26 : (an.hover ? #ffffff1f : #ffffff0a);
+                opacity: root.entry.anon || an.hover ? 1.0 : 0.5;
+                an := EmojiBtn {
+                    width: parent.width;
+                    height: parent.height;
+                    src: @image-url("../../../assets/img/emoji-sunglasses.png");
+                    icon: 16px;
+                    enabled: !root.locked;
+                    clicked => { root.anon-clicked(); }
+                }
+            }
+        }
+        Text {
+            text: root.entry.size;
+            font-size: 11.2px;
+            font-weight: 600;
+            color: Palette.dim;
+            vertical-alignment: center;
+        }
+        // remove
+        EmojiBtn {
+            src: @image-url("../../../assets/img/emoji-cross.png");
+            icon: 15px;
+            pad-x: 4px;
+            enabled: !root.locked;
+            clicked => { root.remove-clicked(); }
+        }
+    }
+    // the rename field's current text (committed by the check-mark button)
+    in-out property <string> pending-name;
+}
+
+// `.copy-pill`: emoji + label on a translucent accent capsule.
+export component CopyPill inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> enabled: true;
+    callback clicked();
+    height: 36px;
+    width: pl.preferred-width;
+    border-radius: 20px;
+    background: ta.has-hover && root.enabled ? #2fffc440 : #2fffc426;
+    border-width: 1px;
+    border-color: ta.has-hover && root.enabled ? Palette.good : transparent;
+    animate background, border-color { duration: Anim.fast; }
+    pl := HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        spacing: 5px;
+        alignment: center;
+        Ico { src: root.icon; size: 16px; }
+        Text { text: root.label; font-size: 13.6px; font-weight: 600; color: Palette.good; vertical-alignment: center; }
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { root.clicked(); }
+    }
+}
+
+// Two copy pills side by side when they fit (5 px margins like the web's inline buttons), else stacked.
+export component PillPair inherits Rectangle {
+    in property <image> icon-a;
+    in property <string> label-a;
+    in property <bool> enabled-a: true;
+    in property <bool> show-b: true;
+    in property <image> icon-b;
+    in property <string> label-b;
+    in property <bool> enabled-b: true;
+    callback clicked-a();
+    callback clicked-b();
+    property <bool> one-row: !root.show-b || a.width + b.width + 20px <= root.width;
+    height: root.one-row ? 46px : 92px;
+    a := CopyPill {
+        icon: root.icon-a;
+        label: root.label-a;
+        enabled: root.enabled-a;
+        x: root.one-row ? (root.width - (root.show-b ? self.width + b.width + 10px : self.width)) / 2 : (root.width - self.width) / 2;
+        y: 5px;
+        clicked => { root.clicked-a(); }
+    }
+    b := CopyPill {
+        visible: root.show-b;
+        icon: root.icon-b;
+        label: root.label-b;
+        enabled: root.enabled-b;
+        x: root.one-row ? a.x + a.width + 10px : (root.width - self.width) / 2;
+        y: root.one-row ? 5px : 51px;
+        clicked => { root.clicked-b(); }
+    }
+}
+
+// `.link-container`: the uploaded link in monospace, click opens it.
+export component LinkBox inherits Rectangle {
+    in property <string> text;
+    callback clicked();
+    height: t.preferred-height + 30px;
+    border-radius: 14px;
+    background: Palette.glass;
+    border-width: 1px;
+    border-color: ta.has-hover ? Palette.good : Palette.border;
+    animate border-color { duration: Anim.fast; }
+    t := Text {
+        x: 15px;
+        y: 15px;
+        width: parent.width - 30px;
+        text: root.text;
+        font-family: "Consolas";
+        font-size: 14.4px;
+        color: Palette.good;
+        horizontal-alignment: center;
+        wrap: word-wrap;
+    }
+    ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+}
+
+// `.batch-file-link`: name + copy link / copy styled / reader / player, the row opens the file.
+export component BatchFileRow inherits Rectangle {
+    in property <BatchRow> entry;
+    in property <bool> copied-link;
+    in property <bool> copied-styled;
+    callback open(string);
+    callback copy(string, int);
+    height: 46px;
+    border-radius: 11px;
+    background: Palette.glass;
+    border-width: 1px;
+    border-color: rowta.has-hover ? Palette.good : Palette.border;
+    animate border-color { duration: Anim.fast; }
+    rowta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.open(root.entry.link); } }
+    HorizontalLayout {
+        padding-left: 11px;
+        padding-right: 11px;
+        spacing: 8px;
+        Rectangle {
+            horizontal-stretch: 1;
+            Text {
+                x: 10px;
+                width: parent.width - 10px;
+                text: root.entry.name;
+                font-size: 11.52px;
+                font-weight: 600;
+                color: Palette.text;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+        for spec[i] in [
+            { show: true, kind: 0, src: root.copied-link ? @image-url("../../../assets/img/emoji-check.png") : @image-url("../../../assets/img/emoji-doc.png") },
+            { show: root.entry.styled != "", kind: 1, src: root.copied-styled ? @image-url("../../../assets/img/emoji-check.png") : @image-url("../../../assets/img/emoji-sparkles.png") },
+            { show: root.entry.reader != "", kind: 2, src: @image-url("../../../assets/img/emoji-book.png") },
+            { show: root.entry.player != "", kind: 3, src: @image-url("../../../assets/img/emoji-note.png") },
+        ] : VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            if spec.show : Rectangle {
+                height: 26px;
+                width: 30.7px;
+                border-radius: 6px;
+                background: bt.hover ? #ffffff14 : transparent;
+                bt := EmojiBtn {
+                    width: parent.width;
+                    height: parent.height;
+                    src: spec.src;
+                    icon: 16px;
+                    clicked => {
+                        if (spec.kind == 0) { root.copy(root.entry.link, 0); }
+                        else if (spec.kind == 1) { root.copy(root.entry.styled, 1); }
+                        else if (spec.kind == 2) { root.open(root.entry.reader); }
+                        else { root.open(root.entry.player); }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Speed/latency tile of the stats card (`.stats-metric-col`).
+export component MetricCol inherits Rectangle {
+    in property <MetricTile> tile;
+    horizontal-stretch: 1;
+    preferred-width: 0px;
+    border-radius: 9px;
+    background: Palette.light ? #00000006 : #ffffff09;
+    border-width: 1px;
+    border-color: Palette.border;
+    VerticalLayout {
+        padding-top: 5px;
+        padding-bottom: 5px;
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 2px;
+        Text { text: root.tile.key; font-size: 9.28px; font-weight: 700; letter-spacing: 0.65px; color: Palette.dim; horizontal-alignment: center; }
+        Text { text: root.tile.value; font-size: 11.84px; font-weight: 800; letter-spacing: -0.12px; color: Palette.text; horizontal-alignment: center; overflow: elide; }
+        if root.tile.unit != "" : Text { text: root.tile.unit; font-size: 9.28px; font-weight: 700; letter-spacing: 0.19px; color: Palette.dim; horizontal-alignment: center; }
+    }
+}
+
+// Duration / Average Speed tile (`.stats-tile`).
+export component StatsTile inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <string> sub;
+    horizontal-stretch: 1;
+    preferred-width: 0px;
+    border-radius: 14px;
+    background: Palette.light ? #00000006 : #ffffff09;
+    border-width: 1px;
+    border-color: Palette.border;
+    VerticalLayout {
+        padding-top: 10px;
+        padding-bottom: 10px;
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 3px;
+        Text { text: root.label; font-size: 9.6px; font-weight: 700; letter-spacing: 0.77px; color: Palette.dim; }
+        Text { text: root.value; font-size: 18.4px; font-weight: 800; letter-spacing: -0.37px; color: Palette.text; }
+        Text { text: root.sub; font-size: 11.52px; font-weight: 600; color: Palette.dim; }
+    }
+}
+
+// `.chunk-num-input`: a whole number field.
+export component NumBox inherits Rectangle {
+    in-out property <string> value;
+    in property <bool> invalid;
+    callback edited();
+    callback commit();
+    width: 54px;
+    height: 34px;
+    border-radius: 10px;
+    background: Palette.glass;
+    border-width: 1px;
+    border-color: root.invalid ? Palette.bad : (ni.has-focus ? Palette.accent : Palette.border);
+    ni := TextInput {
+        x: 6px;
+        width: parent.width - 12px;
+        text <=> root.value;
+        font-size: 13.6px;
+        font-weight: 700;
+        color: Palette.text;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        input-type: InputType.number;
+        edited => { root.edited(); }
+        accepted => { root.commit(); }
+        changed has-focus => { if (!self.has-focus) { root.commit(); } }
+    }
+}
+
+// The page background of the extra windows: the main window's static gradient (what it shows before the
+// animated backdrop exists). No animation, so an idle window never redraws.
+export component StaticBackdrop inherits Rectangle {
+    if !Palette.light : Rectangle {
+        Rectangle { background: @linear-gradient(165deg, #04231d 0%, #03070a 42%, #14082e 72%, #1d0a40 100%); }
+        Rectangle {
+            property <length> r: max(root.width, root.height) * 0.36;
+            x: root.width * 0.12 - self.r;
+            y: root.height * -0.08 - self.r;
+            width: self.r * 2;
+            height: self.r * 2;
+            background: @radial-gradient(circle, #0a8a78 0%, #0a8a7800 70%);
+        }
+        Rectangle {
+            property <length> r: max(root.width, root.height) * 0.36;
+            x: root.width * 1.08 - self.r;
+            y: root.height * 0.12 - self.r;
+            width: self.r * 2;
+            height: self.r * 2;
+            background: @radial-gradient(circle, #6b2bdb 0%, #6b2bdb00 70%);
+        }
+    }
+    if Palette.light : Rectangle {
+        Rectangle { background: @linear-gradient(165deg, #e8fbf6 0%, #f3f0fb 50%, #e9def9 100%); }
+        Rectangle {
+            property <length> r: max(root.width, root.height) * 0.36;
+            x: root.width * 0.1 - self.r;
+            y: root.height * -0.1 - self.r;
+            width: self.r * 2;
+            height: self.r * 2;
+            background: @radial-gradient(circle, #7ee8d4 0%, #7ee8d400 70%);
+        }
+        Rectangle {
+            property <length> r: max(root.width, root.height) * 0.36;
+            x: root.width * 1.05 - self.r;
+            y: root.height * 0.08 - self.r;
+            width: self.r * 2;
+            height: self.r * 2;
+            background: @radial-gradient(circle, #c19bff 0%, #c19bff00 70%);
+        }
+    }
+}
+
+// A thin progress bar (download progress), brand gradient on a translucent track.
+export component ProgressBar inherits Rectangle {
+    in property <float> value;
+    height: 6px;
+    border-radius: 3px;
+    background: Palette.border;
+    Rectangle {
+        x: 0px;
+        width: parent.width * clamp(root.value, 0, 1);
+        animate width { duration: 300ms; easing: ease-out; }
+        border-radius: 3px;
+        background: Palette.brand;
+    }
+}

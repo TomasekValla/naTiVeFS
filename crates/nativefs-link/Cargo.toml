@@ -1,0 +1,16 @@
+[package]
+name = "nativefs-link"
+description = "Tiny link router: TVFS links open in naTiVeFS, everything else goes to your real browser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# The executable is naTiVeFS-link(.exe); packages for Linux/macOS rename it to `nativefs-link`.
+[[bin]]
+name = "naTiVeFS-link"
+path = "src/main.rs"
+
+[dependencies]
+tvfs-core.workspace = true
+nativefs-ipc.workspace = true

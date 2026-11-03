@@ -1,0 +1,348 @@
+// File windows: one file to download (or a link that could not be opened), and batch / "TVFS Users Only"
+// file lists. The batch window rebuilds the web's batch landing page (`/api/upload/batch/complete` in
+// files_backend/upload.js) with its CSS values; the single-file window has no web counterpart and uses
+// the app's glass look.
+
+import { Palette, GlassCard, ActionBtn, XMark, StaticBackdrop, ProgressBar, Anim } from "common.slint";
+
+// ── single file ────────────────────────────────────────────────────────────
+
+component GhostBtn inherits Rectangle {
+    in property <string> label;
+    in property <bool> enabled: true;
+    callback clicked();
+    height: 44px;
+    border-radius: 14px;
+    border-width: 1px;
+    border-color: ta.has-hover && root.enabled ? Palette.accent : Palette.border;
+    animate border-color { duration: Anim.fast; }
+    background: ta.has-hover && root.enabled ? #ffffff14 : #ffffff0a;
+    animate background { duration: Anim.fast; }
+    opacity: root.enabled ? 1.0 : 0.5;
+    Text {
+        text: root.label;
+        color: ta.has-hover && root.enabled ? Palette.accent : Palette.text;
+        animate color { duration: Anim.fast; }
+        font-size: 13.5px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ta := TouchArea { enabled: root.enabled; mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+}
+
+export component FileWindow inherits Window {
+    default-font-family: "Inter";
+    in-out property <bool> light <=> Palette.light;
+    in property <string> file-name;
+    in property <string> info;
+    // 0 file to download, 1 audio (native player in stage 4), 2 error
+    in property <int> mode;
+    in property <string> message;
+    in property <string> link;
+    // download progress: -1 = not started
+    in property <float> progress: -1;
+    in property <string> progress-text;
+    in property <bool> done;
+    in property <bool> busy;
+    in property <string> toast;
+    callback download();
+    callback cancel();
+    callback open-folder();
+    callback open-browser();
+    callback copy-link();
+    title: root.file-name == "" ? "naTiVeFS" : root.file-name + " — naTiVeFS";
+    icon: @image-url("../../../assets/app-64.png");
+    background: Palette.bg;
+    min-width: 380px;
+    preferred-width: 460px;
+    min-height: card.preferred-height + 48px;
+    preferred-height: card.preferred-height + 48px;
+
+    StaticBackdrop { }
+    card := GlassCard {
+        x: 24px;
+        y: 24px;
+        width: root.width - 48px;
+        height: root.height - 48px;
+        border-radius: 28px;
+        VerticalLayout {
+            padding: 26px;
+            spacing: 14px;
+            HorizontalLayout {
+                spacing: 14px;
+                Rectangle {
+                    width: 48px;
+                    height: 48px;
+                    border-radius: 14px;
+                    background: root.mode == 2 ? #ff6b6b26 : Palette.brand;
+                    Image {
+                        width: 24px;
+                        height: 24px;
+                        source: root.mode == 1 ? @image-url("../../../assets/img/icon-audio.svg") : @image-url("../../../assets/img/icon-file.svg");
+                        colorize: #ffffff;
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 3px;
+                    Text {
+                        text: root.file-name == "" ? "Could not open the link" : root.file-name;
+                        font-size: 16px;
+                        font-weight: 800;
+                        color: Palette.text;
+                        wrap: word-wrap;
+                    }
+                    if root.info != "" : Text { text: root.info; font-size: 12px; color: Palette.dim; }
+                }
+            }
+            if root.message != "" : Text {
+                text: root.message;
+                font-size: 13px;
+                color: root.mode == 2 ? Palette.bad : Palette.dim;
+                wrap: word-wrap;
+            }
+            if root.progress >= 0 : VerticalLayout {
+                spacing: 7px;
+                ProgressBar { value: root.progress; }
+                Text { text: root.progress-text; font-size: 11.5px; color: Palette.dim; }
+            }
+            if root.mode != 2 && !root.done : ActionBtn {
+                label: root.busy ? "Cancel download" : "Download";
+                clicked => { if (root.busy) { root.cancel(); } else { root.download(); } }
+            }
+            if root.done : ActionBtn { label: "Show in folder"; clicked => { root.open-folder(); } }
+            HorizontalLayout {
+                spacing: 10px;
+                GhostBtn { label: root.mode == 1 ? "Open the TVFS player" : "Open in browser"; enabled: root.link != ""; clicked => { root.open-browser(); } }
+                GhostBtn { label: "Copy link"; enabled: root.link != ""; clicked => { root.copy-link(); } }
+            }
+        }
+    }
+    if root.toast != "" : Rectangle {
+        // fades in (web: 0.22 s on overlays)
+        opacity: 0;
+        init => { self.opacity = 1; }
+        animate opacity { duration: Anim.overlay; }
+        x: (root.width - self.width) / 2;
+        y: root.height - 54px;
+        width: toast-t.preferred-width + 32px;
+        height: 32px;
+        border-radius: 16px;
+        background: #1a1a1ae6;
+        toast-t := Text { text: root.toast; color: #ffffff; font-size: 12px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+    }
+}
+
+// ── batch / share list (web batch landing page) ───────────────────────────
+
+export struct ListFile {
+    name: string,
+    size: string,
+    // 0 = idle, 1 = downloading, 2 = saved, 3 = failed
+    state: int,
+    pct: float,
+}
+
+component EmojiCopy inherits Rectangle {
+    in property <image> src;
+    in property <bool> done;
+    callback clicked();
+    width: 28px;
+    height: 27px;
+    border-radius: 6px;
+    background: ta.has-hover ? #ffffff14 : transparent;
+    animate background { duration: Anim.fast; }
+    Image {
+        width: 15px;
+        height: 15px;
+        source: root.done ? @image-url("../../../assets/img/emoji-check.png") : root.src;
+    }
+    ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+}
+
+// `.btn` / `.btn-primary` / `.btn-secondary`
+component BatchBtn inherits Rectangle {
+    in property <string> label;
+    in property <image> icon;
+    in property <bool> has-icon;
+    in property <bool> primary;
+    in property <bool> enabled: true;
+    callback clicked();
+    height: 47px;
+    width: row.preferred-width;
+    border-radius: 12px;
+    background: root.primary ? @linear-gradient(135deg, #6c5ce7 0%, #00b894 100%) : #ffffff0f;
+    border-width: root.primary ? 0px : 1px;
+    border-color: #ffffff1a;
+    opacity: root.enabled ? 1.0 : 0.6;
+    y: ta.has-hover && root.enabled ? -1px : 0px;
+    row := HorizontalLayout {
+        padding-left: 24px;
+        padding-right: 24px;
+        spacing: 6px;
+        alignment: center;
+        if root.has-icon : Rectangle {
+            width: 15px;
+            Image { source: root.icon; width: 15px; height: 15px; y: (parent.height - self.height) / 2; }
+        }
+        Text {
+            text: root.label;
+            color: root.primary ? #ffffff : #a29bfe;
+            font-size: 14.4px;
+            font-weight: 700;
+            vertical-alignment: center;
+        }
+    }
+    ta := TouchArea { enabled: root.enabled; mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+}
+
+export component ListWindow inherits Window {
+    default-font-family: "Inter";
+    // "TomasekValla Shared Files" (batch) or "TVFS Users Only" (protected share)
+    in property <string> heading-a: "TomasekValla";
+    in property <string> heading-b: " Shared Files";
+    in property <styled-text> heading-styled;
+    in property <string> subtitle;
+    in property <string> expire-note;
+    in property <[ListFile]> files;
+    in property <bool> show-zip: true;
+    in property <bool> show-styled: true;
+    in property <string> zip-label: "Download ZIP";
+    in property <bool> zip-busy;
+    in property <string> all-label: "Download All";
+    in property <bool> all-busy;
+    in property <string> note;
+    // copy feedback: row index (-1 = page buttons) and kind (0 link, 1 styled); -2 = none
+    in property <int> copied-row: -2;
+    in property <int> copied-kind;
+    in-out property <length> wheel-dy;
+    in-out property <bool> wheel-smooth;
+    callback open-file(int);
+    callback copy-file(int, int);
+    callback copy-page(int);
+    callback download-all();
+    callback download-zip();
+    title: root.heading-a + root.heading-b;
+    icon: @image-url("../../../assets/app-64.png");
+    background: #0f0c19;
+    min-width: 360px;
+    min-height: 320px;
+    preferred-width: 680px;
+    preferred-height: min(900px, content.preferred-height + 80px);
+
+    property <length> col-w: min(600px, root.width - 40px);
+    property <length> max-scroll: max(0px, content.preferred-height + 80px - root.height);
+    out property <bool> can-scroll: root.max-scroll > 0px;
+    property <length> scroll-target: 0px;
+    property <length> scroll-pos: clamp(root.scroll-target, 0px, root.max-scroll);
+    property <duration> scroll-anim: 0ms;
+    animate scroll-pos { duration: root.scroll-anim; easing: cubic-bezier(0.2, 0.7, 0.3, 1); }
+    public function autoscroll-by(dy: length) {
+        root.scroll-anim = 0ms;
+        root.scroll-target = clamp(clamp(root.scroll-target, 0px, root.max-scroll) + dy, 0px, root.max-scroll);
+    }
+
+    TouchArea {
+        scroll-event(e) => {
+            root.scroll-anim = root.wheel-smooth ? 230ms : 0ms;
+            root.scroll-target = clamp(clamp(root.scroll-target, 0px, root.max-scroll) + root.wheel-dy, 0px, root.max-scroll);
+            return accept;
+        }
+    }
+    content := VerticalLayout {
+        x: (root.width - root.col-w) / 2;
+        y: 40px - root.scroll-pos;
+        width: root.col-w;
+        spacing: 0px;
+        // h1: "<span gradient>TomasekValla</span> Shared Files"
+        HorizontalLayout {
+            padding-bottom: 8px;
+            alignment: start;
+            // the gradient span (#6c5ce7 -> #00b894), one colour per character from Rust (Slint has no gradient text)
+            StyledText {
+                text: root.heading-styled;
+                default-font-size: 22.4px;
+                default-color: #6c5ce7;
+            }
+            Text { text: root.heading-b; font-size: 22.4px; font-weight: 800; color: #ffffff; }
+        }
+        Text { text: root.subtitle; font-size: 12.8px; color: #8b8b9e; }
+        Rectangle { height: 24px; }
+        HorizontalLayout {
+            spacing: 12px;
+            alignment: start;
+            padding-bottom: 8px;
+            BatchBtn {
+                has-icon: true;
+                icon: root.copied-row == -1 && root.copied-kind == 0 ? @image-url("../../../assets/img/emoji-check.png") : @image-url("../../../assets/img/emoji-doc.png");
+                label: "Copy Link";
+                clicked => { root.copy-page(0); }
+            }
+            if root.show-styled : BatchBtn {
+                has-icon: true;
+                icon: root.copied-row == -1 && root.copied-kind == 1 ? @image-url("../../../assets/img/emoji-check.png") : @image-url("../../../assets/img/emoji-sparkles.png");
+                label: "Copy Styled";
+                clicked => { root.copy-page(1); }
+            }
+        }
+        Rectangle { height: 16px; }
+        VerticalLayout {
+            spacing: 8px;
+            for f[i] in root.files : Rectangle {
+                height: 47px;
+                border-radius: 12px;
+                background: #ffffff08;
+                border-width: 1px;
+                border-color: #ffffff0f;
+                // download progress of "Download All"
+                if f.state == 1 : Rectangle {
+                    x: 0px;
+                    width: parent.width * f.pct;
+                    border-radius: 12px;
+                    background: #55efc414;
+                }
+                HorizontalLayout {
+                    padding-left: 16px;
+                    padding-right: 16px;
+                    spacing: 8px;
+                    name-t := Text {
+                        horizontal-stretch: 1;
+                        text: f.name;
+                        color: #55efc4;
+                        font-size: 14.4px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        TouchArea {
+                            mouse-cursor: MouseCursor.pointer;
+                            clicked => { root.open-file(i); }
+                        }
+                    }
+                    if f.state == 2 : Image { width: 14px; height: 14px; y: (parent.height - 14px) / 2; source: @image-url("../../../assets/img/emoji-checkmark.png"); }
+                    if f.state == 3 : Image { width: 14px; height: 14px; y: (parent.height - 14px) / 2; source: @image-url("../../../assets/img/emoji-cross.png"); }
+                    Text { text: f.size; color: #8b8b9e; font-size: 12.8px; vertical-alignment: center; }
+                    EmojiCopy { y: 10px; src: @image-url("../../../assets/img/emoji-doc.png"); done: root.copied-row == i && root.copied-kind == 0; clicked => { root.copy-file(i, 0); } }
+                    if root.show-styled : EmojiCopy { y: 10px; src: @image-url("../../../assets/img/emoji-sparkles.png"); done: root.copied-row == i && root.copied-kind == 1; clicked => { root.copy-file(i, 1); } }
+                }
+            }
+        }
+        Rectangle { height: 24px; }
+        HorizontalLayout {
+            spacing: 12px;
+            alignment: start;
+            padding-bottom: 8px;
+            BatchBtn { primary: true; label: root.all-label; enabled: !root.all-busy; clicked => { root.download-all(); } }
+            if root.show-zip : BatchBtn {
+                has-icon: !root.zip-busy;
+                icon: @image-url("../../../assets/img/emoji-package.png");
+                label: root.zip-label;
+                enabled: !root.zip-busy;
+                clicked => { root.download-zip(); }
+            }
+        }
+        if root.note != "" : Text { text: root.note; color: #8b8b9e; font-size: 12px; wrap: word-wrap; }
+        Rectangle { height: 20px; }
+        Text { text: root.expire-note; color: #8b8b9e; font-size: 11.2px; horizontal-alignment: center; }
+    }
+}

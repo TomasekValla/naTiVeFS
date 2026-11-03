@@ -1,0 +1,641 @@
+// Text / Markdown reader window: the web readers (`generateTextReaderHtml` / `generateMdReaderHtml` in
+// files_backend/upload.js) rebuilt with their measured sizes and colours. Native extras: Find (Ctrl+F),
+// Copy all, remembered task ticks, Ctrl + wheel zoom.
+
+import "../../../assets/fonts/reader/Manrope-Regular.ttf";
+import "../../../assets/fonts/reader/Manrope-Bold.ttf";
+import "../../../assets/fonts/reader/Sora-Regular.ttf";
+import "../../../assets/fonts/reader/Sora-Bold.ttf";
+import "../../../assets/fonts/reader/SpaceGrotesk-Regular.ttf";
+import "../../../assets/fonts/reader/Outfit-Regular.ttf";
+import "../../../assets/fonts/reader/Outfit-Bold.ttf";
+import "../../../assets/fonts/reader/PlusJakartaSans-Regular.ttf";
+import "../../../assets/fonts/reader/PlusJakartaSans-Bold.ttf";
+import "../../../assets/fonts/reader/PlusJakartaSans-Italic.ttf";
+import "../../../assets/fonts/reader/Poppins-Regular.ttf";
+import "../../../assets/fonts/reader/Poppins-Bold.ttf";
+import "../../../assets/fonts/reader/Poppins-Italic.ttf";
+import "../../../assets/fonts/reader/Lora-Regular.ttf";
+import "../../../assets/fonts/reader/Lora-Bold.ttf";
+import "../../../assets/fonts/reader/Lora-Italic.ttf";
+import "../../../assets/fonts/reader/Merriweather-Regular.ttf";
+import "../../../assets/fonts/reader/Merriweather-Bold.ttf";
+import "../../../assets/fonts/reader/Merriweather-Italic.ttf";
+import "../../../assets/fonts/reader/PTSerif-Regular.ttf";
+import "../../../assets/fonts/reader/PTSerif-Bold.ttf";
+import "../../../assets/fonts/reader/PTSerif-Italic.ttf";
+import "../../../assets/fonts/reader/EBGaramond-Regular.ttf";
+import "../../../assets/fonts/reader/EBGaramond-Bold.ttf";
+import "../../../assets/fonts/reader/EBGaramond-Italic.ttf";
+import "../../../assets/fonts/reader/AtkinsonHyperlegible-Regular.ttf";
+import "../../../assets/fonts/reader/AtkinsonHyperlegible-Bold.ttf";
+import "../../../assets/fonts/reader/AtkinsonHyperlegible-Italic.ttf";
+import "../../../assets/fonts/reader/Lexend-Regular.ttf";
+import "../../../assets/fonts/reader/Lexend-Bold.ttf";
+import "../../../assets/fonts/reader/OpenDyslexic-Regular.otf";
+import "../../../assets/fonts/reader/OpenDyslexic-Bold.otf";
+import "../../../assets/fonts/reader/OpenDyslexic-Italic.otf";
+import "../../../assets/fonts/reader/JetBrainsMono-Bold.ttf";
+import "../../../assets/fonts/reader/JetBrainsMono-Italic.ttf";
+import "../../../assets/fonts/reader/SpaceMono-Regular.ttf";
+import "../../../assets/fonts/reader/SpaceMono-Bold.ttf";
+import "../../../assets/fonts/reader/SpaceMono-Italic.ttf";
+import "../../../assets/fonts/reader/Quicksand-Regular.ttf";
+import "../../../assets/fonts/reader/Quicksand-Bold.ttf";
+import "../../../assets/fonts/reader/NotoSansJP-Regular.ttf";
+import "../../../assets/fonts/reader/Inter-Italic.ttf";
+import { XMark, LocalBadge, Anim } from "common.slint";
+
+export struct ReaderRow {
+    cells: [styled-text],
+    header: bool,
+    even: bool,
+}
+
+// One block of the page. kind: 0 styled text, 1 heading, 2 code block, 3 rule, 4 table, 5 image, 6 plain text (TXT)
+export struct ReaderBlock {
+    kind: int,
+    text: styled-text,
+    // code block / TXT chunk
+    plain: string,
+    level: int,
+    font-size: length,
+    // collapsed margin above the block
+    gap: length,
+    indent: length,
+    marker: string,
+    // -1 = no checkbox, 0 = open, 1 = done
+    task: int,
+    task-index: int,
+    // inside a blockquote: first / last block of it get the quote's inner padding
+    quote: bool,
+    quote-first: bool,
+    quote-last: bool,
+    rows: [ReaderRow],
+    col-w: [length],
+    img: image,
+    has-img: bool,
+    img-w: length,
+    img-h: length,
+    alt: string,
+    // TXT search: selection of the current match inside this chunk (byte offsets, -1 = none)
+    sel-start: int,
+    sel-end: int,
+    // CSS line-height as a factor of the font size (0 = none): rows get its half-leading above and below
+    lh: float,
+    // code block with search matches: shown as styled text (coloured matches) instead of the selectable box
+    code-styled: bool,
+}
+
+global RP {
+    in-out property <bool> light;
+    out property <color> bg: light ? #fafafa : #111111;
+    out property <color> fg: light ? #1a1a1a : #e8e8e8;
+    out property <color> border: light ? #0000001a : #ffffff1a;
+    out property <color> accent: #2fffc4;
+    out property <color> accent2: #7c4dff;
+    out property <color> bar: light ? #fafafaeb : #111111eb;
+    out property <color> btn: light ? #0000000d : #ffffff0f;
+    out property <color> btn-border: light ? #0000001f : #ffffff1a;
+    out property <color> hover: light ? #00a886 : #2fffc4;
+    out property <color> hover-bg: light ? #00a8861a : #2fffc41f;
+    out property <color> pre: light ? #0000000a : #00000066;
+    out property <color> quote-bg: light ? #7c4dff0f : #7c4dff14;
+    out property <color> dim: light ? #1a1a1a80 : #ffffff4d;
+}
+
+// `.tb-btn`
+component TbBtn inherits Rectangle {
+    in property <string> ico;
+    in property <image> ico-img;
+    in property <bool> has-img;
+    // a small vector icon (11 x 11 view box) instead of a text glyph
+    in property <string> path;
+    in property <string> label;
+    in property <bool> compact;
+    in property <bool> active;
+    callback clicked();
+    property <bool> hot: ta.has-hover || root.active;
+    height: 26px;
+    width: row.preferred-width;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: root.hot ? RP.hover : RP.btn-border;
+    background: root.hot ? RP.hover-bg : RP.btn;
+    row := HorizontalLayout {
+        padding-left: root.compact ? 9px : 13px;
+        padding-right: root.compact ? 9px : 13px;
+        spacing: 6px;
+        alignment: center;
+        if root.has-img : Rectangle {
+            width: 11px;
+            Image { source: root.ico-img; width: 11px; height: 11px; y: (parent.height - self.height) / 2; }
+        }
+        if root.path != "" : Rectangle {
+            width: 11px;
+            Path {
+                y: (parent.height - 11px) / 2;
+                width: 11px;
+                height: 11px;
+                viewbox-width: 11;
+                viewbox-height: 11;
+                commands: root.path;
+                stroke: root.hot ? RP.hover : RP.fg;
+                stroke-width: 1.5px;
+            }
+        }
+        if !root.has-img && root.path == "" && root.ico != "" : Text {
+            text: root.ico;
+            font-size: root.compact ? 9.8px : 10.37px;
+            font-weight: 700;
+            color: root.hot ? RP.hover : RP.fg;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.label;
+            font-size: root.compact ? 10.88px : 11.52px;
+            font-weight: 700;
+            color: root.hot ? RP.hover : RP.fg;
+            vertical-alignment: center;
+        }
+    }
+    ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+}
+
+component Checkbox inherits Rectangle {
+    in property <bool> checked;
+    callback toggled();
+    width: 13px;
+    height: 13px;
+    border-radius: 3px;
+    border-width: 1px;
+    border-color: root.checked ? RP.accent : (ta.has-hover ? RP.hover : #8a8a8a);
+    animate border-color { duration: Anim.fast; }
+    background: root.checked ? RP.accent : transparent;
+    if root.checked : Path {
+        width: 9px;
+        height: 9px;
+        x: 2px;
+        y: 2px;
+        viewbox-width: 10;
+        viewbox-height: 10;
+        commands: "M 1.5 5.2 L 4 7.6 L 8.6 2.2";
+        stroke: #111111;
+        stroke-width: 1.8px;
+    }
+    ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.toggled(); } }
+}
+
+export component ReaderWindow inherits Window {
+    in property <string> file-name;
+    // a file on this computer ("Use TVFS tools locally"): Local badge, Download = Show in folder
+    in property <bool> local;
+    in property <[ReaderBlock]> blocks;
+    // "" = system font (the web's "Default"); otherwise a bundled family
+    in property <string> font-family;
+    in property <string> font-label: "Default";
+    in property <string> size-label: "(1rem)";
+    in property <length> base-size: 16px;
+    in-out property <bool> light <=> RP.light;
+    in property <bool> markdown;
+    // "Loading…" / an error, shown instead of the content
+    in property <string> status;
+    in property <bool> status-error;
+    // Find bar
+    in-out property <bool> find-open;
+    in-out property <string> find-text;
+    in property <string> find-info;
+    // scroll target for the current search match, set by the block that holds it
+    in property <int> current-block: -1;
+    in property <int> reveal-seq: 0;
+    // wheel / autoscroll from Rust (same scheme as the main window)
+    in-out property <length> wheel-dy;
+    in-out property <bool> wheel-smooth;
+    in property <bool> smooth-scroll: true;
+    in property <string> toast;
+    callback cycle-font();
+    callback cycle-size();
+    callback toggle-theme();
+    callback download();
+    callback copy-all();
+    callback find-edited(string);
+    callback find-step(int);
+    callback find-closed();
+    callback task-toggled(int);
+    callback link-clicked(string);
+    callback zoom-step(int);
+
+    title: root.file-name + (root.markdown ? " — TVFS MD Reader" : " — TVFS Text Reader");
+    icon: @image-url("../../../assets/app-64.png");
+    background: RP.bg;
+    min-width: 360px;
+    min-height: 300px;
+    preferred-width: 980px;
+    preferred-height: 1000px;
+
+    property <bool> narrow: root.width <= 600px;
+    property <length> pad-x: root.narrow ? 16px : (root.markdown ? 24px : 20px);
+    property <length> pad-y: root.narrow ? 24px : 40px;
+    property <length> col-w: min(root.markdown ? 860px : 820px, root.width) - 2 * root.pad-x;
+    property <length> bar-h: root.narrow ? 69px : 58px;
+    property <length> find-h: root.find-open ? 44px : 0px;
+
+    // ── scrolling ──────────────────────────────────────────────────────
+    property <length> view-h: root.height - root.bar-h - root.find-h;
+    property <length> content-h: body.preferred-height + 2 * root.pad-y;
+    property <length> max-scroll: max(0px, root.content-h - root.view-h);
+    out property <bool> can-scroll: root.max-scroll > 0px;
+    property <length> scroll-target: 0px;
+    property <duration> scroll-anim: 0ms;
+    property <length> scroll-pos: clamp(root.scroll-target, 0px, root.max-scroll);
+    animate scroll-pos { duration: root.scroll-anim; easing: cubic-bezier(0.2, 0.7, 0.3, 1); }
+    public function scroll-by(dy: length, smooth: bool) {
+        root.scroll-anim = smooth && root.smooth-scroll ? 230ms : 0ms;
+        root.scroll-target = clamp(clamp(root.scroll-target, 0px, root.max-scroll) + dy, 0px, root.max-scroll);
+    }
+    public function autoscroll-by(dy: length) { root.scroll-by(dy, false); }
+    public function scroll-to(y: length, smooth: bool) {
+        root.scroll-anim = smooth && root.smooth-scroll ? 320ms : 0ms;
+        root.scroll-target = clamp(y, 0px, root.max-scroll);
+    }
+    // bring a block into view (search): `y` is its position inside the column
+    function reveal(y: length, h: length) {
+        let top = y + root.pad-y;
+        if (top < root.scroll-pos + 20px || top + h > root.scroll-pos + root.view-h - 20px) {
+            root.scroll-to(top - root.view-h / 3, true);
+        }
+    }
+    public function focus-find() { find-input.focus(); find-input.select-all(); }
+    public function focus-page() { keys.focus(); }
+
+    keys := FocusScope {
+        key-pressed(e) => {
+            if (e.modifiers.control && (e.text == "f" || e.text == "F")) { root.find-open = true; root.focus-find(); return accept; }
+            if (e.text == Key.Escape && root.find-open) { root.find-open = false; root.find-closed(); return accept; }
+            if (e.text == Key.F3) { root.find-step(e.modifiers.shift ? -1 : 1); return accept; }
+            if (e.modifiers.control && (e.text == "=" || e.text == "+")) { root.zoom-step(1); return accept; }
+            if (e.modifiers.control && (e.text == "-" || e.text == "_")) { root.zoom-step(-1); return accept; }
+            // "é" = the 0 key on a Czech keyboard (browsers go by the physical key)
+            if (e.modifiers.control && (e.text == "0" || e.text == "é")) { root.zoom-step(0); return accept; }
+            if (e.text == Key.PageDown || (e.text == " " && !e.modifiers.shift)) { root.scroll-by(root.view-h * 0.85, true); return accept; }
+            if (e.text == Key.PageUp || (e.text == " " && e.modifiers.shift)) { root.scroll-by(-root.view-h * 0.85, true); return accept; }
+            if (e.text == Key.DownArrow) { root.scroll-by(80px, true); return accept; }
+            if (e.text == Key.UpArrow) { root.scroll-by(-80px, true); return accept; }
+            if (e.text == Key.Home) { root.scroll-to(0px, true); return accept; }
+            if (e.text == Key.End) { root.scroll-to(root.max-scroll, true); return accept; }
+            return reject;
+        }
+
+        // ── page ───────────────────────────────────────────────────────
+        Rectangle {
+            y: root.bar-h + root.find-h;
+            height: root.view-h;
+            clip: true;
+            TouchArea {
+                scroll-event(e) => {
+                    root.scroll-by(root.wheel-dy, root.wheel-smooth);
+                    return accept;
+                }
+            }
+            if root.status != "" : Text {
+                y: 80px;
+                width: parent.width;
+                horizontal-alignment: center;
+                text: root.status;
+                font-size: 14.4px;
+                color: root.status-error ? #ff6b6b : RP.dim;
+                wrap: word-wrap;
+            }
+            body := VerticalLayout {
+                visible: root.status == "";
+                x: (parent.width - root.col-w) / 2;
+                y: root.pad-y - root.scroll-pos;
+                width: root.col-w;
+                // a short document keeps its spacing (without this the blocks share the window's height)
+                height: self.preferred-height;
+                for b[i] in root.blocks : brow := VerticalLayout {
+                    padding-top: b.quote && !b.quote-first ? 0px : b.gap;
+                    // the quote box spans the gap between two of its blocks too
+                    blk := Rectangle {
+                        // the quote's .4em padding plus the .8em margin of the paragraph inside it
+                        property <length> q-pad: b.font-size * 1.2;
+                        // half-leading: what the web's line-height adds above and below a line
+                        nat := Text { visible: false; text: "Ag"; font-size: b.font-size; font-family: root.font-family; }
+                        property <length> lead: b.lh > 0 ? max(0px, (b.lh * b.font-size - nat.preferred-height) / 2) : 0px;
+                        // the block holding the current search match scrolls into view (created anew on every jump)
+                        if i == root.current-block : Rectangle {
+                            width: 0px;
+                            height: 0px;
+                            init => { root.reveal(blk.y + brow.y, blk.height); }
+                        }
+                        if b.quote : Rectangle {
+                            y: b.quote-first ? 0px : -b.gap;
+                            height: parent.height + (b.quote-first ? 0px : b.gap);
+                            background: RP.quote-bg;
+                            border-top-right-radius: b.quote-first ? 8px : 0px;
+                            border-bottom-right-radius: b.quote-last ? 8px : 0px;
+                            Rectangle { x: 0px; width: 3px; background: RP.accent2; }
+                        }
+                        HorizontalLayout {
+                            padding-left: b.indent + (b.quote ? 16px : 0px);
+                            padding-right: b.quote ? 16px : 0px;
+                            padding-top: (b.quote && b.quote-first ? parent.q-pad : 0px) + parent.lead;
+                            padding-bottom: (b.quote && b.quote-last ? parent.q-pad : 0px) + parent.lead;
+                            opacity: b.quote ? 0.85 : 1.0;
+                            // list marker (outside the text, like the web's `list-style-position: outside`)
+                            if b.marker != "" : Rectangle {
+                                width: 0px;
+                                Text {
+                                    x: -self.width - 7px;
+                                    y: 0px;
+                                    text: b.marker;
+                                    font-size: b.font-size;
+                                    font-family: root.font-family;
+                                    color: RP.fg;
+                                }
+                            }
+                            if b.task >= 0 : HorizontalLayout {
+                                horizontal-stretch: 0;
+                                padding-right: 6px;
+                                padding-top: (b.font-size * 1.3 - 13px) / 2;
+                                alignment: start;
+                                VerticalLayout {
+                                    alignment: start;
+                                    Checkbox { checked: b.task == 1; toggled => { root.task-toggled(b.task-index); } }
+                                }
+                            }
+                            if b.kind == 0 || b.kind == 1 : VerticalLayout {
+                                horizontal-stretch: 1;
+                                StyledText {
+                                    text: b.text;
+                                    default-font-size: b.font-size;
+                                    default-font-family: root.font-family;
+                                    default-color: RP.fg;
+                                    link-color: RP.accent;
+                                    link-clicked(url) => { root.link-clicked(url); }
+                                }
+                                // h1 / h2: padding-bottom .3em / .2em and a 1px border-bottom
+                                if b.kind == 1 && b.level <= 2 : Rectangle { height: b.font-size * (b.level == 1 ? 0.3 : 0.2); }
+                                if b.kind == 1 && b.level <= 2 : Rectangle { height: 1px; background: RP.border; }
+                            }
+                            if b.kind == 2 : Rectangle {
+                                background: RP.pre;
+                                border-radius: 10px;
+                                border-width: 1px;
+                                border-color: RP.border;
+                                horizontal-stretch: 1;
+                                height: code-measure.preferred-height + 36px;
+                                code-measure := Text {
+                                    x: 20px;
+                                    width: parent.width - 40px;
+                                    visible: false;
+                                    text: b.plain;
+                                    wrap: word-wrap;
+                                    font-family: "JetBrains Mono";
+                                    font-size: b.font-size;
+                                }
+                                if b.code-styled : StyledText {
+                                    x: 20px;
+                                    y: 18px;
+                                    width: parent.width - 40px;
+                                    text: b.text;
+                                    default-font-family: "JetBrains Mono";
+                                    default-font-size: b.font-size;
+                                    default-color: RP.fg;
+                                }
+                                code := TextInput {
+                                    visible: !b.code-styled;
+                                    x: 20px;
+                                    y: 18px;
+                                    width: parent.width - 40px;
+                                    height: code-measure.preferred-height;
+                                    text: b.plain;
+                                    read-only: true;
+                                    single-line: false;
+                                    wrap: word-wrap;
+                                    font-family: "JetBrains Mono";
+                                    font-size: b.font-size;
+                                    color: RP.fg;
+                                    selection-background-color: #2fffc455;
+                                    selection-foreground-color: RP.fg;
+                                }
+                            }
+                            if b.kind == 3 : Rectangle {
+                                height: 1px;
+                                background: RP.border;
+                            }
+                            if b.kind == 4 : VerticalLayout {
+                                for row in b.rows : HorizontalLayout {
+                                    alignment: start;
+                                    for cell[c] in row.cells : Rectangle {
+                                        width: b.col-w[c];
+                                        background: row.header ? #2fffc414 : (row.even ? #ffffff08 : transparent);
+                                        border-width: 1px;
+                                        border-color: RP.border;
+                                        HorizontalLayout {
+                                            padding-left: 14px;
+                                            padding-right: 14px;
+                                            padding-top: 8px + max(0px, (1.75 * b.font-size - nat.preferred-height) / 2);
+                                            padding-bottom: 8px + max(0px, (1.75 * b.font-size - nat.preferred-height) / 2);
+                                            StyledText {
+                                                text: cell;
+                                                default-font-size: b.font-size;
+                                                default-font-family: root.font-family;
+                                                default-color: row.header ? RP.accent : RP.fg;
+                                                link-color: RP.accent;
+                                                link-clicked(url) => { root.link-clicked(url); }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if b.kind == 5 : HorizontalLayout {
+                                alignment: start;
+                                if b.has-img : Rectangle {
+                                    width: min(b.img-w, root.col-w - b.indent);
+                                    height: self.width * (b.img-h / max(1px, b.img-w));
+                                    border-radius: 8px;
+                                    clip: true;
+                                    Image { source: b.img; width: parent.width; height: parent.height; image-fit: fill; }
+                                }
+                                if !b.has-img : Text {
+                                    text: b.alt == "" ? "image" : b.alt;
+                                    font-size: b.font-size;
+                                    font-italic: true;
+                                    color: RP.dim;
+                                }
+                            }
+                            if b.kind == 6 : Rectangle {
+                              horizontal-stretch: 1;
+                              min-height: txt-measure.preferred-height;
+                              txt-measure := Text {
+                                width: parent.width;
+                                visible: false;
+                                text: b.plain;
+                                wrap: word-wrap;
+                                font-family: root.font-family;
+                                font-size: b.font-size;
+                              }
+                              txt := TextInput {
+                                y: 0px;
+                                width: parent.width;
+                                height: txt-measure.preferred-height;
+                                text: b.plain;
+                                read-only: true;
+                                single-line: false;
+                                wrap: word-wrap;
+                                font-family: root.font-family;
+                                font-size: b.font-size;
+                                color: RP.fg;
+                                selection-background-color: #2fffc466;
+                                selection-foreground-color: RP.fg;
+                                changed sel => { if (b.sel-start >= 0) { self.set-selection-offsets(b.sel-start, b.sel-end); } else { self.clear-selection(); } }
+                                property <int> sel: b.sel-start * 100000 + b.sel-end;
+                              }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Find bar (native extra) ────────────────────────────────────
+        Rectangle {
+            visible: root.find-open;
+            y: root.bar-h;
+            height: root.find-h;
+            background: RP.bar;
+            Rectangle { y: parent.height - 1px; height: 1px; background: RP.border; }
+            HorizontalLayout {
+                padding-left: root.narrow ? 14px : 24px;
+                padding-right: root.narrow ? 14px : 24px;
+                padding-top: 8px;
+                padding-bottom: 8px;
+                spacing: 8px;
+                Rectangle {
+                    horizontal-stretch: 1;
+                    max-width: 420px;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: find-input.has-focus ? RP.hover : RP.btn-border;
+                    background: RP.btn;
+                    find-input := TextInput {
+                        x: 10px;
+                        width: parent.width - 20px;
+                        height: parent.height;
+                        vertical-alignment: center;
+                        text <=> root.find-text;
+                        font-size: 13px;
+                        color: RP.fg;
+                        edited => { root.find-edited(self.text); }
+                        accepted => { root.find-step(1); }
+                        key-pressed(e) => {
+                            if (e.text == Key.Escape) { root.find-open = false; root.find-closed(); root.focus-page(); return accept; }
+                            if (e.text == Key.Return && e.modifiers.shift) { root.find-step(-1); return accept; }
+                            return reject;
+                        }
+                    }
+                    Text {
+                        x: 10px;
+                        height: parent.height;
+                        vertical-alignment: center;
+                        visible: root.find-text == "";
+                        text: "Find in text…";
+                        font-size: 13px;
+                        color: RP.dim;
+                    }
+                }
+                Text { text: root.find-info; font-size: 12px; color: RP.dim; vertical-alignment: center; min-width: 70px; }
+                TbBtn { y: 1px; path: "M 5.5 10 L 5.5 1.5 M 2 5 L 5.5 1.5 L 9 5"; label: "Prev"; compact: true; clicked => { root.find-step(-1); } }
+                TbBtn { y: 1px; path: "M 5.5 1 L 5.5 9.5 M 2 6 L 5.5 9.5 L 9 6"; label: "Next"; compact: true; clicked => { root.find-step(1); } }
+                Rectangle {
+                    width: 26px;
+                    XMark { x: 8px; y: (parent.height - self.height) / 2; size: 10px; color: close-ta.has-hover ? RP.hover : RP.fg; }
+                    close-ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.find-open = false; root.find-closed(); root.focus-page(); } }
+                }
+                Rectangle { horizontal-stretch: 0.0001; }
+            }
+        }
+
+        // ── toolbar (`.toolbar`) ───────────────────────────────────────
+        Rectangle {
+            y: 0px;
+            height: root.bar-h;
+            background: RP.bar;
+            Rectangle { y: parent.height - 1px; height: 1px; background: RP.border; }
+            TouchArea { }
+            if !root.narrow : HorizontalLayout {
+                padding-left: 24px;
+                padding-right: 24px;
+                spacing: 8px;
+                Text {
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                    text: root.file-name;
+                    font-family: "JetBrains Mono";
+                    font-size: 12.8px;
+                    font-weight: 700;
+                    color: RP.accent;
+                    overflow: elide;
+                }
+                if root.local : VerticalLayout { alignment: center; LocalBadge { } }
+                controls := HorizontalLayout {
+                    padding-top: 16px;
+                    padding-bottom: 16px;
+                    spacing: 8px;
+                    TbBtn { ico: "T"; label: root.font-label; clicked => { root.cycle-font(); } }
+                    TbBtn { ico: "Aa"; label: root.size-label; clicked => { root.cycle-size(); } }
+                    TbBtn { has-img: true; ico-img: root.light ? @image-url("../../../assets/img/emoji-moon.png") : @image-url("../../../assets/img/emoji-sun.png"); label: root.light ? "Dark" : "Light"; clicked => { root.toggle-theme(); } }
+                    TbBtn { path: "M 5.5 1 L 5.5 8.5 M 2.2 5.4 L 5.5 8.7 L 8.8 5.4 M 1.5 10.2 L 9.5 10.2"; label: root.local ? "Show in folder" : "Download"; clicked => { root.download(); } }
+                    TbBtn { path: "M 4.6 1.2 A 3.4 3.4 0 1 1 4.59 1.2 M 7.1 7.1 L 10 10"; label: "Find"; active: root.find-open; clicked => { root.find-open = !root.find-open; if (root.find-open) { root.focus-find(); } else { root.find-closed(); root.focus-page(); } } }
+                    TbBtn { has-img: true; ico-img: @image-url("../../../assets/img/emoji-doc.png"); label: "Copy all"; clicked => { root.copy-all(); } }
+                }
+            }
+            if root.narrow : VerticalLayout {
+                HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 14px;
+                    padding-top: 9px;
+                    Text {
+                        text: root.file-name;
+                        font-family: "JetBrains Mono";
+                        font-size: 12.8px;
+                        font-weight: 700;
+                        color: RP.accent;
+                        overflow: elide;
+                    }
+                    if root.local : VerticalLayout { alignment: center; LocalBadge { } }
+                }
+                HorizontalLayout {
+                    padding: 9px;
+                    padding-left: 14px;
+                    padding-right: 14px;
+                    spacing: 6px;
+                    alignment: center;
+                    TbBtn { compact: true; ico: "T"; label: root.font-label; clicked => { root.cycle-font(); } }
+                    TbBtn { compact: true; ico: "Aa"; label: root.size-label; clicked => { root.cycle-size(); } }
+                    TbBtn { compact: true; has-img: true; ico-img: root.light ? @image-url("../../../assets/img/emoji-moon.png") : @image-url("../../../assets/img/emoji-sun.png"); label: root.light ? "Dark" : "Light"; clicked => { root.toggle-theme(); } }
+                    TbBtn { compact: true; path: "M 5.5 1 L 5.5 8.5 M 2.2 5.4 L 5.5 8.7 L 8.8 5.4 M 1.5 10.2 L 9.5 10.2"; label: root.local ? "Folder" : "Download"; clicked => { root.download(); } }
+                    TbBtn { compact: true; path: "M 4.6 1.2 A 3.4 3.4 0 1 1 4.59 1.2 M 7.1 7.1 L 10 10"; label: ""; active: root.find-open; clicked => { root.find-open = !root.find-open; if (root.find-open) { root.focus-find(); } else { root.find-closed(); root.focus-page(); } } }
+                }
+            }
+        }
+
+        // short confirmation ("Copied")
+        if root.toast != "" : Rectangle {
+            // fades in (web: 0.22 s on overlays)
+            opacity: 0;
+            init => { self.opacity = 1; }
+            animate opacity { duration: Anim.overlay; }
+            x: (root.width - self.width) / 2;
+            y: root.height - 64px;
+            width: toast-t.preferred-width + 32px;
+            height: 34px;
+            border-radius: 17px;
+            background: RP.light ? #1a1a1ae6 : #2a2a2ae6;
+            toast-t := Text { text: root.toast; color: #ffffff; font-size: 12.5px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+        }
+    }
+
+    init => { keys.focus(); }
+}

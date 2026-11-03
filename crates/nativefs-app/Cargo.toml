@@ -1,0 +1,59 @@
+[package]
+name = "nativefs-app"
+description = "naTiVeFS desktop app (Slint UI)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+build = "build.rs"
+
+# The executable is naTiVeFS(.exe); packages for Linux/macOS rename it to `nativefs`.
+[[bin]]
+name = "naTiVeFS"
+path = "src/main.rs"
+
+[dependencies]
+# unstable-winit-030: raw winit events for wheel / middle-button autoscroll and the monitor refresh rate
+slint = { version = "1", features = ["unstable-winit-030"] }
+tvfs-core.workspace = true
+nativefs-audio = { path = "../nativefs-audio" }
+nativefs-ipc.workspace = true
+tokio.workspace = true
+# thumbnails: the server sends AVIF (WebP as fallback); image previews may be PNG/JPEG/WebP/GIF
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "ico"] }
+avif-decode = { version = "3", default-features = false }
+arboard = { version = "3", default-features = false, features = ["image-data"] }
+# native "open file / folder" dialogs (xdg-desktop-portal on Linux, no GTK)
+rfd = "0.17"
+opener = "0.8"
+# libmpv is loaded at runtime (video player)
+libloading = "0.8"
+# subtitle / audio language defaults from the system
+sys-locale = "0.3"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+serde.workspace = true
+serde_json.workspace = true
+url.workspace = true
+tokio-util = "0.7"
+# the Downloads folder for "Save as"
+directories = "6"
+opus = "0.3"
+ogg = "0.9"
+flacenc = "0.4"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = { version = "0.3", features = ["blocking"] }
+# media keys / the desktop's media controls (MPRIS over D-Bus)
+mpris-server = "0.9"
+
+# camera / microphone capture and MP4 encoding (Media Foundation)
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Media_MediaFoundation", "Win32_System_Com", "Win32_UI_WindowsAndMessaging", "Win32_System_WinRT", "Win32_System_Registry", "Win32_UI_Shell", "Win32_Storage_FileSystem", "Foundation", "Media"] }
+
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+tray-icon = "0.21"
+
+
+[build-dependencies]
+slint-build = "1"
+serde_json.workspace = true

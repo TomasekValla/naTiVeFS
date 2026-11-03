@@ -1,0 +1,10 @@
+# Text files are LF everywhere (the kit started with LF; Windows tools tend to write CRLF)
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.icns binary
+*.ttf binary
+*.otf binary
+*.avif binary
+*.webp binary
+*.zip binary

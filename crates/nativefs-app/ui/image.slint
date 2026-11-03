@@ -1,0 +1,192 @@
+// Image viewer window (no web counterpart: the web shows images in the browser). Fit to the window,
+// wheel zooms at the cursor, drag pans, double-click toggles fit / 100 %; animated GIF / WebP frames come
+// from Rust (a timer that only runs while the window is visible).
+
+import { Palette, LocalBadge, Anim } from "common.slint";
+
+component BarBtn inherits Rectangle {
+    in property <string> label;
+    in property <bool> active;
+    callback clicked();
+    height: 30px;
+    width: t.preferred-width + 24px;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: ta.has-hover || root.active ? Palette.good : #ffffff24;
+    animate border-color { duration: Anim.fast; }
+    background: ta.has-hover || root.active ? #2fffc41f : #ffffff0f;
+    animate background { duration: Anim.fast; }
+    t := Text {
+        x: 12px;
+        y: (parent.height - self.height) / 2;
+        text: root.label;
+        color: ta.has-hover || root.active ? Palette.good : #ffffff;
+        animate color { duration: Anim.fast; }
+        font-size: 12px;
+        font-weight: 700;
+    }
+    ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+}
+
+export component ImageWindow inherits Window {
+    default-font-family: "Inter";
+    in property <string> file-name;
+    // a file on this computer ("Use TVFS tools locally"): Local badge, no link, Download = Show in folder
+    in property <bool> local;
+    in property <string> info;
+    in property <image> frame;
+    in property <length> img-w: 0px;
+    in property <length> img-h: 0px;
+    in property <string> status: "Loading…";
+    in property <bool> status-error;
+    in property <string> toast;
+    in-out property <bool> fullscreen-on;
+    callback download();
+    callback copy-link();
+    callback open-browser();
+    callback toggle-fullscreen();
+    title: root.file-name + " — naTiVeFS";
+    icon: @image-url("../../../assets/app-64.png");
+    background: #0b0b0f;
+    min-width: 360px;
+    min-height: 280px;
+    preferred-width: 1100px;
+    preferred-height: 800px;
+
+    property <length> bar-h: 52px;
+    // 0 = fit (images smaller than the window stay at 100 %, like a browser)
+    in-out property <float> zoom: 0;
+    in-out property <length> pan-x: 0px;
+    in-out property <length> pan-y: 0px;
+    property <float> fit: root.img-w > 0px ? min(1, min(root.width / root.img-w, (root.height - root.bar-h) / root.img-h)) : 1;
+    property <float> scale: root.zoom > 0 ? root.zoom : root.fit;
+    property <length> shown-w: root.img-w * root.scale;
+    property <length> shown-h: root.img-h * root.scale;
+    property <length> view-h: root.height - root.bar-h;
+    // where the image sits: centred, plus the pan offset (kept so the image cannot be dragged away)
+    property <length> max-pan-x: max(0px, (root.shown-w - root.width) / 2);
+    property <length> max-pan-y: max(0px, (root.shown-h - root.view-h) / 2);
+    property <length> ox: (root.width - root.shown-w) / 2 + clamp(root.pan-x, -root.max-pan-x, root.max-pan-x);
+    property <length> oy: root.bar-h + (root.view-h - root.shown-h) / 2 + clamp(root.pan-y, -root.max-pan-y, root.max-pan-y);
+    out property <string> zoom-text: round(root.scale * 100) + " %";
+
+    public function zoom-at(factor: float, px: length, py: length) {
+        let old = root.scale;
+        let new = clamp(old * factor, 0.02, 40);
+        // keep the image point under the cursor where it is
+        let cx = root.width / 2 + clamp(root.pan-x, -root.max-pan-x, root.max-pan-x);
+        let cy = root.bar-h + root.view-h / 2 + clamp(root.pan-y, -root.max-pan-y, root.max-pan-y);
+        let nx = px - (px - cx) * new / old;
+        let ny = py - (py - cy) * new / old;
+        root.zoom = new;
+        root.pan-x = nx - root.width / 2;
+        root.pan-y = ny - root.bar-h - root.view-h / 2;
+    }
+    public function fit-view() { root.zoom = 0; root.pan-x = 0px; root.pan-y = 0px; }
+    public function actual-size() { root.zoom = 1; root.pan-x = 0px; root.pan-y = 0px; }
+
+    keys := FocusScope {
+        key-pressed(e) => {
+            if (e.text == "+" || e.text == "=") { root.zoom-at(1.25, root.width / 2, root.bar-h + root.view-h / 2); return accept; }
+            if (e.text == "-" || e.text == "_") { root.zoom-at(0.8, root.width / 2, root.bar-h + root.view-h / 2); return accept; }
+            if (e.text == "0") { root.fit-view(); return accept; }
+            if (e.text == "1") { root.actual-size(); return accept; }
+            if (e.text == "f" || e.text == "F" || e.text == Key.F11) { root.toggle-fullscreen(); return accept; }
+            if (e.text == Key.Escape && root.fullscreen-on) { root.toggle-fullscreen(); return accept; }
+            return reject;
+        }
+        drag := TouchArea {
+            property <length> start-x;
+            property <length> start-y;
+            property <length> start-pan-x;
+            property <length> start-pan-y;
+            mouse-cursor: self.pressed ? MouseCursor.grabbing : (root.max-pan-x > 0px || root.max-pan-y > 0px ? MouseCursor.grab : MouseCursor.default);
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                    self.start-x = self.mouse-x;
+                    self.start-y = self.mouse-y;
+                    self.start-pan-x = clamp(root.pan-x, -root.max-pan-x, root.max-pan-x);
+                    self.start-pan-y = clamp(root.pan-y, -root.max-pan-y, root.max-pan-y);
+                }
+            }
+            moved => {
+                root.pan-x = clamp(self.start-pan-x + self.mouse-x - self.start-x, -root.max-pan-x, root.max-pan-x);
+                root.pan-y = clamp(self.start-pan-y + self.mouse-y - self.start-y, -root.max-pan-y, root.max-pan-y);
+            }
+            double-clicked => {
+                if (root.zoom > 0 && abs(root.zoom - root.fit) > 0.001) { root.fit-view(); } else { root.zoom-at(1 / root.scale, self.mouse-x, self.mouse-y); }
+            }
+            scroll-event(e) => {
+                if (e.delta-y > 0) { root.zoom-at(1.15, self.mouse-x, self.mouse-y); }
+                if (e.delta-y < 0) { root.zoom-at(1 / 1.15, self.mouse-x, self.mouse-y); }
+                return accept;
+            }
+        }
+        // checkerboard behind transparent images would cost a texture; the web shows the plain page colour too
+        if root.img-w > 0px : Image {
+            x: root.ox;
+            y: root.oy;
+            width: root.shown-w;
+            height: root.shown-h;
+            source: root.frame;
+            image-fit: fill;
+            // pixel-exact when zoomed in a lot
+            image-rendering: root.scale >= 3 ? pixelated : smooth;
+        }
+        if root.status != "" : Text {
+            y: root.bar-h + 80px;
+            width: root.width;
+            horizontal-alignment: center;
+            text: root.status;
+            color: root.status-error ? #ff6b6b : #ffffff80;
+            font-size: 14px;
+            wrap: word-wrap;
+        }
+        // top bar
+        if !root.fullscreen-on : Rectangle {
+            y: 0px;
+            height: root.bar-h;
+            background: #14141ce6;
+            Rectangle { y: parent.height - 1px; height: 1px; background: #ffffff1a; }
+            TouchArea { }
+            HorizontalLayout {
+                padding-left: 18px;
+                padding-right: 14px;
+                spacing: 8px;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    Text { text: root.file-name; color: #ffffff; font-size: 13px; font-weight: 700; overflow: elide; }
+                    if root.info != "" : Text { text: root.info; color: #ffffff80; font-size: 11px; overflow: elide; }
+                }
+                if root.local : VerticalLayout { alignment: center; LocalBadge { } }
+                VerticalLayout {
+                    alignment: center;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text { text: root.zoom-text; color: #ffffffb3; font-size: 12px; vertical-alignment: center; min-width: 48px; horizontal-alignment: right; }
+                        BarBtn { label: "Fit"; active: root.zoom == 0; clicked => { root.fit-view(); } }
+                        BarBtn { label: "100 %"; active: root.zoom == 1; clicked => { root.actual-size(); } }
+                        BarBtn { label: "Fullscreen"; clicked => { root.toggle-fullscreen(); } }
+                        BarBtn { label: root.local ? "Show in folder" : "Download"; clicked => { root.download(); } }
+                        if !root.local : HorizontalLayout { BarBtn { label: "Copy link"; clicked => { root.copy-link(); } } }
+                    }
+                }
+            }
+        }
+        if root.toast != "" : Rectangle {
+            // fades in (web: 0.22 s on overlays)
+            opacity: 0;
+            init => { self.opacity = 1; }
+            animate opacity { duration: Anim.overlay; }
+            x: (root.width - self.width) / 2;
+            y: root.height - 64px;
+            width: toast-t.preferred-width + 32px;
+            height: 34px;
+            border-radius: 17px;
+            background: #2a2a2ae6;
+            toast-t := Text { text: root.toast; color: #ffffff; font-size: 12.5px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+        }
+    }
+    init => { keys.focus(); }
+}

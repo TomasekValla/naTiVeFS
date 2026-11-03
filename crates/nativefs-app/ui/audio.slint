@@ -1,0 +1,2582 @@
+// Audio player window: the TVFS web audio player (files_backend/audioPlayerClient, 2026-10-31) rebuilt
+// 1:1 (sizes and colours measured from the web page, docs/ui-reference/audio-player/), plus the native
+// output part: device, format and the bit-perfect indicator.
+
+import { Palette, LocalBadge } from "common.slint";
+
+export struct OutputDevice {
+    name: string,
+    note: string,
+    selected: bool,
+}
+
+export struct BufferedRange {
+    start: float,
+    end: float,
+}
+
+// web: `transition: transform .45s var(--spring), color .15s, border-color .15s, background .15s`
+export global Motion {
+    out property <duration> fast: 150ms;
+    out property <duration> spring: 450ms;
+    out property <duration> press: 70ms;
+}
+
+component Icon inherits Image {
+    in property <brush> tint;
+    colorize: root.tint;
+    image-rendering: smooth;
+}
+
+// .icon-btn (34 px) / .icon-btn.small (30 px) / .ctrl-btn (46 px) / .ctrl-btn.primary (62 px)
+component RoundBtn inherits Rectangle {
+    in property <image> icon;
+    in property <length> size: 34px;
+    in property <length> icon-size: 17px;
+    in property <bool> primary;
+    // .ctrl-btn: white icon; .icon-btn: secondary text colour
+    in property <bool> ctrl;
+    in property <bool> off;
+    in property <bool> on;
+    in property <bool> muted;
+    in property <bool> enabled: true;
+    in property <string> tip;
+    callback clicked();
+    width: root.size;
+    height: root.size;
+    opacity: root.off ? 0.45 : (root.enabled ? 1 : 0.4);
+    // press squish (web: transform scale(.9) with a spring). Sizes are recomputed instead of
+    // `transform-scale`, which renders the button as a scaled bitmap (blurry, heavy text and icons).
+    property <float> s: ta.pressed && root.enabled ? 0.9 : 1;
+    animate s { duration: ta.pressed ? Motion.press : Motion.spring; easing: cubic-bezier(0.34, 1.7, 0.5, 1); }
+    shape := Rectangle {
+        width: root.size * root.s;
+        height: root.size * root.s;
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        border-radius: self.width / 2;
+        drop-shadow-blur: root.primary ? 30px : (root.on ? 14px : 0px);
+        drop-shadow-offset-y: root.primary ? 10px : 0px;
+        drop-shadow-color: root.primary ? #8455ff99 : (root.on ? #2fffc48c : transparent);
+        background: root.primary ? Palette.brand
+            : root.on ? #2fffc4
+            : (ta.has-hover && root.ctrl && root.enabled) ? #2fffc41a : #1c202a61;
+        border-width: root.primary ? 0px : 1px;
+        border-color: root.on ? #2fffc4
+            : root.muted ? #b083ff
+            : (ta.has-hover && root.enabled) ? #2fffc4 : #ffffff24;
+        animate border-color, background { duration: Motion.fast; easing: ease; }
+        Rectangle {
+            // .ctrl-btn.primary:hover { filter: brightness(1.12) }
+            visible: root.primary;
+            border-radius: parent.width / 2;
+            background: ta.has-hover ? #ffffff1f : #ffffff00;
+            animate background { duration: Motion.fast; }
+        }
+    }
+    Icon {
+        width: root.icon-size * root.s;
+        height: root.icon-size * root.s;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        source: root.icon;
+        tint: root.primary || root.on ? #04101c
+            : root.muted ? #b083ff
+            : (ta.has-hover && root.enabled) ? #2fffc4
+            : root.ctrl ? #ffffff : #9aa6bd;
+        animate tint { duration: Motion.fast; }
+    }
+    ta := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { if root.enabled { root.clicked(); } }
+    }
+}
+
+// .pill: Download / EQ
+component PillBtn inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> enabled: true;
+    // web #btnEq.is-active: a teal dot in the corner
+    in property <bool> dot;
+    callback clicked();
+    height: 42px;
+    opacity: root.enabled ? 1 : 0.4;
+    property <float> s: ta.pressed && root.enabled ? 0.9 : 1;
+    animate s { duration: ta.pressed ? Motion.press : Motion.spring; easing: cubic-bezier(0.34, 1.7, 0.5, 1); }
+    property <color> fg: ta.has-hover && root.enabled ? #b083ff : #ffffff;
+    animate fg { duration: Motion.fast; }
+    Rectangle {
+        width: root.width * root.s;
+        height: root.height * root.s;
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        border-radius: 14px * root.s;
+        background: #0f0c1c59;
+        border-width: 1px;
+        border-color: ta.has-hover && root.enabled ? #b083ff : #ffffff24;
+        animate border-color { duration: Motion.fast; }
+    }
+    HorizontalLayout {
+        alignment: center;
+        spacing: 7px * root.s;
+        Icon {
+            y: (parent.height - self.height) / 2;
+            width: 16px * root.s;
+            height: 16px * root.s;
+            source: root.icon;
+            tint: root.fg;
+        }
+        Text {
+            vertical-alignment: center;
+            text: root.label;
+            font-size: 12.8px * root.s;
+            font-weight: 600;
+            color: root.fg;
+        }
+    }
+    if root.dot : Rectangle {
+        x: root.width - 17px;
+        y: 8px;
+        width: 7px;
+        height: 7px;
+        border-radius: 3.5px;
+        background: #2fffc4;
+        drop-shadow-blur: 8px;
+        drop-shadow-color: #2fffc4;
+    }
+    ta := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { if root.enabled { root.clicked(); } }
+    }
+}
+
+// .norm-chip (and the native Bit-perfect chip in the same style)
+component SmallChip inherits Rectangle {
+    in property <string> label;
+    in property <bool> highlight;
+    callback clicked();
+    // width from the unscaled text, so the squish does not move the neighbours
+    width: measure.preferred-width + 22px;
+    height: 25px;
+    property <float> s: ta.pressed ? 0.92 : 1;
+    animate s { duration: ta.pressed ? Motion.press : Motion.spring; easing: cubic-bezier(0.34, 1.7, 0.5, 1); }
+    measure := Text {
+        visible: false;
+        text: root.label;
+        font-family: "JetBrains Mono";
+        font-size: 10.24px;
+        font-weight: 600;
+    }
+    Rectangle {
+        width: root.width * root.s;
+        height: root.height * root.s;
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        border-radius: self.height / 2;
+        border-width: 1px;
+        border-color: root.highlight ? #2fffc459 : #ffffff24;
+        background: root.highlight ? #2fffc414 : transparent;
+        animate border-color, background { duration: Motion.fast; }
+    }
+    t := Text {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        text: root.label;
+        font-family: "JetBrains Mono";
+        font-size: 10.24px * root.s;
+        font-weight: 600;
+        color: root.highlight ? #2fffc4 : (ta.has-hover ? #ffffff : #9aa6bd);
+        animate color { duration: Motion.fast; }
+    }
+    ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+}
+
+// .seek: 6 px track, gradient fill up to the position, 16 px white thumb with a teal ring
+component SeekBar inherits Rectangle {
+    in property <float> value;
+    in property <[BufferedRange]> buffered;
+    in property <bool> enabled: true;
+    out property <bool> dragging: ta.pressed;
+    out property <float> drag-value: clamp(ta.mouse-x / root.width, 0, 1);
+    callback seek(float);
+    height: 16px;
+    property <float> shown: ta.pressed ? root.drag-value : clamp(root.value, 0, 1);
+    track := Rectangle {
+        y: (parent.height - 6px) / 2;
+        height: 6px;
+        border-radius: 3px;
+        background: #ffffff1f;
+        clip: true;
+        // downloaded parts of a streamed file (native extra, like the video player)
+        for r in root.buffered : Rectangle {
+            x: parent.width * r.start;
+            width: parent.width * (r.end - r.start);
+            background: #ffffff1a;
+        }
+        Rectangle {
+            x: 0px;
+            width: parent.width * root.shown;
+            border-radius: 3px;
+            // the web gradient runs from 0 to the position
+            background: @linear-gradient(90deg, #00e6bd 0%, #8455ff 100%);
+        }
+    }
+    thumb := Rectangle {
+        property <length> d: 16px;
+        x: parent.width * root.shown - self.d / 2;
+        y: (parent.height - self.d) / 2;
+        width: self.d;
+        height: self.d;
+        Rectangle {
+            x: -4px;
+            y: -4px;
+            width: parent.width + 8px;
+            height: parent.height + 8px;
+            border-radius: self.width / 2;
+            background: #2fffc440;
+        }
+        Rectangle {
+            border-radius: self.width / 2;
+            background: #ffffff;
+        }
+        transform-scale: ta.pressed ? 1.25 : 1;
+        animate transform-scale { duration: 300ms; easing: cubic-bezier(0.34, 1.7, 0.5, 1); }
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: MouseCursor.pointer;
+        pointer-event(e) => {
+            if e.kind == PointerEventKind.up && e.button == PointerEventButton.left {
+                root.seek(root.drag-value);
+            }
+        }
+    }
+}
+
+// Device / mode menu (native)
+component MenuRow inherits Rectangle {
+    in property <string> label;
+    in property <string> note;
+    in property <bool> selected;
+    callback clicked();
+    height: root.note == "" ? 32px : 44px;
+    border-radius: 10px;
+    background: ta.has-hover ? #ffffff10 : transparent;
+    animate background { duration: Motion.fast; }
+    Rectangle {
+        x: 10px;
+        y: 10px;
+        width: 12px;
+        height: 12px;
+        border-radius: 6px;
+        border-width: 1.5px;
+        border-color: root.selected ? #2fffc4 : #9aa6bd;
+        Rectangle {
+            visible: root.selected;
+            x: 3px;
+            y: 3px;
+            width: 6px;
+            height: 6px;
+            border-radius: 3px;
+            background: #2fffc4;
+        }
+    }
+    Text {
+        x: 32px;
+        y: 8px;
+        width: parent.width - 40px;
+        text: root.label;
+        font-size: 12.5px;
+        font-weight: root.selected ? 600 : 400;
+        color: #ffffff;
+        overflow: elide;
+    }
+    if root.note != "" : Text {
+        x: 32px;
+        y: 25px;
+        width: parent.width - 40px;
+        text: root.note;
+        font-size: 10.5px;
+        color: #9aa6bd;
+        overflow: elide;
+    }
+    ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+}
+
+component MenuHeading inherits Text {
+    font-family: "JetBrains Mono";
+    font-size: 9.6px;
+    font-weight: 700;
+    letter-spacing: 0.768px;
+    color: #9aa6bd;
+}
+
+// ── Sound rack (web: .rack, .group, .knob, .chip) ──
+
+export struct KnobData {
+    name: string,
+    color: color,
+    // value position 0..1 and the default's position
+    n: float,
+    def-n: float,
+    bipolar: bool,
+    value: string,
+    changed: bool,
+    // depends on a knob that is not turned up yet (dimmed, the tip says why)
+    idle: bool,
+    // Volume above 100 %: the boost zone turns warm
+    hot: bool,
+    tip: string,
+}
+
+export struct PresetChip {
+    name: string,
+    index: int,
+    active: bool,
+    tip: string,
+}
+
+export struct PresetLine {
+    cat: string,
+    // chips start after the 46 px category column (every line except Original)
+    indent: bool,
+    chips: [PresetChip],
+}
+
+// 270° FL-style dial, drawn in the web's 100-unit box (viewBox -50 -50 100 100) at 58 px
+component Knob inherits Rectangle {
+    in property <KnobData> k;
+    in property <bool> enabled: true;
+    callback drag(float);
+    callback reset();
+    callback wheel(float);
+    callback edit(string);
+    callback show-tip(length, length);
+    callback hide-tip();
+    property <bool> pointer-moved;
+    // dial size (the EQ strip uses 30 px knobs without a label)
+    in property <length> dial: 58px;
+    in property <bool> label-shown: true;
+    width: root.label-shown ? 70px : root.dial + 6px;
+    height: root.label-shown ? 87px : root.dial + 4px;
+    property <float> u: root.dial / 100px;
+    property <length> cx: root.dial / 2;
+    // drawn position: exactly under the hand while dragging; jumps (preset, reset, typed value)
+    // glide with a springy ease (the web runs a spring simulation)
+    property <float> disp: root.k.n;
+    animate disp { duration: ta.pressed ? 0ms : 260ms; easing: cubic-bezier(0.34, 1.56, 0.64, 1); }
+    property <float> ang: -135 + 270 * root.disp;
+    property <float> a0: -135 + 270 * (root.k.bipolar ? root.k.def-n : 0);
+    property <float> lo: max(-147, min(root.a0, root.ang));
+    property <float> hi: min(147, max(root.a0, root.ang));
+    property <bool> show-value: ta.has-hover || ta.pressed || la.has-hover || root.editing;
+    property <float> squish: ta.pressed ? 0.93 : 1;
+    animate squish { duration: ta.pressed ? 70ms : 450ms; easing: cubic-bezier(0.34, 1.7, 0.5, 1); }
+    property <float> glow: ta.pressed ? 1 : ta.has-hover ? 0.45 : 0;
+    animate glow { duration: 150ms; }
+    in-out property <bool> editing;
+    property <float> anchor;
+    property <color> arc-color: root.k.hot ? #ffb36b : root.k.color;
+    opacity: root.enabled ? 1 : 0.4;
+
+    pure function arc(d0: float, d1: float) -> string {
+        "M \{44 * sin(d0 * 1deg)} \{-44 * cos(d0 * 1deg)} A 44 44 0 \{abs(d1 - d0) > 180 ? 1 : 0} \{d1 > d0 ? 1 : 0} \{44 * sin(d1 * 1deg)} \{-44 * cos(d1 * 1deg)}"
+    }
+
+    dial := Rectangle {
+        x: (root.width - root.dial) / 2;
+        y: 2px;
+        width: root.dial;
+        height: root.dial;
+        opacity: root.k.idle ? 0.38 : 1;
+        animate opacity { duration: 250ms; }
+        // glow behind the dial (pressed / hovered)
+        Rectangle {
+            border-radius: self.width / 2;
+            opacity: root.glow;
+            background: @radial-gradient(circle, root.arc-color.with-alpha(0.35) 0%, root.arc-color.with-alpha(0.35) 55%, root.arc-color.with-alpha(0) 100%);
+        }
+        // track
+        Path {
+            width: root.dial;
+            height: root.dial;
+            viewbox-x: -50;
+            viewbox-y: -50;
+            viewbox-width: 100;
+            viewbox-height: 100;
+            commands: root.arc(-135, 135);
+            stroke: #ffffff1a;
+            stroke-width: 5px * root.u;
+            stroke-line-cap: round;
+        }
+        // value arc
+        if root.hi - root.lo > 0.5 : Path {
+            width: root.dial;
+            height: root.dial;
+            viewbox-x: -50;
+            viewbox-y: -50;
+            viewbox-width: 100;
+            viewbox-height: 100;
+            commands: root.arc(root.lo, root.hi);
+            stroke: root.k.idle ? root.arc-color.transparentize(0.6) : root.arc-color;
+            stroke-width: 5px * root.u;
+            stroke-line-cap: round;
+        }
+        // default position dot
+        Rectangle {
+            property <float> da: -135 + 270 * root.k.def-n;
+            width: 3.2px * root.u;
+            height: self.width;
+            x: root.cx + 44px * root.u * sin(self.da * 1deg) - self.width / 2;
+            y: root.cx - 44px * root.u * cos(self.da * 1deg) - self.height / 2;
+            border-radius: self.width / 2;
+            background: #ffffff73;
+        }
+        // body (squishes on press)
+        Rectangle {
+            width: 68px * root.u * root.squish;
+            height: self.width;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2 + 3px * root.u;
+            border-radius: self.width / 2;
+            background: #00000073;
+        }
+        body := Rectangle {
+            width: 66px * root.u * root.squish;
+            height: self.width;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: self.width / 2;
+            background: @radial-gradient(circle, #232836 0%, #161a23 60%, #0c0e14 100%);
+            border-width: 1px;
+            border-color: #ffffff21;
+            clip: true;
+            // highlight towards the top left (the web's gradient centre at 35 % / 28 %)
+            Rectangle {
+                width: parent.width * 1.1;
+                height: self.width;
+                x: parent.width * 0.35 - self.width / 2;
+                y: parent.height * 0.28 - self.height / 2;
+                background: @radial-gradient(circle, #3a4152 0%, #3a415200 70%);
+            }
+            Rectangle {
+                width: 52px * root.u * root.squish;
+                height: self.width;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                border-radius: self.width / 2;
+                border-width: 1px;
+                border-color: #ffffff0d;
+            }
+        }
+        // pointer: white line from r 13 to 28 with a coloured cap
+        Rectangle {
+            width: root.dial;
+            height: root.dial;
+            transform-rotation: root.ang * 1deg;
+            Rectangle {
+                width: 4px * root.u;
+                height: 15px * root.u * root.squish + self.width;
+                x: (parent.width - self.width) / 2;
+                y: parent.height / 2 - 28px * root.u * root.squish - self.width / 2;
+                border-radius: self.width / 2;
+                background: #ffffff;
+            }
+            Rectangle {
+                width: 5.2px * root.u;
+                height: self.width;
+                x: (parent.width - self.width) / 2;
+                y: parent.height / 2 - 28px * root.u * root.squish - self.height / 2;
+                border-radius: self.width / 2;
+                background: root.arc-color;
+            }
+        }
+        ta := TouchArea {
+            enabled: root.enabled;
+            mouse-cursor: self.pressed ? MouseCursor.grabbing : MouseCursor.grab;
+            pointer-event(e) => {
+                if e.kind == PointerEventKind.down && e.button == PointerEventButton.left {
+                    root.anchor = root.k.n;
+                    root.hide-tip();
+                } else if e.kind == PointerEventKind.move && !self.pressed {
+                    root.pointer-moved = true;
+                } else if e.kind == PointerEventKind.move && self.pressed {
+                    root.drag(root.anchor + ((self.mouse-x - self.pressed-x) - (self.mouse-y - self.pressed-y)) / 230px * (e.modifiers.shift || e.modifiers.control || e.modifiers.alt ? 0.15 : 1));
+                }
+            }
+            double-clicked => { root.reset(); }
+            // the web hides the tip when the pointer leaves the knob (it stayed until another knob was hovered)
+            changed has-hover => {
+                if !self.has-hover { root.pointer-moved = false; root.hide-tip(); }
+            }
+            scroll-event(e) => {
+                root.wheel((e.delta-x != 0 && abs(e.delta-x) > abs(e.delta-y) ? e.delta-x : e.delta-y) / 1px * (e.modifiers.shift ? 0.2 : 1));
+                accept
+            }
+        }
+        Timer {
+            interval: 550ms;
+            // only after the pointer really moved over the knob: a window opening under a resting cursor showed
+            // the tip by itself (browsers send no hover until the mouse moves)
+            running: ta.has-hover && root.pointer-moved && !ta.pressed;
+            triggered => { root.show-tip(dial.absolute-position.x + dial.width / 2, dial.absolute-position.y); }
+        }
+    }
+    // label: the name, or the value while hovered / dragged
+    label := Rectangle {
+        visible: root.label-shown;
+        y: 65px;
+        height: 18px;
+        opacity: root.k.idle ? 0.55 : 1;
+        Text {
+            width: parent.width;
+            y: (parent.height - self.height) / 2 + (root.show-value ? -5px : 0px);
+            horizontal-alignment: center;
+            text: root.k.name;
+            font-size: 11.2px;
+            font-weight: 600;
+            color: root.k.changed ? #ffffff : #9aa6bd;
+            opacity: root.show-value ? 0 : 1;
+            animate opacity { duration: 160ms; }
+            animate y { duration: 220ms; easing: cubic-bezier(0.34, 1.7, 0.5, 1); }
+        }
+        Text {
+            width: parent.width;
+            y: (parent.height - self.height) / 2 + (root.show-value ? 0px : 5px);
+            horizontal-alignment: center;
+            text: root.k.value;
+            font-family: "JetBrains Mono";
+            font-size: 11.2px;
+            font-weight: 600;
+            color: root.k.hot ? #ffb36b : root.k.color;
+            opacity: root.show-value && !root.editing ? 1 : 0;
+            animate opacity { duration: 160ms; }
+            animate y { duration: 220ms; easing: cubic-bezier(0.34, 1.7, 0.5, 1); }
+        }
+        la := TouchArea {
+            enabled: root.enabled;
+            mouse-cursor: MouseCursor.text;
+            double-clicked => {
+                root.editing = true;
+                input.text = root.k.value;
+                input.focus();
+                input.select-all();
+            }
+        }
+        if root.editing : Rectangle {
+            x: 2px;
+            width: parent.width - 4px;
+            border-radius: 7px;
+            background: #0f0c1c;
+            border-width: 1px;
+            border-color: root.k.color;
+        }
+        input := TextInput {
+            x: 4px;
+            width: parent.width - 8px;
+            visible: root.editing;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            font-family: "JetBrains Mono";
+            font-size: 11.2px;
+            font-weight: 600;
+            color: #ffffff;
+            single-line: true;
+            accepted => {
+                root.editing = false;
+                root.edit(self.text);
+            }
+            key-pressed(e) => {
+                if e.text == Key.Escape { root.editing = false; return accept; }
+                reject
+            }
+            changed has-focus => {
+                if !self.has-focus && root.editing {
+                    root.editing = false;
+                    root.edit(self.text);
+                }
+            }
+        }
+    }
+}
+
+component GroupBox inherits Rectangle {
+    in property <string> title;
+    in property <string> desc;
+    in property <color> accent;
+    border-radius: 18px;
+    background: #080a1252;
+    border-width: 1px;
+    border-color: #ffffff14;
+    VerticalLayout {
+        padding-top: 12px;
+        padding-left: 10px;
+        padding-right: 10px;
+        padding-bottom: 8px;
+        spacing: 0px;
+        HorizontalLayout {
+            padding-left: 6px;
+            padding-bottom: 8px;
+            spacing: 7px;
+            Rectangle {
+                width: 6px;
+                height: 6px;
+                y: (parent.height - self.height) / 2;
+                border-radius: 3px;
+                background: root.accent;
+                drop-shadow-blur: 8px;
+                drop-shadow-color: root.accent;
+            }
+            Text {
+                text: root.title;
+                font-family: "Space Grotesk";
+                font-weight: 700;
+                font-size: 10.24px;
+                letter-spacing: 1.23px;
+                color: #9aa6bd;
+            }
+        }
+        Text {
+            text: root.desc;
+            font-size: 10.88px;
+            color: #9aa6bd;
+            opacity: 0.75;
+        }
+        Rectangle { height: 2px; }
+        HorizontalLayout {
+            alignment: space-around;
+            @children
+        }
+    }
+}
+
+// .chip (presets)
+component Chip inherits Rectangle {
+    in property <string> label;
+    in property <bool> active;
+    in property <bool> dashed;
+    in property <bool> enabled: true;
+    in property <bool> chevron;
+    in property <bool> chevron-up;
+    callback clicked();
+    height: 33px;
+    width: measure.preferred-width + 28px + (root.chevron ? 12px : 0px);
+    opacity: root.enabled ? 1 : 0.4;
+    property <float> s: ta.pressed && root.enabled ? 0.9 : 1;
+    animate s { duration: ta.pressed ? 70ms : 450ms; easing: cubic-bezier(0.34, 1.7, 0.5, 1); }
+    measure := Text { visible: false; text: root.label; font-size: 12.16px; font-weight: 600; }
+    Rectangle {
+        width: root.width * root.s;
+        height: root.height * root.s;
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        border-radius: self.height / 2;
+        background: root.active ? @linear-gradient(135deg, #00e6bd 0%, #8455ff 100%) : #0f0c1c59;
+        border-width: 1px;
+        border-color: root.active ? transparent : (ta.has-hover && root.enabled) ? #b083ff : root.dashed ? #ffffff1a : #ffffff24;
+        animate border-color { duration: 150ms; }
+    }
+    HorizontalLayout {
+        alignment: center;
+        spacing: 4px;
+        Text {
+            vertical-alignment: center;
+            text: root.label;
+            font-size: 12.16px * root.s;
+            font-weight: 600;
+            color: root.active ? #04101c : (ta.has-hover && root.enabled) ? #ffffff : #9aa6bd;
+            animate color { duration: 150ms; }
+        }
+        if root.chevron : Path {
+            y: (parent.height - 5px) / 2;
+            width: 8px;
+            height: 5px;
+            viewbox-width: 8;
+            viewbox-height: 5;
+            commands: root.chevron-up ? "M 1 4 L 4 1 L 7 4" : "M 1 1 L 4 4 L 7 1";
+            stroke: root.active ? #04101c : (ta.has-hover && root.enabled) ? #ffffff : #9aa6bd;
+            animate stroke { duration: 150ms; }
+            stroke-width: 1.4px;
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { if root.enabled { root.clicked(); } }
+    }
+}
+
+// ── Parametric EQ (web .eq-panel, PEQ2 style) ──
+
+export struct EqTick {
+    // position 0..1 along the plot (x) or down the plot (y)
+    pos: float,
+    pos2: float,
+    label: string,
+    focus: bool,
+}
+
+export struct EqCurve {
+    path: string,
+    fill: string,
+    color: color,
+    strong: bool,
+    on: bool,
+}
+
+export struct EqPoint {
+    x: float,
+    y: float,
+    color: color,
+    label: string,
+    selected: bool,
+    focus: bool,
+    dragging: bool,
+    live: bool,
+}
+
+export struct EqCol {
+    color: color,
+    icon: string,
+    // fader thumb 0 (top, +18 dB) .. 1 (bottom); the gain it shows in dB
+    pos: float,
+    db: float,
+    fader-idle: bool,
+    freq: KnobData,
+    q: KnobData,
+    on: bool,
+    selected: bool,
+}
+
+export struct EqMenuItem {
+    name: string,
+    icon: string,
+    active: bool,
+}
+
+// the shape button above a fader
+component EqTypeBtn inherits Rectangle {
+    in property <string> icon;
+    in property <color> accent;
+    callback clicked();
+    width: 32px;
+    height: 26px;
+    property <float> s: ta.pressed ? 0.88 : 1;
+    animate s { duration: ta.pressed ? 70ms : 450ms; easing: cubic-bezier(0.34, 1.7, 0.5, 1); }
+    Rectangle {
+        width: root.width * root.s;
+        height: root.height * root.s;
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        border-radius: 8px;
+        background: ta.has-hover ? root.accent.with-alpha(0.18) : #0f0c1c59;
+        border-width: 1px;
+        border-color: root.accent.with-alpha(0.45);
+        animate background { duration: 150ms; }
+    }
+    Path {
+        x: (root.width - 18px * root.s) / 2;
+        y: (root.height - 18px * root.s) / 2;
+        width: 18px * root.s;
+        height: 18px * root.s;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        commands: root.icon;
+        stroke: root.accent;
+        stroke-width: 2px;
+        stroke-line-cap: round;
+    }
+    ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+}
+
+// .fader: drag anywhere on it (up = more), Shift = fine, double-click = 0 dB, wheel
+component EqFader inherits Rectangle {
+    in property <float> pos;
+    in property <float> db;
+    in property <color> accent;
+    in property <bool> idle;
+    callback drag(float);
+    callback reset();
+    callback wheel(float);
+    width: 32px;
+    height: 168px;
+    opacity: root.idle ? 0.35 : 1;
+    property <length> span: self.height - 18px;
+    property <float> anchor;
+    track := Rectangle {
+        x: (parent.width - 4px) / 2;
+        y: 9px;
+        width: 4px;
+        height: root.span;
+        border-radius: 2px;
+        background: #ffffff14;
+        Rectangle {
+            x: -7px;
+            y: parent.height / 2;
+            width: parent.width + 14px;
+            height: 1px;
+            background: #ffffff47;
+        }
+        Rectangle {
+            y: parent.height * min(root.pos, 0.5);
+            height: parent.height * abs(root.pos - 0.5);
+            border-radius: 2px;
+            background: root.accent;
+            drop-shadow-blur: 8px;
+            drop-shadow-color: root.accent;
+        }
+    }
+    thumb := Rectangle {
+        property <float> sx: ta.pressed ? 1.14 : 1;
+        property <float> sy: ta.pressed ? 0.86 : 1;
+        animate sx, sy { duration: ta.pressed ? 80ms : 450ms; easing: cubic-bezier(0.34, 1.7, 0.5, 1); }
+        width: 26px * self.sx;
+        height: 15px * self.sy;
+        x: (parent.width - self.width) / 2;
+        y: 9px + root.span * root.pos - self.height / 2;
+        border-radius: 5px;
+        background: @linear-gradient(180deg, #414959 0%, #171a23 100%);
+        border-width: 1px;
+        border-color: ta.has-hover ? root.accent : #ffffff33;
+        drop-shadow-blur: 10px;
+        drop-shadow-offset-y: 4px;
+        drop-shadow-color: #00000099;
+        Rectangle {
+            x: 4px;
+            y: (parent.height - 2px) / 2;
+            width: parent.width - 8px;
+            height: 2px;
+            border-radius: 1px;
+            background: root.accent;
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: MouseCursor.ns-resize;
+        pointer-event(e) => {
+            if e.kind == PointerEventKind.down && e.button == PointerEventButton.left {
+                root.anchor = root.db;
+            } else if e.kind == PointerEventKind.move && self.pressed {
+                root.drag(root.anchor - (self.mouse-y - self.pressed-y) / root.span * 36 * (e.modifiers.shift ? 0.2 : 1));
+            }
+        }
+        double-clicked => { root.reset(); }
+        scroll-event(e) => {
+            root.wheel(e.delta-y > 0 ? (e.modifiers.shift ? 0.1 : 0.5) : (e.modifiers.shift ? -0.1 : -0.5));
+            accept
+        }
+    }
+}
+
+component EqLabel inherits Text {
+    font-family: "JetBrains Mono";
+    font-weight: 700;
+    font-size: 8.3px;
+    letter-spacing: 0.5px;
+    color: #9aa6bd;
+    opacity: 0.7;
+    horizontal-alignment: right;
+    vertical-alignment: center;
+}
+
+export struct TourRect {
+    on: bool,
+    x: length,
+    y: length,
+    w: length,
+    h: length,
+}
+
+// .tour-actions button: 8 x 13 px padding, radius 10 px; Next = the accent gradient, Skip = plain text
+component TourBtn inherits Rectangle {
+    in property <string> label;
+    in property <bool> primary;
+    in property <bool> plain;
+    in property <bool> enabled: true;
+    callback clicked();
+    width: t.preferred-width + 26px;
+    height: t.preferred-height + 16px;
+    border-radius: 10px;
+    background: root.primary ? @linear-gradient(135deg, #00e6bd 0%, #8455ff 100%) : root.plain ? transparent : #0f0c1c59;
+    border-width: root.primary || root.plain ? 0px : 1px;
+    border-color: #ffffff24;
+    opacity: root.enabled ? (ta.pressed ? 0.8 : 1) : 0.35;
+    animate opacity { duration: 120ms; }
+    t := Text {
+        x: root.plain ? 2px : 13px;
+        text: root.label;
+        font-size: 12.16px;
+        font-weight: 600;
+        color: root.primary ? #04101c : #9aa6bd;
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component AudioWindow inherits Window {
+    default-font-family: "Inter";
+    in property <string> file-name;
+    in property <string> track-title;
+    in property <string> track-font: "Quicksand";
+    in property <string> meta;
+    in property <string> elapsed: "0:00";
+    in property <string> remaining: "-0:00";
+    in property <float> progress;
+    in property <[BufferedRange]> buffered;
+    in property <bool> ready;
+    in property <bool> playing;
+    in property <bool> muted;
+    in property <bool> looping;
+    in property <bool> vis-on: true;
+    in property <bool> norm-available;
+    in property <bool> norm-on: true;
+    in property <bool> bit-perfect-mode;
+    in property <bool> local;
+    // output indicator: 0 = nothing open, 1 = bit-perfect, 2 = lossy file (no original samples), 3 = not bit-perfect
+    in property <int> fidelity;
+    in property <string> output-line;
+    in property <string> fidelity-text;
+    in property <[OutputDevice]> devices;
+    in property <bool> exclusive: true;
+    in property <bool> release-on-pause: true;
+    in property <string> status;
+    in property <bool> status-error;
+    in property <string> toast;
+    in property <angle> disc-angle;
+    // the disc pulses on bass hits (web: scale 1 + onset * .05 + bass * .03 + drop * .05)
+    in property <float> disc-scale: 1;
+    // particle visualizer frame (rendered on the CPU, the window's full size in physical px)
+    in property <image> vis-frame;
+    in-out property <bool> menu-open;
+    // page scrolling (the wheel step comes from Rust like in the reader; the smooth-scrolling setting applies)
+    in-out property <length> wheel-dy;
+    in-out property <bool> wheel-smooth;
+    in property <bool> smooth-scroll: true;
+    property <length> content-h: rack.y + rack.height + 24px;
+    property <length> max-scroll: max(0px, root.content-h - root.height);
+    property <length> scroll-target: 0px;
+    property <duration> scroll-anim: 0ms;
+    property <length> scroll-pos: clamp(root.scroll-target, 0px, root.max-scroll);
+    animate scroll-pos { duration: root.scroll-anim; easing: cubic-bezier(0.2, 0.7, 0.3, 1); }
+    function scroll-by(dy: length, smooth: bool) {
+        root.scroll-anim = smooth && root.smooth-scroll ? 230ms : 0ms;
+        // the web hides the tip on scroll
+        root.tip-on = false;
+        root.scroll-target = clamp(clamp(root.scroll-target, 0px, root.max-scroll) + dy, 0px, root.max-scroll);
+    }
+    callback play-pause();
+    callback restart();
+    callback stop();
+    callback toggle-mute();
+    callback toggle-loop();
+    callback toggle-vis();
+    callback download();
+    callback open-eq();
+    callback toggle-norm();
+    callback toggle-bit-perfect();
+    callback seek(float);
+    callback seek-by(float);
+    callback resized();
+    changed width => { root.resized(); }
+    changed height => { root.resized(); }
+    callback select-device(int);
+    callback set-exclusive(bool);
+    callback set-release-on-pause(bool);
+    callback open-menu();
+    callback back();
+    callback key(string, bool, bool) -> bool;
+    // sound rack
+    in property <[KnobData]> knobs;
+    in property <[PresetChip]> preset-quick;
+    in property <[PresetLine]> preset-lines;
+    in property <bool> presets-open;
+    // "More · Dub": a chosen preset that is not in the quick row shows on the More chip (like the web)
+    in property <string> preset-more-label: "More";
+    // the output device has a hardware volume (Volume knob stays usable in Bit-perfect mode)
+    in property <bool> hw-volume;
+    in-out property <bool> tip-on;
+    in-out property <int> tip-index;
+    in-out property <KnobData> tip-data;
+    in-out property <length> tip-x;
+    in-out property <length> tip-y;
+    callback knob-drag(int, float);
+    callback knob-reset(int);
+    callback knob-wheel(int, float);
+    callback knob-edit(int, string);
+    callback apply-preset(int);
+    callback toggle-presets(bool);
+    callback show-knob-tip(int, length, length);
+    // EQ
+    in-out property <bool> eq-open;
+    in property <bool> eq-bypass;
+    in property <bool> eq-active;
+    in property <string> eq-total;
+    // plot size in px: the curve paths are drawn in it (Slint keeps a viewbox's aspect ratio)
+    in property <float> eq-vw: 600;
+    in property <float> eq-vh: 260;
+    in property <string> eq-spectrum;
+    in property <[EqCurve]> eq-curves;
+    in property <[EqPoint]> eq-points;
+    in property <[EqCol]> eq-cols;
+    in property <[EqTick]> eq-notes;
+    in property <[EqTick]> eq-ranges;
+    in property <[EqTick]> eq-db;
+    in property <[EqTick]> eq-hz;
+    in property <string> eq-readout;
+    in property <float> eq-readout-x;
+    in property <float> eq-readout-y;
+    in property <color> eq-readout-color;
+    in property <bool> eq-hovering;
+    in property <[PresetChip]> eq-quick;
+    in property <[PresetLine]> eq-lines;
+    in property <bool> eq-presets-open;
+    in property <string> eq-more-label: "More";
+    in-out property <bool> eq-menu-open;
+    in-out property <length> eq-menu-x;
+    in-out property <length> eq-menu-y;
+    in property <color> eq-menu-color;
+    in property <[EqMenuItem]> eq-menu-items;
+    callback eq-close();
+    callback eq-toggle-bypass();
+    callback eq-preset(int);
+    callback eq-toggle-presets(bool);
+    // kind: 0 press, 1 move, 2 release, 3 right press, 4 double-click, 5 left the graph
+    callback eq-pointer(int, length, length, length, length, bool);
+    callback eq-wheel(length, length, length, length, float, bool) -> bool;
+    callback eq-type-menu(int, length, length);
+    callback eq-menu-pick(int);
+    callback eq-fader(int, float);
+    callback eq-knob(int, int, float);
+    callback eq-knob-reset(int, int);
+    callback eq-show-tip(int, int, length, length);
+    callback eq-col-hover(int, bool);
+    callback eq-plot-size(length, length);
+    show-knob-tip(i, x, y) => {
+        root.tip-index = i;
+        root.tip-data = root.knobs[i];
+        root.tip-x = x;
+        root.tip-y = y;
+        root.tip-on = true;
+    }
+
+    title: root.file-name + " — naTiVeFS";
+    icon: @image-url("../../../assets/app-64.png");
+    background: #03070a;
+    min-width: 480px;
+    min-height: 600px;
+    preferred-width: 1120px;
+    preferred-height: 760px;
+
+    // web: max-width 1080 px, padding 20 px, grid 400 px + 1fr, gap 20 px; one column when narrow
+    // web: one column at max-width 900 px, then max-width 540 px with 14 px padding and gaps
+    property <bool> wide: root.width > 900px;
+    property <length> pad: root.wide ? 20px : 14px;
+    property <length> shell-w: min(root.wide ? 1080px : 540px, root.width);
+    property <length> shell-x: (root.width - root.shell-w) / 2;
+
+    // --bg-gradient: two radial ellipses
+    Rectangle {
+        property <length> rx: root.width * 0.8;
+        property <length> ry: root.height * 0.6;
+        x: root.width * 0.2 - self.rx;
+        y: root.height * -0.1 - self.rx;
+        width: self.rx * 2;
+        height: self.rx * 2;
+        transform-scale-y: self.ry / self.rx;
+        background: @radial-gradient(circle, #8455ff2e 0%, #8455ff00 70%);
+    }
+    Rectangle {
+        property <length> rx: root.width * 0.7;
+        property <length> ry: root.height * 0.5;
+        x: root.width * 1.0 - self.rx;
+        y: root.height * 1.1 - self.rx;
+        width: self.rx * 2;
+        height: self.rx * 2;
+        transform-scale-y: self.ry / self.rx;
+        background: @radial-gradient(circle, #00e6bd1f 0%, #00e6bd00 70%);
+    }
+
+    if root.vis-on : Image {
+        width: root.width;
+        height: root.height;
+        source: root.vis-frame;
+        image-fit: fill;
+    }
+
+    // ── first-run tour (the web's TOUR_STEPS): spotlights the real controls one by one; step 3 waits until Tempo
+    // was turned. -1 = off.
+    in-out property <int> tour-step: -1;
+    // the tour ended: remember = it was finished or skipped (not shown again on its own)
+    callback tour-end(bool);
+    property <string> tour-start-value;
+    property <bool> tour-done: root.tour-step == 2 && root.knobs[2].value != root.tour-start-value;
+    property <bool> tour-blocked: root.tour-step == 2 && !root.tour-done;
+    property <int> tour-count: 9;
+    public function tour-show(i: int) {
+        root.tip-on = false;
+        root.tour-step = i;
+        root.tour-start-value = root.knobs[2].value;
+        // one column: scroll the target into the middle of the window
+        if root.tour-target.on {
+            root.scroll-anim = root.smooth-scroll ? 320ms : 0ms;
+            root.scroll-target = clamp(root.tour-target.y + root.scroll-pos - (root.height - root.tour-target.h) / 2, 0px, root.max-scroll);
+        }
+    }
+    function tour-close(remember: bool) {
+        root.tour-step = -1;
+        root.tour-end(remember);
+    }
+    pure function tour-rect(i: int) -> TourRect {
+        // Slint 1.16 counts a child's x twice in the absolute-position of an aligned row (alignment: center /
+        // space-around): buttons = the row's position + their place in it, knobs (GroupBox row) = minus x once
+        if i == 1 { return { on: true, x: ctrlrow.absolute-position.x + playbtn.x, y: ctrlrow.absolute-position.y + playbtn.y, w: playbtn.width, h: playbtn.height }; }
+        if i == 2 || i == 3 { return { on: true, x: ktempo.absolute-position.x - ktempo.x, y: ktempo.absolute-position.y, w: ktempo.width, h: ktempo.height }; }
+        if i == 4 { return { on: true, x: knc.absolute-position.x - knc.x, y: knc.absolute-position.y, w: knc.width, h: knc.height }; }
+        if i == 5 { return { on: true, x: presets.absolute-position.x, y: presets.absolute-position.y, w: presets.width, h: presets.height }; }
+        if i == 6 { return { on: true, x: groups.absolute-position.x, y: groups.absolute-position.y, w: groups.width, h: groups.height }; }
+        if i == 7 { return { on: true, x: pillrow.absolute-position.x + eqbtn.x, y: pillrow.absolute-position.y + eqbtn.y, w: eqbtn.width, h: eqbtn.height }; }
+        if i == 8 { return { on: true, x: ctrlrow.absolute-position.x + visbtn.x, y: ctrlrow.absolute-position.y + visbtn.y, w: visbtn.width, h: visbtn.height }; }
+        return { on: false };
+    }
+    property <TourRect> tour-target: root.tour-rect(root.tour-step);
+
+    // the window's keys (play, seek, zoom, ...) work right away, not only after a click
+    init => { fs.focus(); }
+    public function focus-keys() { fs.focus(); }
+
+    fs := FocusScope {
+        key-pressed(e) => {
+            if (e.text == Key.LeftArrow) { root.seek-by(e.modifiers.control ? -30 : -5); return accept; }
+            if (e.text == Key.RightArrow) { root.seek-by(e.modifiers.control ? 30 : 5); return accept; }
+            if (e.text == Key.Home) { root.restart(); return accept; }
+            if (e.text == Key.Escape && root.tour-step >= 0) { root.tour-close(true); return accept; }
+            if (e.text == Key.Escape) {
+                if root.eq-menu-open { root.eq-menu-open = false; } else if root.eq-open { root.eq-close(); } else { root.menu-open = false; }
+                return accept;
+            }
+            if root.key(e.text, e.modifiers.control, e.modifiers.shift) { return accept; }
+            reject
+        }
+    }
+
+    // the page scrolls with the wheel when it is taller than the window (one column, zoomed in), smoothly like the
+    // main window; not by dragging, so the knobs keep their vertical drag. A wheel over a knob turns the knob.
+    page := Rectangle {
+        width: root.width;
+        height: root.height;
+        TouchArea {
+            scroll-event(e) => {
+                root.scroll-by(root.wheel-dy, root.wheel-smooth);
+                return accept;
+            }
+        }
+        Rectangle {
+        y: -root.scroll-pos;
+        height: root.content-h;
+
+        // ── top bar ──
+        topbar := Rectangle {
+            x: root.shell-x + root.pad;
+            y: 22px;
+            width: root.shell-w - 2 * root.pad;
+            height: 34px;
+            RoundBtn {
+                x: 0px;
+                icon: @image-url("../../../assets/img/audio/back.svg");
+                tip: "Back";
+                clicked => { root.back(); }
+            }
+            HorizontalLayout {
+                alignment: center;
+                Text {
+                    vertical-alignment: center;
+                    text: "TVFS ";
+                    font-family: "Space Grotesk";
+                    font-weight: 700;
+                    font-size: 15.2px;
+                    letter-spacing: 2.128px;
+                    color: #9aa6bd;
+                }
+                Text {
+                    vertical-alignment: center;
+                    text: "AUDIO PLAYER";
+                    font-family: "Space Grotesk";
+                    font-weight: 700;
+                    font-size: 15.2px;
+                    letter-spacing: 2.128px;
+                    color: #2fffc4;
+                }
+            }
+            RoundBtn {
+                x: parent.width - self.width;
+                icon: @image-url("../../../assets/img/audio/help.svg");
+                tip: "Tour";
+                clicked => { root.tour-show(0); }
+            }
+        }
+
+        // ── player card ──
+        card := Rectangle {
+            x: root.shell-x + root.pad;
+            y: 82px;
+            width: root.wide ? 400px : root.shell-w - 2 * root.pad;
+            height: col.preferred-height;
+            border-radius: 24px;
+            background: #10131bb8;
+            border-width: 1px;
+            border-color: #ffffff24;
+            drop-shadow-blur: 70px;
+            drop-shadow-offset-y: 30px;
+            drop-shadow-color: #000000a0;
+            col := VerticalLayout {
+                padding-top: 30px;
+                padding-left: 26px;
+                padding-right: 26px;
+                padding-bottom: 24px;
+                spacing: 20px;
+                alignment: start;
+                HorizontalLayout {
+                    alignment: center;
+                    disc := Rectangle {
+                        // fixed in the layout; only the inside pulses (the web uses a CSS transform)
+                        width: 118px;
+                        height: 118px;
+                        Rectangle {
+                            width: 118px * root.disc-scale;
+                            height: self.width;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            border-radius: self.width / 2;
+                            drop-shadow-blur: 34px;
+                            drop-shadow-offset-y: 8px;
+                            drop-shadow-color: #8455ff59;
+                            background: @conic-gradient(from 180deg, #2fffc4 0deg, #8455ff 180deg, #2fffc4 360deg);
+                            transform-rotation: root.disc-angle;
+                            // inset 0 0 0 6px rgba(3,7,10,.85)
+                            Rectangle {
+                                border-radius: self.width / 2;
+                                border-width: 6px * root.disc-scale;
+                                border-color: #03070ad9;
+                            }
+                            Rectangle {
+                                width: 16px * root.disc-scale;
+                                height: self.width;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                border-radius: self.width / 2;
+                                background: #03070a;
+                                border-width: 2px;
+                                border-color: #ffffff26;
+                            }
+                        }
+                    }
+                }
+                Text {
+                    text: root.track-title;
+                    font-family: root.track-font;
+                    font-weight: 700;
+                    font-size: 18.4px;
+                    color: #ffffff;
+                    horizontal-alignment: center;
+                    // the web scrolls long titles (marquee); a constant animation would keep the window
+                    // redrawing, so long titles are shortened instead (same as the recent list)
+                    overflow: elide;
+                }
+                if root.local : HorizontalLayout { alignment: center; LocalBadge { } }
+                VerticalLayout {
+                    spacing: 6px;
+                    seek := SeekBar {
+                        value: root.progress;
+                        buffered: root.buffered;
+                        enabled: root.ready;
+                        seek(v) => { root.seek(v); }
+                    }
+                    HorizontalLayout {
+                        Text {
+                            text: root.elapsed;
+                            font-family: "JetBrains Mono";
+                            font-size: 11.52px;
+                            color: #9aa6bd;
+                        }
+                        Text {
+                            horizontal-alignment: right;
+                            text: root.remaining;
+                            font-family: "JetBrains Mono";
+                            font-size: 11.52px;
+                            color: #9aa6bd;
+                        }
+                    }
+                }
+                ctrlrow := HorizontalLayout {
+                    alignment: center;
+                    spacing: 16px;
+                    RoundBtn {
+                        y: (parent.height - self.height) / 2;
+                        icon: root.muted ? @image-url("../../../assets/img/audio/mute.svg") : @image-url("../../../assets/img/audio/volume.svg");
+                        muted: root.muted;
+                        enabled: !root.bit-perfect-mode;
+                        tip: "Mute (M)";
+                        clicked => { root.toggle-mute(); }
+                    }
+                    RoundBtn {
+                        y: (parent.height - self.height) / 2;
+                        size: 46px;
+                        icon-size: 18px;
+                        ctrl: true;
+                        enabled: root.ready;
+                        icon: @image-url("../../../assets/img/audio/restart.svg");
+                        tip: "Back to start";
+                        clicked => { root.restart(); }
+                    }
+                    playbtn := RoundBtn {
+                        size: 62px;
+                        icon-size: 24px;
+                        primary: true;
+                        enabled: root.ready;
+                        icon: root.playing ? @image-url("../../../assets/img/audio/pause.svg") : @image-url("../../../assets/img/audio/play.svg");
+                        tip: "Play / Pause (Space)";
+                        clicked => { root.play-pause(); }
+                    }
+                    RoundBtn {
+                        y: (parent.height - self.height) / 2;
+                        size: 46px;
+                        icon-size: 18px;
+                        ctrl: true;
+                        enabled: root.ready;
+                        icon: @image-url("../../../assets/img/audio/stop.svg");
+                        tip: "Stop";
+                        clicked => { root.stop(); }
+                    }
+                    RoundBtn {
+                        y: (parent.height - self.height) / 2;
+                        icon: @image-url("../../../assets/img/audio/loop.svg");
+                        on: root.looping;
+                        tip: "Loop: play the track again and again (L)";
+                        clicked => { root.toggle-loop(); }
+                    }
+                    visbtn := RoundBtn {
+                        y: (parent.height - self.height) / 2;
+                        icon: @image-url("../../../assets/img/audio/disc.svg");
+                        off: !root.vis-on;
+                        tip: "Visualizer on/off";
+                        clicked => { root.toggle-vis(); }
+                    }
+                }
+                pillrow := HorizontalLayout {
+                    spacing: 10px;
+                    PillBtn {
+                        icon: @image-url("../../../assets/img/audio/download.svg");
+                        label: root.local ? "Show in folder" : "Download";
+                        clicked => { root.download(); }
+                    }
+                    eqbtn := PillBtn {
+                        icon: @image-url("../../../assets/img/audio/eq.svg");
+                        label: "EQ";
+                        dot: root.eq-active && !root.bit-perfect-mode;
+                        enabled: !root.bit-perfect-mode;
+                        clicked => { root.open-eq(); }
+                    }
+                }
+                Text {
+                    text: root.meta;
+                    font-family: "JetBrains Mono";
+                    font-size: 10.56px;
+                    color: #9aa6bd;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: 8px;
+                    if root.norm-available : SmallChip {
+                        label: root.norm-on ? "Normalization: On" : "Normalization: Off";
+                        clicked => { root.toggle-norm(); }
+                    }
+                    SmallChip {
+                        label: root.bit-perfect-mode ? "Bit-perfect: On" : "Bit-perfect: Off";
+                        highlight: root.bit-perfect-mode;
+                        clicked => { root.toggle-bit-perfect(); }
+                    }
+                }
+                // ── native: where the sound goes ──
+                out := Rectangle {
+                    height: 50px;
+                    border-radius: 14px;
+                    background: oa.has-hover ? #ffffff0a : #0f0c1c59;
+                    border-width: 1px;
+                    border-color: root.menu-open || oa.has-hover ? #ffffff40 : #ffffff1a;
+                    animate background, border-color { duration: Motion.fast; }
+                    Rectangle {
+                        x: 12px;
+                        y: (parent.height - self.height) / 2;
+                        width: 8px;
+                        height: 8px;
+                        border-radius: 4px;
+                        background: root.fidelity == 1 ? #2fffc4 : #9aa6bd;
+                        drop-shadow-blur: root.fidelity == 1 ? 8px : 0px;
+                        drop-shadow-color: #2fffc4a0;
+                    }
+                    Text {
+                        x: 28px;
+                        y: 8px;
+                        width: parent.width - 40px;
+                        text: root.fidelity-text;
+                        font-family: "JetBrains Mono";
+                        font-size: 10.24px;
+                        font-weight: 600;
+                        color: root.fidelity == 1 ? #2fffc4 : #9aa6bd;
+                        overflow: elide;
+                    }
+                    Text {
+                        x: 28px;
+                        y: 26px;
+                        width: parent.width - 52px;
+                        text: root.output-line;
+                        font-size: 11.5px;
+                        color: #9aa6bd;
+                        overflow: elide;
+                    }
+                    // chevron (Inter has no ▾)
+                    Path {
+                        x: parent.width - 24px;
+                        y: (parent.height - 6px) / 2;
+                        width: 10px;
+                        height: 6px;
+                        viewbox-width: 10;
+                        viewbox-height: 6;
+                        commands: root.menu-open ? "M 1 5 L 5 1 L 9 5" : "M 1 1 L 5 5 L 9 1";
+                        stroke: #9aa6bd;
+                        stroke-width: 1.6px;
+                    }
+                    oa := TouchArea {
+                        mouse-cursor: MouseCursor.pointer;
+                        clicked => {
+                            if !root.menu-open { root.open-menu(); }
+                            root.menu-open = !root.menu-open;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── sound rack ──
+        rack := Rectangle {
+            x: root.wide ? card.x + card.width + root.pad : card.x;
+            y: root.wide ? 82px : card.y + card.height + root.pad;
+            width: root.wide ? root.shell-w - 2 * root.pad - card.width - root.pad : card.width;
+            height: rack-col.preferred-height;
+            border-radius: 24px;
+            background: #10131bb8;
+            border-width: 1px;
+            border-color: #ffffff24;
+            drop-shadow-blur: 70px;
+            drop-shadow-offset-y: 30px;
+            drop-shadow-color: #000000a0;
+            rack-col := VerticalLayout {
+                padding-top: 20px;
+                padding-left: 20px;
+                padding-right: 20px;
+                padding-bottom: 22px;
+                spacing: 0px;
+                HorizontalLayout {
+                    height: 30px;
+                    Text {
+                        vertical-alignment: center;
+                        text: "SOUND";
+                        font-family: "Space Grotesk";
+                        font-weight: 700;
+                        font-size: 13.12px;
+                        letter-spacing: 1.5744px;
+                        color: #9aa6bd;
+                    }
+                    Rectangle { }
+                    RoundBtn {
+                        size: 30px;
+                        icon-size: 14px;
+                        enabled: !root.bit-perfect-mode;
+                        icon: @image-url("../../../assets/img/audio/reset.svg");
+                        tip: "Reset all sound controls";
+                        clicked => { root.apply-preset(0); }
+                    }
+                }
+                Rectangle { height: 12px; }
+                if root.bit-perfect-mode : VerticalLayout {
+                    padding-bottom: 12px;
+                    Text {
+                        text: "Bit-perfect mode is on: the effects, the EQ, normalization and the volume are bypassed, the device gets the file's own samples.";
+                        wrap: word-wrap;
+                        font-size: 12.5px;
+                        color: #9aa6bd;
+                    }
+                }
+                presets := VerticalLayout {
+                    if !root.presets-open : HorizontalLayout {
+                        padding-left: 2px;
+                        padding-top: 2px;
+                        spacing: 6px;
+                        alignment: start;
+                        for c in root.preset-quick : Chip {
+                            label: c.name;
+                            active: c.active;
+                            enabled: !root.bit-perfect-mode;
+                            clicked => { root.apply-preset(c.index); }
+                        }
+                        Chip {
+                            label: root.preset-more-label;
+                            active: root.preset-more-label != "More";
+                            dashed: true;
+                            chevron: true;
+                            enabled: !root.bit-perfect-mode;
+                            clicked => { root.toggle-presets(true); }
+                        }
+                    }
+                    if root.presets-open : VerticalLayout {
+                        padding-left: 2px;
+                        padding-top: 2px;
+                        spacing: 7px;
+                        for line in root.preset-lines : HorizontalLayout {
+                            spacing: 6px;
+                            alignment: start;
+                            if line.indent : Rectangle {
+                                width: 46px;
+                                Text {
+                                    y: 10px;
+                                    text: line.cat;
+                                    font-family: "JetBrains Mono";
+                                    font-weight: 700;
+                                    font-size: 9.6px;
+                                    letter-spacing: 0.768px;
+                                    color: #9aa6bd;
+                                    opacity: 0.7;
+                                }
+                            }
+                            for c in line.chips : Chip {
+                                label: c.name;
+                                active: c.active;
+                                enabled: !root.bit-perfect-mode;
+                                clicked => { root.apply-preset(c.index); }
+                            }
+                        }
+                        HorizontalLayout {
+                            alignment: end;
+                            Chip {
+                                label: "Less";
+                                dashed: true;
+                                chevron: true;
+                                chevron-up: true;
+                                clicked => { root.toggle-presets(false); }
+                            }
+                        }
+                    }
+                }
+                Rectangle { height: 16px; }
+                groups := VerticalLayout {
+                    spacing: 12px;
+                    HorizontalLayout {
+                        spacing: 12px;
+                        GroupBox {
+                            title: "MASTER";
+                            desc: "Tone and loudness";
+                            accent: #ff8fd0;
+                            k0 := Knob {
+                                k: root.knobs[0];
+                                enabled: !root.bit-perfect-mode;
+                                drag(v) => { root.knob-drag(0, v); }
+                                reset => { root.knob-reset(0); }
+                                wheel(d) => { root.knob-wheel(0, d); }
+                                edit(t) => { root.knob-edit(0, t); }
+                                show-tip(x, y) => { root.show-knob-tip(0, x, y); }
+                                hide-tip => { root.tip-on = false; }
+                            }
+                            Knob {
+                                k: root.knobs[1];
+                                enabled: !root.bit-perfect-mode || root.hw-volume;
+                                drag(v) => { root.knob-drag(1, v); }
+                                reset => { root.knob-reset(1); }
+                                wheel(d) => { root.knob-wheel(1, d); }
+                                edit(t) => { root.knob-edit(1, t); }
+                                show-tip(x, y) => { root.show-knob-tip(1, x, y); }
+                                hide-tip => { root.tip-on = false; }
+                            }
+                        }
+                        GroupBox {
+                            title: "SPEED & PITCH";
+                            desc: "How fast, and how high";
+                            accent: #2fffc4;
+                            ktempo := Knob {
+                                k: root.knobs[2];
+                                enabled: !root.bit-perfect-mode;
+                                drag(v) => { root.knob-drag(2, v); }
+                                reset => { root.knob-reset(2); }
+                                wheel(d) => { root.knob-wheel(2, d); }
+                                edit(t) => { root.knob-edit(2, t); }
+                                show-tip(x, y) => { root.show-knob-tip(2, x, y); }
+                                hide-tip => { root.tip-on = false; }
+                            }
+                            Knob {
+                                k: root.knobs[3];
+                                enabled: !root.bit-perfect-mode;
+                                drag(v) => { root.knob-drag(3, v); }
+                                reset => { root.knob-reset(3); }
+                                wheel(d) => { root.knob-wheel(3, d); }
+                                edit(t) => { root.knob-edit(3, t); }
+                                show-tip(x, y) => { root.show-knob-tip(3, x, y); }
+                                hide-tip => { root.tip-on = false; }
+                            }
+                            knc := Knob {
+                                k: root.knobs[4];
+                                enabled: !root.bit-perfect-mode;
+                                drag(v) => { root.knob-drag(4, v); }
+                                reset => { root.knob-reset(4); }
+                                wheel(d) => { root.knob-wheel(4, d); }
+                                edit(t) => { root.knob-edit(4, t); }
+                                show-tip(x, y) => { root.show-knob-tip(4, x, y); }
+                                hide-tip => { root.tip-on = false; }
+                            }
+                        }
+                    }
+                    GroupBox {
+                        title: "SPACE";
+                        desc: "Room and echoes (the bass stays dry)";
+                        accent: #b083ff;
+                        Knob {
+                            k: root.knobs[5];
+                            enabled: !root.bit-perfect-mode;
+                            drag(v) => { root.knob-drag(5, v); }
+                            reset => { root.knob-reset(5); }
+                            wheel(d) => { root.knob-wheel(5, d); }
+                            edit(t) => { root.knob-edit(5, t); }
+                            show-tip(x, y) => { root.show-knob-tip(5, x, y); }
+                            hide-tip => { root.tip-on = false; }
+                        }
+                        Knob {
+                            k: root.knobs[6];
+                            enabled: !root.bit-perfect-mode;
+                            drag(v) => { root.knob-drag(6, v); }
+                            reset => { root.knob-reset(6); }
+                            wheel(d) => { root.knob-wheel(6, d); }
+                            edit(t) => { root.knob-edit(6, t); }
+                            show-tip(x, y) => { root.show-knob-tip(6, x, y); }
+                            hide-tip => { root.tip-on = false; }
+                        }
+                        Knob {
+                            k: root.knobs[7];
+                            enabled: !root.bit-perfect-mode;
+                            drag(v) => { root.knob-drag(7, v); }
+                            reset => { root.knob-reset(7); }
+                            wheel(d) => { root.knob-wheel(7, d); }
+                            edit(t) => { root.knob-edit(7, t); }
+                            show-tip(x, y) => { root.show-knob-tip(7, x, y); }
+                            hide-tip => { root.tip-on = false; }
+                        }
+                        Knob {
+                            k: root.knobs[8];
+                            enabled: !root.bit-perfect-mode;
+                            drag(v) => { root.knob-drag(8, v); }
+                            reset => { root.knob-reset(8); }
+                            wheel(d) => { root.knob-wheel(8, d); }
+                            edit(t) => { root.knob-edit(8, t); }
+                            show-tip(x, y) => { root.show-knob-tip(8, x, y); }
+                            hide-tip => { root.tip-on = false; }
+                        }
+                        Knob {
+                            k: root.knobs[9];
+                            enabled: !root.bit-perfect-mode;
+                            drag(v) => { root.knob-drag(9, v); }
+                            reset => { root.knob-reset(9); }
+                            wheel(d) => { root.knob-wheel(9, d); }
+                            edit(t) => { root.knob-edit(9, t); }
+                            show-tip(x, y) => { root.show-knob-tip(9, x, y); }
+                            hide-tip => { root.tip-on = false; }
+                        }
+                    }
+                    GroupBox {
+                        title: "STEREO";
+                        desc: "Width and spin (the bass stays centred)";
+                        accent: #6ea8ff;
+                        Knob {
+                            k: root.knobs[10];
+                            enabled: !root.bit-perfect-mode;
+                            drag(v) => { root.knob-drag(10, v); }
+                            reset => { root.knob-reset(10); }
+                            wheel(d) => { root.knob-wheel(10, d); }
+                            edit(t) => { root.knob-edit(10, t); }
+                            show-tip(x, y) => { root.show-knob-tip(10, x, y); }
+                            hide-tip => { root.tip-on = false; }
+                        }
+                        Knob {
+                            k: root.knobs[11];
+                            enabled: !root.bit-perfect-mode;
+                            drag(v) => { root.knob-drag(11, v); }
+                            reset => { root.knob-reset(11); }
+                            wheel(d) => { root.knob-wheel(11, d); }
+                            edit(t) => { root.knob-edit(11, t); }
+                            show-tip(x, y) => { root.show-knob-tip(11, x, y); }
+                            hide-tip => { root.tip-on = false; }
+                        }
+                    }
+                }
+            }
+        }
+        }
+    }
+
+    // ── EQ panel (overlay) ──
+    if root.eq-open : Rectangle {
+        background: #03070a8c;
+        TouchArea { clicked => { root.eq-close(); } }
+        eqpanel := Rectangle {
+            width: min(1040px, root.width - 32px);
+            height: eqcol.preferred-height;
+            x: (parent.width - self.width) / 2;
+            y: max(16px, (parent.height - self.height) / 2);
+            border-radius: 24px;
+            background: #10131bf5;
+            border-width: 1px;
+            border-color: #ffffff24;
+            drop-shadow-blur: 70px;
+            drop-shadow-offset-y: 30px;
+            drop-shadow-color: #000000c0;
+            TouchArea { }
+            eqcol := VerticalLayout {
+                padding-top: 16px;
+                padding-left: 18px;
+                padding-right: 18px;
+                padding-bottom: 18px;
+                spacing: 0px;
+                HorizontalLayout {
+                    height: 30px;
+                    spacing: 8px;
+                    Text {
+                        vertical-alignment: center;
+                        text: "PARAMETRIC EQ";
+                        font-family: "Space Grotesk";
+                        font-weight: 700;
+                        font-size: 13.12px;
+                        letter-spacing: 1.5744px;
+                        color: #9aa6bd;
+                    }
+                    Rectangle { }
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: bt.preferred-width + 28px;
+                            height: 30px;
+                            border-radius: 15px;
+                            background: root.eq-bypass ? #ffd866 : #0f0c1c59;
+                            border-width: 1px;
+                            border-color: root.eq-bypass ? transparent : (bta.has-hover ? #b083ff : #ffffff24);
+                            animate background, border-color { duration: 150ms; }
+                            bt := Text {
+                                x: 14px;
+                                y: (parent.height - self.height) / 2;
+                                text: "Bypass";
+                                font-size: 12.16px;
+                                font-weight: 600;
+                                color: root.eq-bypass ? #1a1405 : (bta.has-hover ? #ffffff : #9aa6bd);
+                            }
+                            bta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.eq-toggle-bypass(); } }
+                        }
+                    }
+                    RoundBtn {
+                        size: 30px;
+                        icon-size: 14px;
+                        icon: @image-url("../../../assets/img/audio/reset.svg");
+                        tip: "Reset all bands";
+                        clicked => { root.eq-preset(0); }
+                    }
+                    RoundBtn {
+                        size: 30px;
+                        icon-size: 14px;
+                        icon: @image-url("../../../assets/img/audio/close.svg");
+                        tip: "Close";
+                        clicked => { root.eq-close(); }
+                    }
+                }
+                Rectangle { height: 10px; }
+                HorizontalLayout {
+                    spacing: 12px;
+                    // the graph
+                    graph := Rectangle {
+                        min-height: 317px;
+                        border-radius: 14px;
+                        background: #00000061;
+                        border-width: 1px;
+                        border-color: #ffffff24;
+                        clip: true;
+                        property <length> pl: 34px;
+                        property <length> pr: 10px;
+                        property <length> pt: 34px;
+                        property <length> pb: 22px;
+                        property <length> pw: self.width - self.pl - self.pr;
+                        property <length> ph: self.height - self.pt - self.pb;
+                        changed pw => { root.eq-plot-size(self.pw, self.ph); }
+                        changed ph => { root.eq-plot-size(self.pw, self.ph); }
+                        init => { root.eq-plot-size(self.pw, self.ph); }
+                        // ruler: C1..C9, then the named ranges
+                        for t in root.eq-notes : Text {
+                            x: graph.pl + graph.pw * t.pos - 10px;
+                            width: 20px;
+                            y: 2px;
+                            horizontal-alignment: center;
+                            text: t.label;
+                            font-family: "JetBrains Mono";
+                            font-weight: 600;
+                            font-size: 8.5px;
+                            color: #ffffff47;
+                        }
+                        for t[i] in root.eq-ranges : Rectangle {
+                            x: graph.pl + graph.pw * t.pos + 1px;
+                            width: graph.pw * (t.pos2 - t.pos) - 2px;
+                            y: 14px;
+                            height: 13px;
+                            background: t.focus ? #2fffc429 : (mod(i, 2) == 1 ? #ffffff09 : #ffffff0f);
+                            if self.width > 24px : Text {
+                                width: parent.width;
+                                y: (parent.height - self.height) / 2;
+                                horizontal-alignment: center;
+                                text: t.label;
+                                font-family: "JetBrains Mono";
+                                font-weight: 700;
+                                font-size: 8px;
+                                color: t.focus ? #2fffc4 : #ffffff6b;
+                            }
+                        }
+                        // grid
+                        for t in root.eq-db : Rectangle {
+                            x: graph.pl;
+                            width: graph.pw;
+                            y: graph.pt + graph.ph * t.pos;
+                            height: 1px;
+                            background: t.focus ? #2fffc447 : #ffffff0f;
+                            Text {
+                                x: -32px;
+                                width: 26px;
+                                y: -6px;
+                                horizontal-alignment: right;
+                                text: t.label;
+                                font-family: "JetBrains Mono";
+                                font-weight: 600;
+                                font-size: 9px;
+                                color: #ffffff52;
+                            }
+                        }
+                        for t in root.eq-hz : Rectangle {
+                            x: graph.pl + graph.pw * t.pos;
+                            width: 1px;
+                            y: graph.pt;
+                            height: graph.ph;
+                            background: #ffffff0d;
+                            Text {
+                                x: clamp(-15px, graph.pl + 8px - parent.x - 15px, graph.width - graph.pr - 10px - parent.x - 15px);
+                                width: 30px;
+                                y: parent.height + 9px;
+                                horizontal-alignment: center;
+                                text: t.label;
+                                font-family: "JetBrains Mono";
+                                font-weight: 600;
+                                font-size: 9px;
+                                color: #ffffff52;
+                            }
+                        }
+                        // live spectrum (after the EQ)
+                        if root.eq-spectrum != "" : Path {
+                            x: graph.pl;
+                            y: graph.pt;
+                            width: graph.pw;
+                            height: graph.ph;
+                            viewbox-width: root.eq-vw;
+                            viewbox-height: root.eq-vh;
+                            commands: root.eq-spectrum;
+                            fill: @linear-gradient(180deg, #2fffc44d 0%, #8455ff0a 100%);
+                        }
+                        // each band: the selected / hovered one filled and outlined, the rest faint
+                        for c in root.eq-curves : Rectangle {
+                            x: graph.pl;
+                            y: graph.pt;
+                            width: graph.pw;
+                            height: graph.ph;
+                            if c.on && c.strong : Path {
+                                width: parent.width;
+                                height: parent.height;
+                                viewbox-width: root.eq-vw;
+                                viewbox-height: root.eq-vh;
+                                commands: c.fill;
+                                fill: c.color.with-alpha(0.16);
+                            }
+                            if c.on : Path {
+                                width: parent.width;
+                                height: parent.height;
+                                viewbox-width: root.eq-vw;
+                                viewbox-height: root.eq-vh;
+                                commands: c.path;
+                                stroke: c.color.with-alpha(c.strong ? 0.9 : 0.3);
+                                stroke-width: c.strong ? 1.6px : 1px;
+                            }
+                        }
+                        // the total response (a soft teal glow under a white line)
+                        Path {
+                            x: graph.pl;
+                            y: graph.pt;
+                            width: graph.pw;
+                            height: graph.ph;
+                            viewbox-width: root.eq-vw;
+                            viewbox-height: root.eq-vh;
+                            commands: root.eq-total;
+                            stroke: root.eq-bypass ? transparent : #2fffc433;
+                            stroke-width: 7px;
+                        }
+                        Path {
+                            x: graph.pl;
+                            y: graph.pt;
+                            width: graph.pw;
+                            height: graph.ph;
+                            viewbox-width: root.eq-vw;
+                            viewbox-height: root.eq-vh;
+                            commands: root.eq-total;
+                            stroke: root.eq-bypass ? #ffffff59 : #ffffff;
+                            stroke-width: 2.4px;
+                        }
+                        // points
+                        for p in root.eq-points : Rectangle {
+                            property <float> sc: p.dragging ? 1.3 : (p.focus ? 1.18 : 1);
+                            animate sc { duration: 220ms; easing: cubic-bezier(0.34, 1.7, 0.5, 1); }
+                            x: graph.pl + graph.pw * p.x;
+                            y: graph.pt + graph.ph * p.y;
+                            width: 0px;
+                            height: 0px;
+                            if p.selected : Rectangle {
+                                x: -21px * parent.sc;
+                                y: -21px * parent.sc;
+                                width: 42px * parent.sc;
+                                height: self.width;
+                                border-radius: self.width / 2;
+                                background: p.color.with-alpha(0.08);
+                            }
+                            if p.selected : Rectangle {
+                                x: -15px * parent.sc;
+                                y: -15px * parent.sc;
+                                width: 30px * parent.sc;
+                                height: self.width;
+                                border-radius: self.width / 2;
+                                border-width: 2px;
+                                border-color: p.color.with-alpha(0.35);
+                            }
+                            Rectangle {
+                                x: -10px * parent.sc;
+                                y: -10px * parent.sc;
+                                width: 20px * parent.sc;
+                                height: self.width;
+                                border-radius: self.width / 2;
+                                background: #080a10bf;
+                                Rectangle {
+                                    border-radius: self.width / 2;
+                                    background: p.color.with-alpha(p.live ? (p.selected ? 0.45 : 0.25) : 0.06);
+                                    border-width: p.live ? 2px : 1.4px;
+                                    border-color: p.live ? p.color : p.color.with-alpha(0.5);
+                                }
+                                Text {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    text: p.label;
+                                    font-family: "JetBrains Mono";
+                                    font-weight: 700;
+                                    font-size: 10px;
+                                    color: p.live ? #ffffff : p.color;
+                                }
+                            }
+                        }
+                        // value box over the point being dragged / hovered
+                        if root.eq-readout != "" : Rectangle {
+                            width: rt.preferred-width + 14px;
+                            height: 20px;
+                            x: clamp(graph.pl + graph.pw * root.eq-readout-x - self.width / 2, graph.pl, graph.width - graph.pr - self.width);
+                            y: graph.pt + graph.ph * root.eq-readout-y - 38px < graph.pt ? graph.pt + graph.ph * root.eq-readout-y + 28px : graph.pt + graph.ph * root.eq-readout-y - 38px;
+                            border-radius: 6px;
+                            background: #080a10eb;
+                            border-width: 1px;
+                            border-color: root.eq-readout-color;
+                            rt := Text {
+                                x: 7px;
+                                y: (parent.height - self.height) / 2;
+                                text: root.eq-readout;
+                                font-family: "JetBrains Mono";
+                                font-weight: 700;
+                                font-size: 10px;
+                                color: #ffffff;
+                            }
+                        }
+                        TouchArea {
+                            mouse-cursor: root.eq-hovering ? (self.pressed ? MouseCursor.grabbing : MouseCursor.grab) : MouseCursor.default;
+                            pointer-event(e) => {
+                                if e.kind == PointerEventKind.down {
+                                    root.eq-menu-x = graph.absolute-position.x + self.mouse-x;
+                                    root.eq-menu-y = graph.absolute-position.y + self.mouse-y;
+                                    root.eq-pointer(e.button == PointerEventButton.right ? 3 : 0, self.mouse-x - graph.pl, self.mouse-y - graph.pt, graph.pw, graph.ph, e.modifiers.shift);
+                                } else if e.kind == PointerEventKind.move {
+                                    root.eq-pointer(1, self.mouse-x - graph.pl, self.mouse-y - graph.pt, graph.pw, graph.ph, e.modifiers.shift);
+                                } else if e.kind == PointerEventKind.up {
+                                    root.eq-pointer(2, self.mouse-x - graph.pl, self.mouse-y - graph.pt, graph.pw, graph.ph, e.modifiers.shift);
+                                }
+                            }
+                            double-clicked => { root.eq-pointer(4, self.mouse-x - graph.pl, self.mouse-y - graph.pt, graph.pw, graph.ph, false); }
+                            scroll-event(e) => {
+                                if root.eq-wheel(self.mouse-x - graph.pl, self.mouse-y - graph.pt, graph.pw, graph.ph, e.delta-y / 1px, e.modifiers.shift) { return accept; }
+                                reject
+                            }
+                            changed has-hover => { if !self.has-hover { root.eq-pointer(5, 0, 0, graph.pw, graph.ph, false); } }
+                        }
+                    }
+                    // the channel strip
+                    Rectangle {
+                        width: strip.preferred-width;
+                        border-radius: 14px;
+                        background: #080a1252;
+                        border-width: 1px;
+                        border-color: #ffffff14;
+                        strip := HorizontalLayout {
+                            padding: 6px;
+                            spacing: 3px;
+                            VerticalLayout {
+                                padding-top: 5px;
+                                padding-bottom: 4px;
+                                padding-right: 2px;
+                                spacing: 5px;
+                                EqLabel { height: 26px; text: "TYPE"; }
+                                EqLabel { height: 168px; text: "GAIN"; }
+                                VerticalLayout {
+                                    spacing: 1px;
+                                    EqLabel { height: 34px; text: "FREQ"; }
+                                    EqLabel { height: 34px; text: "BW"; }
+                                }
+                                Rectangle { height: 14px; }
+                            }
+                            for c[i] in root.eq-cols : Rectangle {
+                                width: 40px;
+                                border-radius: 10px;
+                                background: c.selected ? #ffffff0b : transparent;
+                                border-width: c.selected ? 1px : 0px;
+                                border-color: c.color.with-alpha(0.55);
+                                opacity: c.on ? 1 : 0.5;
+                                animate background, opacity { duration: 200ms; }
+                                // hovering the column highlights its band in the graph; it lies under
+                                // the controls (on top it swallowed every press: faders and knobs did nothing)
+                                TouchArea {
+                                    changed has-hover => { root.eq-col-hover(i, self.has-hover); }
+                                }
+                                VerticalLayout {
+                                    padding-top: 5px;
+                                    padding-bottom: 4px;
+                                    spacing: 5px;
+                                    alignment: start;
+                                    HorizontalLayout {
+                                        alignment: center;
+                                        EqTypeBtn {
+                                            icon: c.icon;
+                                            accent: c.color;
+                                            clicked => { root.eq-type-menu(i, self.absolute-position.x, self.absolute-position.y + self.height + 6px); }
+                                        }
+                                    }
+                                    HorizontalLayout {
+                                        alignment: center;
+                                        EqFader {
+                                            pos: c.pos;
+                                            db: c.db;
+                                            accent: c.color;
+                                            idle: c.fader-idle;
+                                            drag(v) => { root.eq-fader(i, v); }
+                                            reset => { root.eq-fader(i, 0); }
+                                            wheel(d) => { root.eq-fader(i, c.db + d); }
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        spacing: 1px;
+                                        alignment: center;
+                                        HorizontalLayout {
+                                            alignment: center;
+                                            Knob {
+                                                dial: 30px;
+                                                label-shown: false;
+                                                k: c.freq;
+                                                drag(v) => { root.eq-knob(i, 0, v); }
+                                                reset => { root.eq-knob-reset(i, 0); }
+                                                wheel(d) => { root.eq-knob(i, 0, c.freq.n + d * 0.0011); }
+                                                show-tip(x, y) => { root.eq-show-tip(i, 0, x, y); }
+                                                hide-tip => { root.tip-on = false; }
+                                            }
+                                        }
+                                        HorizontalLayout {
+                                            alignment: center;
+                                            Knob {
+                                                dial: 30px;
+                                                label-shown: false;
+                                                k: c.q;
+                                                drag(v) => { root.eq-knob(i, 1, v); }
+                                                reset => { root.eq-knob-reset(i, 1); }
+                                                wheel(d) => { root.eq-knob(i, 1, c.q.n + d * 0.0011); }
+                                                show-tip(x, y) => { root.eq-show-tip(i, 1, x, y); }
+                                                hide-tip => { root.tip-on = false; }
+                                            }
+                                        }
+                                    }
+                                    Text {
+                                        height: 14px;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                        text: i + 1;
+                                        font-family: "JetBrains Mono";
+                                        font-weight: 700;
+                                        font-size: 9.92px;
+                                        color: c.color;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Text {
+                    text: "Drag a point: frequency + gain (Shift = fine). Wheel on a point: width. Right-click: shape. Double-click: reset. The faders and knobs on the right do the same per band.";
+                    wrap: word-wrap;
+                    font-size: 10.88px;
+                    color: #9aa6bd;
+                    opacity: 0.8;
+                }
+                Rectangle { height: 10px; }
+                if !root.eq-presets-open : HorizontalLayout {
+                    spacing: 6px;
+                    alignment: start;
+                    for c in root.eq-quick : Chip {
+                        label: c.name;
+                        active: c.active;
+                        clicked => { root.eq-preset(c.index); }
+                    }
+                    Chip {
+                        label: root.eq-more-label;
+                        active: root.eq-more-label != "More";
+                        dashed: true;
+                        chevron: true;
+                        clicked => { root.eq-toggle-presets(true); }
+                    }
+                }
+                if root.eq-presets-open : VerticalLayout {
+                    spacing: 7px;
+                    for line in root.eq-lines : HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        if line.indent : Rectangle {
+                            width: 46px;
+                            Text {
+                                y: 10px;
+                                text: line.cat;
+                                font-family: "JetBrains Mono";
+                                font-weight: 700;
+                                font-size: 9.6px;
+                                letter-spacing: 0.768px;
+                                color: #9aa6bd;
+                                opacity: 0.7;
+                            }
+                        }
+                        for c in line.chips : Chip {
+                            label: c.name;
+                            active: c.active;
+                            clicked => { root.eq-preset(c.index); }
+                        }
+                    }
+                    HorizontalLayout {
+                        alignment: end;
+                        Chip {
+                            label: "Less";
+                            dashed: true;
+                            chevron: true;
+                            chevron-up: true;
+                            clicked => { root.eq-toggle-presets(false); }
+                        }
+                    }
+                }
+            }
+        }
+        // shape menu (right-click on a point or the shape button)
+        if root.eq-menu-open : Rectangle {
+            TouchArea { clicked => { root.eq-menu-open = false; } }
+        }
+        if root.eq-menu-open : Rectangle {
+            x: clamp(root.eq-menu-x, 8px, root.width - self.width - 8px);
+            y: clamp(root.eq-menu-y, 8px, root.height - self.height - 8px);
+            width: 170px;
+            height: mcol.preferred-height;
+            border-radius: 12px;
+            background: #0c0e16f5;
+            border-width: 1px;
+            border-color: #ffffff24;
+            drop-shadow-blur: 50px;
+            drop-shadow-offset-y: 18px;
+            drop-shadow-color: #000000d9;
+            Rectangle {
+                x: 6px;
+                width: parent.width - 12px;
+                height: 2px;
+                background: root.eq-menu-color;
+            }
+            TouchArea { }
+            mcol := VerticalLayout {
+                padding: 6px;
+                spacing: 0px;
+                for m[mi] in root.eq-menu-items : Rectangle {
+                    height: 36px;
+                    border-radius: 8px;
+                    background: ma.has-hover ? #ffffff12 : transparent;
+                    border-width: mi == root.eq-menu-items.length - 1 ? 0px : 0px;
+                    if mi == root.eq-menu-items.length - 1 : Rectangle {
+                        y: 0px;
+                        height: 1px;
+                        background: #ffffff14;
+                    }
+                    Path {
+                        x: 10px;
+                        y: (parent.height - 20px) / 2;
+                        width: 20px;
+                        height: 20px;
+                        viewbox-width: 24;
+                        viewbox-height: 24;
+                        commands: m.icon;
+                        stroke: m.active ? root.eq-menu-color : #9aa6bd;
+                        stroke-width: 2px;
+                        stroke-line-cap: round;
+                    }
+                    Text {
+                        x: 40px;
+                        y: (parent.height - self.height) / 2;
+                        text: m.name;
+                        font-size: 12.48px;
+                        color: m.active ? root.eq-menu-color : #ffffff;
+                    }
+                    ma := TouchArea {
+                        mouse-cursor: MouseCursor.pointer;
+                        clicked => {
+                            root.eq-menu-open = false;
+                            root.eq-menu-pick(mi);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── tour overlay (web .tour): the page dims around a hole over the target; clicks go through to the controls
+    if root.tour-step >= 0 : Rectangle {
+        property <length> pad: 8px;
+        // the hole glides to each target (web: .45s spring); no target = a point in the middle
+        property <length> hx: root.tour-target.on ? root.tour-target.x - self.pad : root.width / 2;
+        property <length> hy: root.tour-target.on ? root.tour-target.y - self.pad : root.height / 2;
+        property <length> hw: root.tour-target.on ? root.tour-target.w + self.pad * 2 : 0px;
+        property <length> hh: root.tour-target.on ? root.tour-target.h + self.pad * 2 : 0px;
+        animate hx, hy, hw, hh { duration: 450ms; easing: cubic-bezier(0.34, 1.7, 0.5, 1); }
+        property <float> r: max(0px, min(18px, self.hw / 2, self.hh / 2)) / 1px;
+        property <float> x0: self.hx / 1px;
+        property <float> y0: self.hy / 1px;
+        property <float> x1: (self.hx + self.hw) / 1px;
+        property <float> y1: (self.hy + self.hh) / 1px;
+        opacity: 0;
+        init => { self.opacity = 1; }
+        animate opacity { duration: 250ms; }
+        Path {
+            width: root.width;
+            height: root.height;
+            viewbox-width: root.width / 1px;
+            viewbox-height: root.height / 1px;
+            fill: #03070aa8;
+            fill-rule: evenodd;
+            commands: "M 0 0 L " + root.width / 1px + " 0 L " + root.width / 1px + " " + root.height / 1px + " L 0 " + root.height / 1px + " Z "
+                + "M " + (parent.x0 + parent.r) + " " + parent.y0 + " L " + (parent.x1 - parent.r) + " " + parent.y0
+                + " A " + parent.r + " " + parent.r + " 0 0 1 " + parent.x1 + " " + (parent.y0 + parent.r)
+                + " L " + parent.x1 + " " + (parent.y1 - parent.r)
+                + " A " + parent.r + " " + parent.r + " 0 0 1 " + (parent.x1 - parent.r) + " " + parent.y1
+                + " L " + (parent.x0 + parent.r) + " " + parent.y1
+                + " A " + parent.r + " " + parent.r + " 0 0 1 " + parent.x0 + " " + (parent.y1 - parent.r)
+                + " L " + parent.x0 + " " + (parent.y0 + parent.r)
+                + " A " + parent.r + " " + parent.r + " 0 0 1 " + (parent.x0 + parent.r) + " " + parent.y0 + " Z";
+        }
+        // the accent ring and its glow (web: 0 0 0 2px #2fffc48c, 0 0 30px #2fffc459)
+        for g[i] in [{ d: 9px, a: 0.07 }, { d: 5px, a: 0.14 }, { d: 2px, a: 0.55 }] : Rectangle {
+            x: parent.hx - g.d;
+            y: parent.hy - g.d;
+            width: parent.hw + g.d * 2;
+            height: parent.hh + g.d * 2;
+            visible: parent.hw > 0;
+            border-radius: parent.r * 1px + g.d;
+            border-width: i == 2 ? 2px : 3px;
+            border-color: rgba(47, 255, 196, g.a);
+        }
+
+        tourcard := Rectangle {
+            property <length> vw: root.width;
+            property <length> vh: root.height;
+            property <TourRect> t: root.tour-target;
+            property <length> cw: min(340px, self.vw - 24px);
+            property <length> ch: tl.preferred-height;
+            property <length> below: self.t.y + self.t.h + parent.pad + 14px;
+            property <length> above: self.t.y - parent.pad - 14px - self.ch;
+            property <length> side-y: max(12px, min(self.t.y + self.t.h / 2 - self.ch / 2, self.vh - self.ch - 12px));
+            property <bool> fits-below: self.below + self.ch <= self.vh - 12px;
+            property <bool> fits-above: self.above >= 12px;
+            property <bool> fits-left: self.t.x - parent.pad - 14px - self.cw >= 12px;
+            property <bool> fits-right: self.t.x + self.t.w + parent.pad + 14px + self.cw <= self.vw - 12px;
+            property <length> centred-x: max(12px, min(self.t.x + self.t.w / 2 - self.cw / 2, self.vw - self.cw - 12px));
+            // web placeTour: under the target, else above, else beside it, else at the bottom; phones: away from it
+            property <length> cx: !self.t.on ? (self.vw - self.cw) / 2
+                : self.vw < 600px ? (self.vw - self.cw) / 2
+                : self.fits-below || self.fits-above ? self.centred-x
+                : self.fits-left ? self.t.x - parent.pad - 14px - self.cw
+                : self.fits-right ? self.t.x + self.t.w + parent.pad + 14px
+                : self.centred-x;
+            property <length> cy: !self.t.on ? (self.vh - self.ch) / 2
+                : self.vw < 600px ? (self.t.y + self.t.h / 2 > self.vh / 2 ? 12px : self.vh - self.ch - 12px)
+                : self.fits-below ? self.below
+                : self.fits-above ? self.above
+                : self.fits-left || self.fits-right ? self.side-y
+                : self.vh - self.ch - 12px;
+            x: self.cx;
+            y: self.cy;
+            animate x, y { duration: 450ms; easing: cubic-bezier(0.34, 1.7, 0.5, 1); }
+            width: self.cw;
+            height: self.ch;
+            border-radius: 24px;
+            // web: rgba(16,19,27,.72) over an 18 px backdrop blur; without the blur the page would show through
+            background: #10131bf0;
+            border-width: 1px;
+            border-color: root.tour-done ? #2fffc4 : #ffffff24;
+            animate border-color { duration: 300ms; }
+            drop-shadow-blur: 70px;
+            drop-shadow-offset-y: 30px;
+            drop-shadow-color: #000000bf;
+            TouchArea { }
+            tl := VerticalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                padding-top: 16px;
+                padding-bottom: 12px;
+                Text {
+                    text: (root.tour-step + 1) + " / " + root.tour-count;
+                    font-family: "JetBrains Mono";
+                    font-weight: 600;
+                    font-size: 10.24px;
+                    letter-spacing: 0.82px;
+                    color: #9aa6bd;
+                }
+                Rectangle { height: 4px; }
+                Text {
+                    text: root.tour-step == 0 ? "New sound controls"
+                        : root.tour-step == 1 ? "Press play"
+                        : root.tour-step == 2 ? "Turn a knob"
+                        : root.tour-step == 3 ? "Exact values"
+                        : root.tour-step == 4 ? "Nightcore"
+                        : root.tour-step == 5 ? "Presets"
+                        : root.tour-step == 6 ? "What is what"
+                        : root.tour-step == 7 ? "EQ" : "Visualizer";
+                    font-family: "Space Grotesk";
+                    font-weight: 700;
+                    font-size: 16px;
+                    color: #ffffff;
+                }
+                Rectangle { height: 6px; }
+                VerticalLayout {
+                    if root.tour-step != 6 : Text {
+                        text: root.tour-step == 0 ? "A quick tour, about 30 seconds. Skip it any time, the ? button in the top right brings it back."
+                            : root.tour-step == 1 ? "Start the music first, so you can hear what everything does."
+                            : root.tour-step == 2 ? "Grab Tempo and drag up or right for more, down or left for less. Anywhere on the knob works. Try it now!"
+                            : root.tour-step == 3 ? "Hold Shift while dragging for fine steps. Hover a knob to see its value and what it does, double-click the number to type one. Double-click the knob to reset it."
+                            : root.tour-step == 4 ? "Decides how much the pitch follows Tempo. 0% = only the speed changes. 100% = faster is also higher (nightcore), slower is deeper (slowed). Pitch next to it moves the pitch on its own."
+                            : root.tour-step == 5 ? "Ready-made recipes. One tap and the knobs glide there. Original resets everything."
+                            : root.tour-step == 7 ? "Opens a 7-band EQ over the live spectrum. Drag the coloured points, scroll on one for its width, right-click it for its shape. The dot on the button means the EQ is doing something."
+                            : "The particles react to the music. This button turns them on and off.";
+                        wrap: word-wrap;
+                        font-size: 13.12px;
+                        color: #ffffff;
+                    }
+                    if root.tour-step == 6 : VerticalLayout {
+                        spacing: 3px;
+                        for item in [
+                            { b: "Master", t: ": DJ filter and volume. Above 100% is a warm, dirty boost." },
+                            { b: "Speed & Pitch", t: ": tempo, pitch and nightcore." },
+                            { b: "Space", t: ": reverb and echo. Room, Time and Repeats wake up once Reverb or Echo is turned up." },
+                            { b: "Stereo", t: ": width and 8D (best with headphones)." },
+                        ] : HorizontalLayout {
+                            spacing: 8px;
+                            Text { text: "•"; font-size: 13.12px; color: #ffffff; vertical-alignment: top; horizontal-stretch: 0; }
+                            StyledText {
+                                text: @markdown("**\{item.b}**\{item.t}");
+                                default-color: #ffffff;
+                                default-font-size: 13.12px;
+                                horizontal-stretch: 1;
+                            }
+                        }
+                    }
+                    if root.tour-done : VerticalLayout {
+                        padding-top: 8px;
+                        Text {
+                            text: "Nice! That is how every knob works.";
+                            wrap: word-wrap;
+                            font-size: 13.12px;
+                            font-weight: 600;
+                            color: #2fffc4;
+                        }
+                    }
+                }
+                Rectangle { height: 14px; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    TourBtn { label: "Skip"; plain: true; clicked => { root.tour-close(true); } }
+                    Rectangle { }
+                    TourBtn {
+                        label: "Back";
+                        opacity: root.tour-step > 0 ? 1 : 0;
+                        enabled: root.tour-step > 0;
+                        clicked => { root.tour-show(root.tour-step - 1); }
+                    }
+                    TourBtn {
+                        label: root.tour-step == 0 ? "Start" : root.tour-step == root.tour-count - 1 ? "Done" : "Next";
+                        primary: true;
+                        enabled: !root.tour-blocked;
+                        clicked => {
+                            if root.tour-step >= root.tour-count - 1 { root.tour-close(true); } else { root.tour-show(root.tour-step + 1); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // knob tooltip (web .tip): name in the knob colour, the explanation, how to use it
+    if root.tip-on : tipbox := Rectangle {
+        property <KnobData> tk: root.tip-data;
+        width: 260px;
+        height: tip-col.preferred-height;
+        x: clamp(root.tip-x - self.width / 2, 8px, root.width - self.width - 8px);
+        y: root.tip-y - self.height - 10px < 8px ? root.tip-y + 92px : root.tip-y - self.height - 10px;
+        border-radius: 12px;
+        background: #0c0e16f0;
+        border-width: 1px;
+        border-color: #ffffff24;
+        drop-shadow-blur: 40px;
+        drop-shadow-offset-y: 14px;
+        drop-shadow-color: #000000cc;
+        Rectangle {
+            y: 0px;
+            height: 2px;
+            x: 6px;
+            width: parent.width - 12px;
+            background: tipbox.tk.color;
+        }
+        tip-col := VerticalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: 10px;
+            padding-bottom: 10px;
+            spacing: 3px;
+            Text { text: tk.name; font-size: 12.48px; font-weight: 700; color: tk.color; }
+            Text { text: tk.tip; font-size: 12.16px; wrap: word-wrap; color: tk.idle ? #ffd866 : #ffffff; }
+            if !tk.idle : VerticalLayout {
+                padding-top: 3px;
+                Text { text: "Drag up or right = more, down or left = less. Shift = fine. Double-click = reset."; font-size: 10.56px; wrap: word-wrap; color: #9aa6bd; }
+            }
+        }
+    }
+
+    // ── output menu ──
+    if root.menu-open : Rectangle {
+        // click outside closes
+        TouchArea { clicked => { root.menu-open = false; } }
+    }
+    if root.menu-open : Rectangle {
+        x: card.x + 26px;
+        y: min(card.y - root.scroll-pos + card.height - 24px + 6px, root.height - self.height - 10px);
+        width: card.width - 52px;
+        height: menu.preferred-height;
+        border-radius: 16px;
+        background: #14111ff2;
+        border-width: 1px;
+        border-color: #ffffff24;
+        drop-shadow-blur: 30px;
+        drop-shadow-offset-y: 12px;
+        drop-shadow-color: #000000b0;
+        TouchArea { }
+        menu := VerticalLayout {
+            padding: 10px;
+            spacing: 2px;
+            MenuHeading { text: "OUTPUT DEVICE"; }
+            for d[i] in root.devices : MenuRow {
+                label: d.name;
+                note: d.note;
+                selected: d.selected;
+                clicked => { root.select-device(i); }
+            }
+            Rectangle { height: 6px; }
+            MenuHeading { text: "MODE"; }
+            MenuRow {
+                label: "Exclusive (bit-perfect)";
+                note: "The player owns the device: no system mixer, no resampling.";
+                selected: root.exclusive;
+                clicked => { root.set-exclusive(true); }
+            }
+            MenuRow {
+                label: "Shared";
+                note: "Through the system mixer, other apps keep playing.";
+                selected: !root.exclusive;
+                clicked => { root.set-exclusive(false); }
+            }
+            Rectangle { height: 6px; }
+            MenuHeading { text: "WHEN PAUSED"; }
+            MenuRow {
+                label: "Release the device";
+                note: "Other apps can play while the track is paused.";
+                selected: root.release-on-pause;
+                clicked => { root.set-release-on-pause(true); }
+            }
+            MenuRow {
+                label: "Keep it";
+                note: "Resumes instantly; other apps stay silent in exclusive mode.";
+                selected: !root.release-on-pause;
+                clicked => { root.set-release-on-pause(false); }
+            }
+        }
+    }
+
+    if root.status != "" : Rectangle {
+        x: card.x;
+        y: card.y - root.scroll-pos + card.height + 12px;
+        width: card.width;
+        height: st.preferred-height + 16px;
+        border-radius: 12px;
+        background: root.status-error ? #ff6b6b1f : #ffffff0f;
+        st := Text {
+            x: 12px;
+            width: parent.width - 24px;
+            text: root.status;
+            wrap: word-wrap;
+            font-size: 12.5px;
+            color: root.status-error ? #ff6b6b : #9aa6bd;
+        }
+    }
+
+    if root.toast != "" : Rectangle {
+        x: (root.width - self.width) / 2;
+        y: root.height - 64px;
+        width: tt.preferred-width + 28px;
+        height: 34px;
+        border-radius: 17px;
+        background: #14111ff2;
+        border-width: 1px;
+        border-color: #ffffff24;
+        tt := Text {
+            x: 14px;
+            y: (parent.height - self.height) / 2;
+            text: root.toast;
+            font-size: 12.5px;
+            color: #ffffff;
+        }
+    }
+}

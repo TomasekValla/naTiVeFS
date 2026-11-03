@@ -1,0 +1,35 @@
+[package]
+name = "tvfs-core"
+description = "TVFS API client, models, link handling, credentials and update checks for naTiVeFS"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+reqwest.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+url.workspace = true
+bytes = "1"
+percent-encoding = "2"
+directories = "6"
+toml = "0.8"
+semver = "1"
+shlex = "1"
+minisign-verify = "0.2"
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust", "vendored"] }
+tokio-util = "0.7"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+mime_guess = "2"
+infer = { version = "0.19", default-features = false, features = ["std"] }
+fastrand = "2"
+# Markdown for the native reader (same parser Slint uses internally)
+pulldown-cmark = { version = "0.13", default-features = false }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"] }
+wiremock = "0.6"
+tempfile = "3"

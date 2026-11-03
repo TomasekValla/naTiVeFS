@@ -1,0 +1,776 @@
+// Video player window (libmpv). The video is drawn by mpv underneath (OpenGL, before Slint renders);
+// everything here is an overlay on top of it. Look: the app's glass cards; layout and shortcuts like VLC.
+
+import { Palette, LocalBadge, Anim } from "common.slint";
+
+export struct TrackItem {
+    id: int,
+    label: string,
+    selected: bool,
+}
+
+export struct StatRow {
+    key: string,
+    value: string,
+    // section title row
+    head: bool,
+}
+
+// small glyph button (icon drawn as a path in a 24 x 24 view box)
+component IconButton inherits Rectangle {
+    in property <string> path;
+    in property <string> text;
+    in property <bool> active;
+    in property <bool> filled;
+    in property <length> size: 36px;
+    in property <string> tip;
+    // two pixel-aligned bars (a path's bar edges fall between pixels and look uneven at this size)
+    in property <bool> pause;
+    callback clicked();
+    width: root.text != "" ? max(root.size, label.preferred-width + 18px) : root.size;
+    height: root.size;
+    border-radius: root.size / 2;
+    background: ta.pressed ? #ffffff2e : (ta.has-hover ? #ffffff1f : (root.active ? #2fffc41f : transparent));
+    animate background { duration: Anim.fast; }
+    if root.pause : Rectangle {
+        // the same 2px weight as the stroked icons next to it
+        property <length> bar-w: 2px;
+        property <length> bar-h: round(root.size * 0.4 / 1px) * 1px;
+        property <length> gap: round(root.size * 0.14 / 1px) * 1px;
+        width: 2 * self.bar-w + self.gap;
+        height: self.bar-h;
+        x: round((root.width - self.width) / 2 / 1px) * 1px;
+        y: round((root.height - self.height) / 2 / 1px) * 1px;
+        Rectangle { x: 0px; y: 0px; width: parent.bar-w; height: parent.bar-h; background: #ffffff; }
+        Rectangle { x: parent.bar-w + parent.gap; y: 0px; width: parent.bar-w; height: parent.bar-h; background: #ffffff; }
+    }
+    if root.path != "" && !root.pause : Path {
+        width: root.size * 0.56;
+        height: root.size * 0.56;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        commands: root.path;
+        stroke: root.filled ? transparent : (root.active ? Palette.dot-good : #ffffff);
+        fill: root.filled ? (root.active ? Palette.dot-good : #ffffff) : transparent;
+        stroke-width: 2px;
+    }
+    label := Text {
+        visible: root.text != "";
+        text: root.text;
+        color: root.active ? Palette.dot-good : #ffffff;
+        font-size: 12.5px;
+        font-weight: 800;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+    if ta.has-hover && root.tip != "" : Rectangle {
+        y: -34px;
+        x: (root.width - self.width) / 2;
+        width: tip-t.preferred-width + 16px;
+        height: 24px;
+        border-radius: 8px;
+        background: #0c0e14e6;
+        tip-t := Text { text: root.tip; color: #ffffff; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+    }
+}
+
+component MenuCard inherits Rectangle {
+    border-radius: 16px;
+    background: #12151dee;
+    border-width: 1px;
+    border-color: #ffffff24;
+    drop-shadow-color: #00000080;
+    drop-shadow-blur: 24px;
+    drop-shadow-offset-y: 8px;
+}
+
+component MenuItem inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    in property <string> hint;
+    callback clicked();
+    height: 32px;
+    border-radius: 9px;
+    background: ta.has-hover ? #ffffff14 : transparent;
+    animate background { duration: Anim.fast; }
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 12px;
+        spacing: 8px;
+        Rectangle {
+            width: 14px;
+            if root.selected : Path {
+                width: 12px;
+                height: 12px;
+                y: (parent.height - 12px) / 2;
+                viewbox-width: 12;
+                viewbox-height: 12;
+                commands: "M 2 6.4 L 4.9 9.2 L 10 3";
+                stroke: Palette.dot-good;
+                stroke-width: 2px;
+            }
+        }
+        Text {
+            horizontal-stretch: 1;
+            text: root.label;
+            color: root.selected ? Palette.dot-good : #ffffff;
+            font-size: 13px;
+            font-weight: root.selected ? 700 : 500;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        if root.hint != "" : Text { text: root.hint; color: #ffffff80; font-size: 11.5px; vertical-alignment: center; }
+    }
+    ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+}
+
+component MenuTitle inherits Text {
+    color: #ffffff80;
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    height: 24px;
+    vertical-alignment: center;
+}
+
+component Toggle inherits Rectangle {
+    in property <bool> on;
+    callback toggled();
+    width: 34px;
+    height: 20px;
+    border-radius: 10px;
+    background: root.on ? Palette.brand : #ffffff2e;
+    Rectangle {
+        x: root.on ? parent.width - 18px : 2px;
+        y: 2px;
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        background: #ffffff;
+    }
+    TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.toggled(); } }
+}
+
+// horizontal slider (seek bar, volume)
+component Slider inherits Rectangle {
+    in property <float> value;
+    // buffered part (seek bar)
+    in property <float> buffered: 0;
+    in property <float> maximum: 1;
+    in property <length> track: 5px;
+    // 0..1 position under the cursor while hovering (seek bar hover time)
+    out property <float> hover-pos: clamp(ta.mouse-x / max(1px, root.width), 0, 1);
+    out property <bool> hovering: ta.has-hover;
+    out property <bool> dragging: ta.pressed;
+    callback moved(float);
+    callback released(float);
+    height: 18px;
+    property <bool> big: ta.has-hover || ta.pressed;
+    Rectangle {
+        y: (parent.height - self.height) / 2;
+        height: root.big ? root.track + 2px : root.track;
+        border-radius: self.height / 2;
+        background: #ffffff33;
+        Rectangle {
+            x: 0px;
+            width: parent.width * clamp(root.buffered / max(0.0001, root.maximum), 0, 1);
+            border-radius: parent.border-radius;
+            background: #ffffff40;
+        }
+        Rectangle {
+            x: 0px;
+            width: parent.width * clamp(root.value / max(0.0001, root.maximum), 0, 1);
+            border-radius: parent.border-radius;
+            background: Palette.brand;
+        }
+    }
+    if root.big : Rectangle {
+        x: root.width * clamp(root.value / max(0.0001, root.maximum), 0, 1) - 7px;
+        y: (parent.height - 14px) / 2;
+        width: 14px;
+        height: 14px;
+        border-radius: 7px;
+        background: #ffffff;
+        drop-shadow-color: #00000080;
+        drop-shadow-blur: 6px;
+    }
+    ta := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                root.moved(clamp(self.mouse-x / max(1px, root.width), 0, 1) * root.maximum);
+            }
+            if (e.kind == PointerEventKind.up && e.button == PointerEventButton.left) {
+                root.released(clamp(self.mouse-x / max(1px, root.width), 0, 1) * root.maximum);
+            }
+        }
+        moved => {
+            if (self.pressed) { root.moved(clamp(self.mouse-x / max(1px, root.width), 0, 1) * root.maximum); }
+        }
+        scroll-event(e) => { return reject; }
+    }
+}
+
+export component PlayerWindow inherits Window {
+    in property <string> file-name;
+    // a file on this computer ("Use TVFS tools locally"): Local badge, no link, Download = Show in folder
+    in property <bool> local;
+    in property <bool> playing;
+    in property <float> position;
+    in property <float> duration;
+    in property <float> buffered;
+    in property <string> pos-text: "0:00";
+    in property <string> dur-text: "0:00";
+    in property <float> volume: 100;
+    in property <bool> muted;
+    in property <float> speed: 1;
+    in property <bool> pitch-correction: true;
+    in property <bool> hwdec: true;
+    in property <[TrackItem]> sub-tracks;
+    in property <[TrackItem]> audio-tracks;
+    in property <bool> has-video: true;
+    // "Buffering 45 %", "Loading…"
+    in property <string> status;
+    in property <string> error;
+    in property <string> osd;
+    // stats overlay: 0 off, 1 basic, 2 full, 3 full + graphs
+    in property <int> stats-level;
+    in property <[StatRow]> stats;
+    // graph samples 0..1 (network speed, buffer), newest last
+    in property <[float]> graph-net;
+    in property <[float]> graph-buf;
+    in property <string> graph-net-label;
+    in property <string> graph-buf-label;
+    in-out property <bool> fullscreen-on;
+    // controls visible (mouse moved recently, paused, or a menu is open)
+    in-out property <bool> controls: true;
+    // volume above 150 % before a new video: ask first
+    in property <bool> ask-volume;
+    in property <string> toast;
+    // 0 none, 1 speed, 2 subtitles, 3 audio, 4 more
+    in-out property <int> menu;
+    in-out property <string> custom-speed;
+    callback toggle-pause();
+    callback seek-to(float);
+    callback seek-by(float);
+    callback set-volume(float);
+    callback toggle-mute();
+    callback set-speed(float);
+    callback custom-speed-accepted(string);
+    callback toggle-pitch();
+    callback toggle-hwdec();
+    callback pick-sub(int);
+    callback pick-audio(int);
+    callback cycle-sub();
+    callback cycle-audio();
+    callback cycle-stats();
+    callback toggle-fullscreen();
+    callback frame-step();
+    callback activity();
+    callback volume-answer(bool);
+    callback copy-link();
+    callback download();
+    callback open-browser();
+    // +1 zoom in, -1 zoom out, 0 back to 100 % (the controls; the video always fills the window)
+    callback zoom-step(int);
+    title: root.file-name + " — naTiVeFS";
+    icon: @image-url("../../../assets/app-64.png");
+    default-font-family: "Inter";
+    background: #000000;
+    min-width: 420px;
+    min-height: 260px;
+    preferred-width: 1280px;
+    preferred-height: 720px;
+
+    property <length> bar-h: 96px;
+    property <bool> show-ui: root.controls || !root.playing || root.menu != 0 || root.error != "";
+    property <float> speeds-a: 0;
+
+    keys := FocusScope {
+        key-pressed(e) => {
+            root.activity();
+            if (root.speed-editing) { return reject; }
+            // Ctrl (Cmd on macOS) + plus / minus / 0 zoom like a browser (without Ctrl, - / + change the speed)
+            if (e.modifiers.control && (e.text == "=" || e.text == "+")) { root.zoom-step(1); return accept; }
+            if (e.modifiers.control && (e.text == "-" || e.text == "_")) { root.zoom-step(-1); return accept; }
+            // "é" = the 0 key on a Czech keyboard (browsers go by the physical key)
+            if (e.modifiers.control && (e.text == "0" || e.text == "é")) { root.zoom-step(0); return accept; }
+            if (e.text == " " || e.text == "k" || e.text == "K") { root.toggle-pause(); return accept; }
+            if (e.text == "f" || e.text == "F" || e.text == Key.F11) { root.toggle-fullscreen(); return accept; }
+            if (e.text == Key.Escape) {
+                if (root.menu != 0) { root.menu = 0; return accept; }
+                if (root.fullscreen-on) { root.toggle-fullscreen(); return accept; }
+                return reject;
+            }
+            if (e.text == Key.LeftArrow) { root.seek-by(e.modifiers.control ? -60 : (e.modifiers.shift ? -3 : -10)); return accept; }
+            if (e.text == Key.RightArrow) { root.seek-by(e.modifiers.control ? 60 : (e.modifiers.shift ? 3 : 10)); return accept; }
+            if (e.text == "j" || e.text == "J") { root.seek-by(-10); return accept; }
+            if (e.text == "l" || e.text == "L") { root.seek-by(10); return accept; }
+            if (e.text == Key.UpArrow) { root.set-volume(min(200, root.volume + 5)); return accept; }
+            if (e.text == Key.DownArrow) { root.set-volume(max(0, root.volume - 5)); return accept; }
+            if (e.text == "m" || e.text == "M") { root.toggle-mute(); return accept; }
+            if (e.text == "[" || e.text == "-") { root.set-speed(max(0.1, round((root.speed - 0.1) * 100) / 100)); return accept; }
+            if (e.text == "]" || e.text == "+") { root.set-speed(min(8, round((root.speed + 0.1) * 100) / 100)); return accept; }
+            if (e.text == "=" || e.text == Key.Backspace) { root.set-speed(1); return accept; }
+            if (e.text == "v" || e.text == "V") { root.cycle-sub(); return accept; }
+            if (e.text == "b" || e.text == "B") { root.cycle-audio(); return accept; }
+            if (e.text == "i" || e.text == "I") { root.cycle-stats(); return accept; }
+            if (e.text == "e" || e.text == "E" || e.text == ".") { root.frame-step(); return accept; }
+            if (e.text == Key.Home) { root.seek-to(0); return accept; }
+            if (e.text.is-float() && e.text != "-" && e.text != "+" && e.text != "." && !e.modifiers.control) { root.seek-to(root.duration * (e.text.to-float() / 10)); return accept; }
+            return reject;
+        }
+
+        // the video area: click = pause, double-click = fullscreen, wheel = volume (like VLC)
+        video-ta := TouchArea {
+            mouse-cursor: root.show-ui ? MouseCursor.default : MouseCursor.none;
+            clicked => {
+                if (root.menu != 0) { root.menu = 0; return; }
+                root.toggle-pause();
+            }
+            double-clicked => { root.toggle-pause(); root.toggle-fullscreen(); }
+            scroll-event(e) => {
+                root.activity();
+                if (e.delta-y > 0) { root.set-volume(min(200, root.volume + 5)); }
+                if (e.delta-y < 0) { root.set-volume(max(0, root.volume - 5)); }
+                return accept;
+            }
+        }
+
+        if root.status != "" && root.error == "" : Rectangle {
+            x: (root.width - self.width) / 2;
+            y: (root.height - self.height) / 2;
+            width: st-t.preferred-width + 36px;
+            height: 40px;
+            border-radius: 20px;
+            background: #0c0e14b3;
+            st-t := Text { text: root.status; color: #ffffffd9; font-size: 13px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+        }
+
+        if !root.has-video && root.error == "" : Text {
+            y: root.height / 2 - 60px;
+            width: root.width;
+            horizontal-alignment: center;
+            text: "Audio only";
+            color: #ffffff59;
+            font-size: 15px;
+        }
+
+        if root.error != "" : MenuCard {
+            x: (root.width - self.width) / 2;
+            y: (root.height - self.height) / 2;
+            width: min(root.width - 40px, 440px);
+            height: err-l.preferred-height;
+            err-l := VerticalLayout {
+                padding: 22px;
+                spacing: 12px;
+                Text { text: "This video cannot be played"; color: #ffffff; font-size: 16px; font-weight: 800; }
+                Text { text: root.error; color: #ff9b9b; font-size: 13px; wrap: word-wrap; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    if !root.local : MenuItem { label: "Open in browser"; width: 150px; clicked => { root.open-browser(); } }
+                    if !root.local : MenuItem { label: "Download"; width: 120px; clicked => { root.download(); } }
+                }
+            }
+        }
+
+        // OSD: volume / speed changes and the like
+        if root.osd != "" : Rectangle {
+            x: root.width - self.width - 24px;
+            y: 24px;
+            width: osd-t.preferred-width + 32px;
+            height: 40px;
+            border-radius: 14px;
+            background: #0c0e14b3;
+            osd-t := Text { text: root.osd; color: #ffffff; font-size: 15px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
+        }
+
+        // ── statistics overlay ─────────────────────────────────────────
+        if root.stats-level > 0 : MenuCard {
+            x: 18px;
+            y: 18px;
+            width: 330px;
+            height: min(stats-l.preferred-height, root.height - 36px - (root.show-ui ? root.bar-h : 0px));
+            clip: true;
+            background: #0c0e14d9;
+            stats-l := VerticalLayout {
+                padding: 14px;
+                spacing: 1px;
+                for r in root.stats : HorizontalLayout {
+                    spacing: 10px;
+                    padding-top: r.head ? 6px : 0px;
+                    if r.head : Text { text: r.key; color: Palette.dot-good; font-size: 10.5px; font-weight: 800; letter-spacing: 1px; }
+                    if !r.head : Text { text: r.key; color: #ffffff8c; font-size: 11.5px; width: 112px; }
+                    if !r.head : Text { text: r.value; color: #ffffff; font-family: "JetBrains Mono"; font-size: 11.5px; horizontal-stretch: 1; wrap: word-wrap; }
+                }
+                if root.stats-level >= 3 : VerticalLayout {
+                    padding-top: 10px;
+                    spacing: 4px;
+                    Text { text: root.graph-net-label; color: #ffffff8c; font-size: 11px; }
+                    Rectangle {
+                        height: 44px;
+                        border-radius: 8px;
+                        background: #ffffff0d;
+                        clip: true;
+                        for v[k] in root.graph-net : Rectangle {
+                            x: k * (parent.width / max(1, root.graph-net.length));
+                            y: parent.height - self.height;
+                            width: max(1px, parent.width / max(1, root.graph-net.length) - 1px);
+                            height: parent.height * clamp(v, 0, 1);
+                            background: #2fffc4b3;
+                        }
+                    }
+                    Text { text: root.graph-buf-label; color: #ffffff8c; font-size: 11px; }
+                    Rectangle {
+                        height: 44px;
+                        border-radius: 8px;
+                        background: #ffffff0d;
+                        clip: true;
+                        for v[k] in root.graph-buf : Rectangle {
+                            x: k * (parent.width / max(1, root.graph-buf.length));
+                            y: parent.height - self.height;
+                            width: max(1px, parent.width / max(1, root.graph-buf.length) - 1px);
+                            height: parent.height * clamp(v, 0, 1);
+                            background: #b083ffb3;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── controls ───────────────────────────────────────────────────
+        if root.show-ui : Rectangle {
+            y: 0px;
+            height: 64px;
+            background: @linear-gradient(180deg, #000000a6 0%, #00000000 100%);
+            Text {
+                x: root.stats-level > 0 ? 366px : 22px;
+                y: 18px;
+                width: parent.width - self.x - 22px;
+                text: root.file-name;
+                color: #ffffff;
+                font-size: 15px;
+                font-weight: 700;
+                overflow: elide;
+            }
+            if root.local : LocalBadge {
+                x: root.stats-level > 0 ? 366px : 22px;
+                y: 42px;
+            }
+        }
+        if root.show-ui : Rectangle {
+            y: root.height - root.bar-h - 14px;
+            x: 14px;
+            width: root.width - 28px;
+            height: root.bar-h;
+            border-radius: 22px;
+            background: #12151dcc;
+            border-width: 1px;
+            border-color: #ffffff1f;
+            drop-shadow-color: #00000066;
+            drop-shadow-blur: 24px;
+            TouchArea { moved => { root.activity(); } }
+            VerticalLayout {
+                padding-left: 18px;
+                padding-right: 18px;
+                padding-top: 10px;
+                padding-bottom: 10px;
+                spacing: 4px;
+                seek := Slider {
+                    value: root.position;
+                    buffered: root.buffered;
+                    maximum: max(0.001, root.duration);
+                    moved(v) => { root.seek-to(v); }
+                    released(v) => { root.seek-to(v); }
+                    // hover time
+                    if self.hovering && root.duration > 0 : Rectangle {
+                        x: clamp(seek.hover-pos * seek.width - self.width / 2, 0px, seek.width - self.width);
+                        y: -30px;
+                        width: hover-t.preferred-width + 14px;
+                        height: 22px;
+                        border-radius: 7px;
+                        background: #0c0e14e6;
+                        hover-t := Text {
+                            property <int> s: floor(seek.hover-pos * root.duration);
+                            text: (self.s >= 3600 ? (floor(self.s / 3600) + ":" + (mod(floor(self.s / 60), 60) < 10 ? "0" : "")) : "") + mod(floor(self.s / 60), 60) + ":" + (mod(self.s, 60) < 10 ? "0" : "") + mod(self.s, 60);
+                            color: #ffffff;
+                            font-size: 11px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 2px;
+                    IconButton {
+                        tip: root.playing ? "Pause (Space)" : "Play (Space)";
+                        filled: true;
+                        pause: root.playing;
+                        path: "M 7 4 L 20 12 L 7 20 Z";
+                        clicked => { root.toggle-pause(); }
+                    }
+                    IconButton { tip: "Back 10 s (←)"; path: "M 11 6 L 5 12 L 11 18 M 19 6 L 13 12 L 19 18"; clicked => { root.seek-by(-10); } }
+                    IconButton { tip: "Forward 10 s (→)"; path: "M 13 6 L 19 12 L 13 18 M 5 6 L 11 12 L 5 18"; clicked => { root.seek-by(10); } }
+                    Text {
+                        text: root.pos-text + " / " + root.dur-text;
+                        color: #ffffffd9;
+                        font-size: 12.5px;
+                        font-family: "JetBrains Mono";
+                        vertical-alignment: center;
+                        min-width: self.preferred-width + 12px;
+                        horizontal-alignment: center;
+                    }
+                    IconButton {
+                        tip: root.muted ? "Unmute (M)" : "Mute (M)";
+                        path: root.muted || root.volume == 0 ? "M 4 9 L 8 9 L 13 5 L 13 19 L 8 15 L 4 15 Z M 17 9 L 22 15 M 22 9 L 17 15" : (root.volume < 50 ? "M 4 9 L 8 9 L 13 5 L 13 19 L 8 15 L 4 15 Z M 16.5 9.5 A 3.5 3.5 0 0 1 16.5 14.5" : "M 4 9 L 8 9 L 13 5 L 13 19 L 8 15 L 4 15 Z M 16.5 9.5 A 3.5 3.5 0 0 1 16.5 14.5 M 19 7 A 7 7 0 0 1 19 17");
+                        clicked => { root.toggle-mute(); }
+                    }
+                    Rectangle {
+                        width: 96px;
+                        Slider {
+                            y: (parent.height - self.height) / 2;
+                            width: parent.width;
+                            value: root.muted ? 0 : root.volume;
+                            maximum: 200;
+                            track: 4px;
+                            moved(v) => { root.set-volume(round(v)); }
+                            released(v) => { root.set-volume(round(v)); }
+                        }
+                        // 100 % mark
+                        Rectangle { x: parent.width / 2 - 1px; y: parent.height / 2 + 5px; width: 2px; height: 4px; background: #ffffff59; }
+                    }
+                    Text {
+                        text: round(root.volume) + " %";
+                        color: root.volume > 150 ? Palette.warn : #ffffffb3;
+                        font-size: 11.5px;
+                        vertical-alignment: center;
+                        min-width: 44px;
+                        horizontal-alignment: center;
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    IconButton {
+                        tip: "Playback speed ([ / ])";
+                        text: (round(root.speed * 100) / 100) + "×";
+                        active: root.menu == 1 || root.speed != 1;
+                        clicked => { root.menu = root.menu == 1 ? 0 : 1; }
+                    }
+                    IconButton {
+                        tip: "Subtitles (V)";
+                        text: "CC";
+                        active: root.menu == 2;
+                        clicked => { root.menu = root.menu == 2 ? 0 : 2; }
+                    }
+                    IconButton {
+                        tip: "Audio track (B)";
+                        path: "M 9 18 L 9 6 L 20 4 L 20 16 M 9 18 A 2.5 2.5 0 1 1 8.99 18 M 20 16 A 2.5 2.5 0 1 1 19.99 16";
+                        active: root.menu == 3;
+                        clicked => { root.menu = root.menu == 3 ? 0 : 3; }
+                    }
+                    IconButton {
+                        tip: "Statistics (I)";
+                        path: "M 4 20 L 4 13 M 9 20 L 9 8 M 14 20 L 14 11 M 19 20 L 19 4";
+                        active: root.stats-level > 0;
+                        clicked => { root.cycle-stats(); }
+                    }
+                    IconButton {
+                        tip: "More";
+                        filled: true;
+                        path: "M 3.5 12 A 2 2 0 1 0 7.5 12 A 2 2 0 1 0 3.5 12 Z M 10 12 A 2 2 0 1 0 14 12 A 2 2 0 1 0 10 12 Z M 16.5 12 A 2 2 0 1 0 20.5 12 A 2 2 0 1 0 16.5 12 Z";
+                        active: root.menu == 4;
+                        clicked => { root.menu = root.menu == 4 ? 0 : 4; }
+                    }
+                    IconButton {
+                        tip: root.fullscreen-on ? "Exit fullscreen (F)" : "Fullscreen (F)";
+                        path: root.fullscreen-on ? "M 9 4 L 9 9 L 4 9 M 15 4 L 15 9 L 20 9 M 9 20 L 9 15 L 4 15 M 15 20 L 15 15 L 20 15" : "M 4 9 L 4 4 L 9 4 M 15 4 L 20 4 L 20 9 M 4 15 L 4 20 L 9 20 M 20 15 L 20 20 L 15 20";
+                        clicked => { root.toggle-fullscreen(); }
+                    }
+                }
+            }
+        }
+
+        // ── menus (above the bar, right side) ──────────────────────────
+        if root.menu == 1 : MenuCard {
+            // fades in (web: 0.22 s on overlays)
+            opacity: 0;
+            init => { self.opacity = 1; }
+            animate opacity { duration: Anim.overlay; }
+            x: root.width - self.width - 28px;
+            y: root.height - root.bar-h - 26px - self.height;
+            width: 250px;
+            height: speed-l.preferred-height;
+            TouchArea { }
+            speed-l := VerticalLayout {
+                padding: 10px;
+                spacing: 2px;
+                MenuTitle { text: "PLAYBACK SPEED"; }
+                for s in [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 3, 4] : MenuItem {
+                    label: s == 1 ? "Normal (1×)" : s + "×";
+                    selected: abs(root.speed - s) < 0.001;
+                    clicked => { root.set-speed(s); }
+                }
+                HorizontalLayout {
+                    padding-top: 6px;
+                    padding-left: 10px;
+                    padding-right: 6px;
+                    spacing: 8px;
+                    Text { text: "Custom"; color: #ffffffb3; font-size: 12.5px; vertical-alignment: center; }
+                    Rectangle {
+                        height: 30px;
+                        border-radius: 8px;
+                        background: #ffffff12;
+                        border-width: 1px;
+                        border-color: speed-input.has-focus ? Palette.accent : #ffffff24;
+                        speed-input := TextInput {
+                            x: 10px;
+                            width: parent.width - 20px;
+                            height: parent.height;
+                            vertical-alignment: center;
+                            text <=> root.custom-speed;
+                            color: #ffffff;
+                            font-size: 13px;
+                            input-type: InputType.decimal;
+                            changed has-focus => { root.speed-editing = self.has-focus; }
+                            accepted => { root.custom-speed-accepted(self.text); keys.focus(); }
+                        }
+                        if root.custom-speed == "" : Text { x: 10px; height: parent.height; vertical-alignment: center; text: "0.1 – 8"; color: #ffffff59; font-size: 13px; }
+                    }
+                    Text { text: "×"; color: #ffffffb3; font-size: 13px; vertical-alignment: center; }
+                }
+                Rectangle { height: 6px; }
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 8px;
+                    height: 34px;
+                    spacing: 8px;
+                    Text { horizontal-stretch: 1; text: "Keep pitch"; color: #ffffff; font-size: 13px; vertical-alignment: center; }
+                    VerticalLayout { alignment: center; Toggle { on: root.pitch-correction; toggled => { root.toggle-pitch(); } } }
+                }
+            }
+        }
+        if root.menu == 2 : MenuCard {
+            // fades in (web: 0.22 s on overlays)
+            opacity: 0;
+            init => { self.opacity = 1; }
+            animate opacity { duration: Anim.overlay; }
+            x: root.width - self.width - 28px;
+            y: root.height - root.bar-h - 26px - self.height;
+            width: 300px;
+            height: min(sub-l.preferred-height, root.height - root.bar-h - 60px);
+            clip: true;
+            TouchArea { }
+            sub-l := VerticalLayout {
+                padding: 10px;
+                spacing: 2px;
+                MenuTitle { text: "SUBTITLES"; }
+                MenuItem { label: "Off"; selected: !root.sub-tracks-any-selected; clicked => { root.pick-sub(0); } }
+                for t in root.sub-tracks : MenuItem { label: t.label; selected: t.selected; clicked => { root.pick-sub(t.id); } }
+                if root.sub-tracks.length == 0 : Text { text: "  This video has no subtitles."; color: #ffffff80; font-size: 12px; height: 28px; vertical-alignment: center; }
+            }
+        }
+        if root.menu == 3 : MenuCard {
+            // fades in (web: 0.22 s on overlays)
+            opacity: 0;
+            init => { self.opacity = 1; }
+            animate opacity { duration: Anim.overlay; }
+            x: root.width - self.width - 28px;
+            y: root.height - root.bar-h - 26px - self.height;
+            width: 300px;
+            height: min(audio-l.preferred-height, root.height - root.bar-h - 60px);
+            clip: true;
+            TouchArea { }
+            audio-l := VerticalLayout {
+                padding: 10px;
+                spacing: 2px;
+                MenuTitle { text: "AUDIO TRACK"; }
+                for t in root.audio-tracks : MenuItem { label: t.label; selected: t.selected; clicked => { root.pick-audio(t.id); } }
+                if root.audio-tracks.length == 0 : Text { text: "  No audio."; color: #ffffff80; font-size: 12px; height: 28px; vertical-alignment: center; }
+            }
+        }
+        if root.menu == 4 : MenuCard {
+            // fades in (web: 0.22 s on overlays)
+            opacity: 0;
+            init => { self.opacity = 1; }
+            animate opacity { duration: Anim.overlay; }
+            x: root.width - self.width - 28px;
+            y: root.height - root.bar-h - 26px - self.height;
+            width: 260px;
+            height: more-l.preferred-height;
+            TouchArea { }
+            more-l := VerticalLayout {
+                padding: 10px;
+                spacing: 2px;
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 8px;
+                    height: 34px;
+                    spacing: 8px;
+                    Text { horizontal-stretch: 1; text: "Hardware decoding"; color: #ffffff; font-size: 13px; vertical-alignment: center; }
+                    VerticalLayout { alignment: center; Toggle { on: root.hwdec; toggled => { root.toggle-hwdec(); } } }
+                }
+                MenuItem { label: "Statistics"; hint: root.stats-level == 0 ? "off" : (root.stats-level == 1 ? "basic" : (root.stats-level == 2 ? "full" : "graphs")); clicked => { root.cycle-stats(); } }
+                MenuItem { label: "Next frame"; hint: "E"; clicked => { root.frame-step(); } }
+                if !root.local : MenuItem { label: "Copy link"; clicked => { root.copy-link(); root.menu = 0; } }
+                MenuItem { label: root.local ? "Show in folder" : "Download"; clicked => { root.download(); root.menu = 0; } }
+                if !root.local : MenuItem { label: "Open in browser"; clicked => { root.open-browser(); root.menu = 0; } }
+            }
+        }
+
+        // volume above 150 % from the last video: confirm before playing (owner's wish)
+        if root.ask-volume : Rectangle {
+            background: #00000099;
+            TouchArea { }
+            MenuCard {
+                x: (root.width - self.width) / 2;
+                y: (root.height - self.height) / 2;
+                width: min(root.width - 40px, 400px);
+                height: ask-l.preferred-height;
+                ask-l := VerticalLayout {
+                    padding: 22px;
+                    spacing: 12px;
+                    Text { text: "The volume is at " + round(root.volume) + " %"; color: #ffffff; font-size: 16px; font-weight: 800; }
+                    Text { text: "It was turned above 150 % for the last video. Keep it, or start this one at 100 %?"; color: #ffffffb3; font-size: 13px; wrap: word-wrap; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Rectangle {
+                            height: 40px;
+                            border-radius: 12px;
+                            background: Palette.brand;
+                            Text { text: "Use 100 %"; color: #ffffff; font-size: 13.5px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
+                            TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.volume-answer(false); } }
+                        }
+                        Rectangle {
+                            height: 40px;
+                            border-radius: 12px;
+                            background: #ffffff14;
+                            border-width: 1px;
+                            border-color: #ffffff2e;
+                            Text { text: "Keep " + round(root.volume) + " %"; color: Palette.warn; font-size: 13.5px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
+                            TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.volume-answer(true); } }
+                        }
+                    }
+                }
+            }
+        }
+
+        if root.toast != "" : Rectangle {
+            // fades in (web: 0.22 s on overlays)
+            opacity: 0;
+            init => { self.opacity = 1; }
+            animate opacity { duration: Anim.overlay; }
+            x: (root.width - self.width) / 2;
+            y: 24px;
+            width: toast-t.preferred-width + 32px;
+            height: 34px;
+            border-radius: 17px;
+            background: #0c0e14e6;
+            toast-t := Text { text: root.toast; color: #ffffff; font-size: 12.5px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+        }
+    }
+
+    in property <bool> sub-tracks-any-selected;
+    // the custom speed field has the keyboard (shortcuts off meanwhile)
+    property <bool> speed-editing;
+    init => { keys.focus(); }
+}
