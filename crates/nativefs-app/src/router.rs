@@ -326,7 +326,12 @@ mod imp {
         }
     }
 
+    /// Desktop-entry quoting, only when needed: `xdg-settings` resolves the first word of `Exec=` with `command -v`
+    /// and does not strip quotes, so a quoted path makes it fail ("file missing") although the entry is valid.
     fn quote(s: &str) -> String {
+        if !s.is_empty() && !s.chars().any(|c| c.is_whitespace() || "\"'\\><~|&;$*?#()`%".contains(c)) {
+            return s.to_owned();
+        }
         let mut q = String::from("\"");
         for c in s.chars() {
             if matches!(c, '\\' | '"' | '`' | '$') {
@@ -367,9 +372,21 @@ mod imp {
         }
     }
 
+    /// `xdg-settings set default-web-browser`, falling back to `xdg-mime` for the http(s) handlers when the script
+    /// refuses the entry (it validates `Exec=` more strictly than the desktop does).
+    fn set_default(id: &str) -> bool {
+        if Command::new("xdg-settings").args(["set", "default-web-browser", id]).status().is_ok_and(|s| s.success()) {
+            return true;
+        }
+        Command::new("xdg-mime")
+            .args(["default", id, "x-scheme-handler/http", "x-scheme-handler/https"])
+            .status()
+            .is_ok_and(|s| s.success())
+    }
+
     pub fn enable() -> Result<Next, String> {
         register()?;
-        let ok = Command::new("xdg-settings").args(["set", "default-web-browser", DESKTOP]).status().is_ok_and(|s| s.success());
+        let ok = set_default(DESKTOP);
         if ok && state() == State::Default {
             Ok(Next::Done)
         } else {
@@ -379,7 +396,7 @@ mod imp {
 
     pub fn disable(previous: Option<&str>) -> Result<Next, String> {
         if let Some(prev) = previous.filter(|p| !p.is_empty()) {
-            let _ = Command::new("xdg-settings").args(["set", "default-web-browser", prev]).status();
+            set_default(prev);
         }
         if state() == State::Default {
             return Err("Could not give the default back to your previous browser: pick it in your system settings.".into());
