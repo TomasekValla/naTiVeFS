@@ -9,6 +9,7 @@ mod audio_rack;
 mod audio_ui;
 mod autostart;
 mod check_ui;
+mod desktop_entry;
 mod files_ui;
 mod image_ui;
 mod open;
@@ -1436,6 +1437,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // The winit backend is required (raw wheel / middle-button events, monitor refresh rate).
     slint::BackendSelector::new().backend_name("winit".into()).select()?;
+    // Wayland takes the window icon from the desktop entry named by the app id (`desktop_entry`)
+    if let Err(e) = slint::set_xdg_app_id(desktop_entry::APP_ID) {
+        eprintln!("naTiVeFS: could not set the app id: {e}");
+    }
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -1452,6 +1457,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let on = config.router_on;
         let menus = config.file_menus;
         std::thread::spawn(move || {
+            desktop_entry::sync();
             router::tidy(on);
             shellmenu::sync(menus);
         });
