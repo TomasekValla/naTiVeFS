@@ -109,9 +109,73 @@ fn err(l: &Lib, what: &str, code: c_int) -> Error {
     Error::Device(format!("{what}: {msg}{hint}"))
 }
 
-/// The output devices: one entry per card (`hw:` for exclusive, its own name), plus nothing else; shared mode
-/// always plays through the system's default device.
+/// The output devices: one entry per playback device of each card (`hw:` for exclusive, its own name), plus nothing
+/// else; shared mode always plays through the system's default device. Read from the kernel's `/proc/asound` lists:
+/// ALSA's name hints leave out the `hw:` devices on most distributions. The default is the first output that is not
+/// HDMI / DisplayPort (often nothing is connected there).
 pub fn devices() -> Result<Vec<DeviceInfo>, Error> {
+    let mut out = proc_devices();
+    if out.is_empty() {
+        out = hinted_devices()?;
+    }
+    let pick = out.iter().position(|d| !is_display(&d.name)).unwrap_or(0);
+    for (i, d) in out.iter_mut().enumerate() {
+        d.default = i == pick;
+    }
+    Ok(out)
+}
+
+fn is_display(name: &str) -> bool {
+    let n = name.to_lowercase();
+    n.contains("hdmi") || n.contains("displayport")
+}
+
+/// `/proc/asound/cards` (" 1 [Generic_1      ]: HDA-Intel - HD-Audio Generic") and `/proc/asound/pcm`
+/// ("01-00: ALC236 Analog : ALC236 Analog : playback 1 : capture 1").
+fn proc_devices() -> Vec<DeviceInfo> {
+    let (Ok(cards), Ok(pcm)) = (std::fs::read_to_string("/proc/asound/cards"), std::fs::read_to_string("/proc/asound/pcm")) else {
+        return Vec::new();
+    };
+    parse_proc(&cards, &pcm)
+}
+
+fn parse_proc(cards: &str, pcm: &str) -> Vec<DeviceInfo> {
+    // card index -> (id, long name)
+    let mut names: Vec<(u32, String, String)> = Vec::new();
+    for line in cards.lines() {
+        let t = line.trim_start();
+        let Some((idx, rest)) = t.split_once(' ') else { continue };
+        let Ok(idx) = idx.parse::<u32>() else { continue };
+        let Some(rest) = rest.trim_start().strip_prefix('[') else { continue };
+        let Some((id, rest)) = rest.split_once(']') else { continue };
+        let long = rest.split_once(" - ").map(|(_, n)| n.trim()).unwrap_or("").to_owned();
+        names.push((idx, id.trim().to_owned(), long));
+    }
+    let mut out = Vec::new();
+    for line in pcm.lines() {
+        let mut fields = line.split(" : ");
+        let Some(head) = fields.next() else { continue };
+        let Some((cd, name)) = head.split_once(": ") else { continue };
+        if !fields.any(|f| f.trim().starts_with("playback")) {
+            continue;
+        }
+        let Some((c, d)) = cd.split_once('-') else { continue };
+        let (Ok(c), Ok(d)) = (c.parse::<u32>(), d.parse::<u32>()) else { continue };
+        let Some((_, id, long)) = names.iter().find(|n| n.0 == c) else { continue };
+        let name = name.trim();
+        out.push(DeviceInfo {
+            id: format!("CARD={id},DEV={d}"),
+            name: if long.is_empty() { name.to_owned() } else { format!("{long} · {name}") },
+            default: false,
+            bluetooth: false,
+            hw_volume: false,
+        });
+    }
+    out
+}
+
+/// Fallback when `/proc/asound` is not readable: ALSA's name hints (lists `hw:` devices only on some systems).
+fn hinted_devices() -> Result<Vec<DeviceInfo>, Error> {
     let l = lib()?;
     let mut out = Vec::new();
     unsafe {
@@ -204,7 +268,7 @@ impl Stream {
             ShareMode::Exclusive => devices
                 .iter()
                 .find(|d| device_id.is_some_and(|id| id == d.id))
-                .or(devices.first())
+                .or(devices.iter().find(|d| d.default))
                 .cloned()
                 .ok_or_else(|| Error::Device("no sound card was found".into()))?,
             ShareMode::Shared => DeviceInfo { id: "default".into(), name: "System default".into(), default: true, bluetooth: false, hw_volume: false },
@@ -360,5 +424,39 @@ fn run(l: &Lib, pcm: Pcm, format: DeviceFormat, period: usize, mut fill: Fill, s
     unsafe {
         (l.pcm_drop)(pcm);
         (l.pcm_close)(pcm);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CARDS: &str = " 0 [Generic        ]: HDA-Intel - HD-Audio Generic
+                      HD-Audio Generic at 0xfb3c8000 irq 76
+ 1 [Generic_1      ]: HDA-Intel - HD-Audio Generic
+                      HD-Audio Generic at 0xfb3c0000 irq 77
+";
+    const PCM: &str = "00-03: HDMI 0 : HDMI 0 : playback 1
+00-07: HDMI 1 : HDMI 1 : playback 1
+01-00: ALC236 Analog : ALC236 Analog : playback 1 : capture 1
+02-00: USB Mic : USB Mic : capture 1
+";
+
+    #[test]
+    fn proc_lists_playback_devices_with_hw_ids() {
+        let d = parse_proc(CARDS, PCM);
+        let ids: Vec<&str> = d.iter().map(|d| d.id.as_str()).collect();
+        assert_eq!(ids, ["CARD=Generic,DEV=3", "CARD=Generic,DEV=7", "CARD=Generic_1,DEV=0"]);
+        assert_eq!(d[2].name, "HD-Audio Generic · ALC236 Analog");
+    }
+
+    #[test]
+    fn default_skips_hdmi() {
+        let mut d = parse_proc(CARDS, PCM);
+        let pick = d.iter().position(|d| !is_display(&d.name)).unwrap_or(0);
+        for (i, x) in d.iter_mut().enumerate() {
+            x.default = i == pick;
+        }
+        assert!(d[2].default && !d[0].default);
     }
 }
