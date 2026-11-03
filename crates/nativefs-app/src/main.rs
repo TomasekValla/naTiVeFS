@@ -2349,6 +2349,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             show_login(&weak, &shared, "Session expired, please log in again.".into());
                         }
                     }
+                } else if shared.window_visible.load(Ordering::Relaxed) {
+                    // logged out: the "System" chip still shows whether the server answers ("not logged in" is an answer)
+                    let online = !matches!(shared.client.status().await, Err(Error::Network(_)));
+                    on_ui(&weak, move |ui| ui.set_backend_online(online));
                 }
             }
         });
