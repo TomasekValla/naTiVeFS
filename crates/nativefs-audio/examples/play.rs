@@ -1,15 +1,29 @@
 //! Output test (WASAPI on Windows, ALSA on Linux): `play --list`, or `play <file> [--device <id>] [--shared] [--silent] [--secs N] [--hash]`.
 //! `--silent` negotiates the file's format but sends digital silence (format / stability tests
 //! without sound). `--hash` hashes the samples handed to the device (compare with `decode_raw`).
+#[cfg(any(windows, target_os = "linux"))]
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(any(windows, target_os = "linux"))]
 use std::sync::Arc;
+#[cfg(any(windows, target_os = "linux"))]
 use std::time::{Duration, Instant};
 
+#[cfg(any(windows, target_os = "linux"))]
 use nativefs_audio::decode::Decoder;
+#[cfg(any(windows, target_os = "linux"))]
 use nativefs_audio::output::sys::{devices, Stream};
+#[cfg(any(windows, target_os = "linux"))]
 use nativefs_audio::output::{fidelity, ShareMode};
+#[cfg(any(windows, target_os = "linux"))]
 use nativefs_audio::ring::ring;
 
+/// Systems without an output backend (macOS) have nothing to test.
+#[cfg(not(any(windows, target_os = "linux")))]
+fn main() {
+    eprintln!("no audio output backend on this system");
+}
+
+#[cfg(any(windows, target_os = "linux"))]
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let flag = |f: &str| args.iter().any(|a| a == f);
