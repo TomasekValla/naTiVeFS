@@ -14,8 +14,7 @@ use crate::error::{Error, Result};
 
 pub const GITHUB_REPO: &str = "TomasekValla/naTiVeFS";
 /// Base64 public key from `minisign.pub` (the line starting with `RW`).
-/// TODO(owner): generate with `minisign -G` and paste it here.
-pub const UPDATE_PUBLIC_KEY: &str = "";
+pub const UPDATE_PUBLIC_KEY: &str = "RWSQa45JZ1TSMKJ+gVjv+fsOf40z6FcRFMCMz2CplMxl40yszLg0URRu";
 
 #[derive(Debug, Deserialize)]
 struct GhRelease {
