@@ -22,6 +22,7 @@ mod reader_ui;
 mod thumbs;
 mod tray;
 mod media_keys;
+mod updater;
 mod upload_ui;
 mod voice;
 mod windows;
@@ -913,11 +914,24 @@ fn check_updates(shared: &Arc<Shared>, weak: &Weak<MainWindow>) {
         ui.set_update_busy(true);
         ui.set_update_status("".into());
         ui.set_update_url("".into());
+        ui.set_update_installable(false);
     });
     let weak = weak.clone();
     shared.rt.spawn(async move {
+        let mut installable = false;
+        updater::remember(None);
         let (status, url) = match update::check(env!("CARGO_PKG_VERSION"), beta).await {
-            Ok(CheckOutcome::Available(info)) => (format!("naTiVeFS {} is available.", info.version), info.page_url),
+            Ok(CheckOutcome::Available(info)) => {
+                let (status, url) = (format!("naTiVeFS {} is available.", info.version), info.page_url.clone());
+                updater::remember(Some(info));
+                match updater::how() {
+                    updater::How::Manual(hint) => (format!("{status} {hint}"), url),
+                    _ => {
+                        installable = true;
+                        (status, url)
+                    }
+                }
+            }
             Ok(CheckOutcome::UpToDate { latest }) => (format!("You are up to date (newest release: {latest})."), String::new()),
             Ok(CheckOutcome::NoBuild { tag }) => (
                 format!("The newest release on GitHub ({tag}) has no signed naTiVeFS build for {}, so there is nothing to install.", platform_label()),
@@ -931,6 +945,28 @@ fn check_updates(shared: &Arc<Shared>, weak: &Weak<MainWindow>) {
             ui.set_update_busy(false);
             ui.set_update_status(status.into());
             ui.set_update_url(url.into());
+            ui.set_update_installable(installable);
+        });
+    });
+}
+
+/// "Install update": download, verify the signature, start the installer and quit.
+fn install_update(shared: &Arc<Shared>, weak: &Weak<MainWindow>) {
+    on_ui(weak, |ui| {
+        ui.set_update_busy(true);
+        ui.set_update_status("Downloading the update...".into());
+    });
+    let weak = weak.clone();
+    shared.rt.spawn(async move {
+        let result = updater::download_and_install().await;
+        on_ui(&weak, move |ui| match result {
+            Ok(()) => {
+                let _ = slint::quit_event_loop();
+            }
+            Err(e) => {
+                ui.set_update_busy(false);
+                ui.set_update_status(format!("The update failed: {e}").into());
+            }
         });
     });
 }
@@ -1391,6 +1427,19 @@ fn apply_demo(ui: &MainWindow) {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // the installer: close a running copy before replacing its files
+    if args.iter().any(|a| a == "--quit") {
+        let _ = nativefs_ipc::send(&Message::Quit);
+        return Ok(());
+    }
+    // the uninstaller: also remove what the app registered for this user
+    if args.iter().any(|a| a == "--cleanup") {
+        let _ = nativefs_ipc::send(&Message::Quit);
+        shellmenu::uninstall();
+        router::cleanup();
+        let _ = autostart::set(false);
+        return Ok(());
+    }
     let autostarted = args.iter().any(|a| a == autostart::ARG);
     let mut start_minimized = args.iter().any(|a| a == "--minimized");
     // a TVFS link opens in the app; existing local paths are queued for upload (OS menus, "Open with")
@@ -2124,6 +2173,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let (shared, weak) = (shared.clone(), weak.clone());
         ui.on_check_updates(move || check_updates(&shared, &weak));
+    }
+    {
+        let (shared, weak) = (shared.clone(), weak.clone());
+        ui.on_install_update(move || install_update(&shared, &weak));
     }
     {
         let shared = shared.clone();

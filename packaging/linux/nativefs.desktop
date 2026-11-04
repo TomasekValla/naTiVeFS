@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=naTiVeFS
+Comment=Native client for TVFS
+Exec=nativefs %U
+Icon=nativefs
+Terminal=false
+Categories=Network;FileTransfer;AudioVideo;
+MimeType=x-scheme-handler/tvfs;
+StartupWMClass=nativefs

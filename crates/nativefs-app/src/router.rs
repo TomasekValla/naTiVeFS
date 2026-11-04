@@ -496,6 +496,12 @@ pub fn switch_on(cfg: &mut tvfs_core::config::Config) -> Result<Next, String> {
     enable()
 }
 
+/// The uninstaller: remove this user's browser registration.
+pub fn cleanup() {
+    #[cfg(any(windows, target_os = "linux"))]
+    imp::unregister();
+}
+
 pub fn switch_off(cfg: &tvfs_core::config::Config) -> Result<Next, String> {
     disable(cfg.router_previous_id.as_deref())
 }

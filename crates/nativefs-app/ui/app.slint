@@ -147,6 +147,8 @@ export component MainWindow inherits Window {
     in property <bool> update-busy: false;
     in property <string> update-status;
     in property <string> update-url;
+    // a verified update can be installed from here (otherwise the release page)
+    in property <bool> update-installable: false;
     in property <[LibInfo]> libs;
     property <bool> show-libs: false;
 
@@ -388,6 +390,7 @@ export component MainWindow inherits Window {
     callback appearance-changed();
     callback update-prefs-changed();
     callback check-updates();
+    callback install-update();
 
     // in-out like `username`: as a private property, the two-way binding from the TextField inside `if !logged-in`
     // never updated it (Slint 1.16), so the Log In button stayed disabled
@@ -2075,10 +2078,11 @@ export component MainWindow inherits Window {
                                                 label: root.update-busy ? "Checking…" : "Check for updates";
                                                 clicked => { if (!root.update-busy) { root.check-updates(); } }
                                             }
+                                            if root.update-installable && !root.update-busy : SmallBtn { label: "Install update"; clicked => { root.install-update(); } }
                                             if root.update-url != "" : SmallBtn { label: "Open release page"; clicked => { root.open-link(root.update-url); } }
                                         }
                                         if root.update-status != "" : Text { text: root.update-status; font-size: 11.52px; font-weight: 600; color: Palette.text; wrap: word-wrap; }
-                                        Explain { text: "Updates come from GitHub releases of TomasekValla/naTiVeFS and are only accepted with a valid minisign signature. Beta also offers pre-releases (0.9.x release candidates). In-app download and install arrives together with the installers; until then the release page opens in your browser."; }
+                                        Explain { text: "Updates come from GitHub releases of TomasekValla/naTiVeFS and are only accepted with a valid minisign signature. Beta also offers pre-releases (0.9.x release candidates). Installed copies can update themselves from here."; }
                                     }
                                 }
                             }

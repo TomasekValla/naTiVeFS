@@ -16,6 +16,15 @@ fn main() {
 
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     copy_libmpv(&manifest_dir);
+    #[cfg(windows)]
+    {
+        let mut res = winresource::WindowsResource::new();
+        res.set_icon("../../assets/app.ico");
+        res.set("ProductName", "naTiVeFS");
+        res.set("FileDescription", "naTiVeFS");
+        res.set("LegalCopyright", "Tomas Valla, GPL-3.0-or-later");
+        res.compile().expect("compile the Windows resources");
+    }
     let root = Path::new(&manifest_dir).join("../..");
     println!("cargo:rerun-if-changed={}", root.join("Cargo.lock").display());
     if root.join(".git/HEAD").exists() {

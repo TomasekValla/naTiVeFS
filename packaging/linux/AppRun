@@ -1,0 +1,8 @@
+#!/bin/sh
+# The link router's desktop entry calls the AppImage with --link <url>.
+here=$(dirname "$(readlink -f "$0")")
+if [ "$1" = "--link" ]; then
+    shift
+    exec "$here/usr/bin/nativefs-link" "$@"
+fi
+exec "$here/usr/bin/nativefs" "$@"

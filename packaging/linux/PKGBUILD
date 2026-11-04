@@ -1,0 +1,22 @@
+# Maintainer: Tomas Valla
+# AUR recipe: installs the release binaries. The sha256sums are filled in for every release.
+pkgname=nativefs-bin
+pkgver=0.9.0
+pkgrel=1
+pkgdesc="Native client for TVFS with a local video player, reader and audio player"
+arch=('x86_64' 'aarch64')
+url="https://github.com/TomasekValla/naTiVeFS"
+license=('GPL-3.0-or-later')
+depends=('fontconfig')
+optdepends=('mpv: video player' 'ffmpeg: camera and voice notes' 'alsa-lib: audio player')
+provides=('nativefs')
+conflicts=('nativefs')
+source_x86_64=("$url/releases/download/v$pkgver/naTiVeFS-linux-x64.tar.gz")
+source_aarch64=("$url/releases/download/v$pkgver/naTiVeFS-linux-arm64.tar.gz")
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
+
+package() {
+    install -Dm755 nativefs "$pkgdir/usr/bin/nativefs"
+    install -Dm755 nativefs-link "$pkgdir/usr/bin/nativefs-link"
+}

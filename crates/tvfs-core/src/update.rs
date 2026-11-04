@@ -53,9 +53,9 @@ pub fn platform_asset_name() -> Option<&'static str> {
     } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
         Some("naTiVeFS-linux-arm64.tar.gz")
     } else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
-        Some("naTiVeFS-windows-x64.zip")
+        Some("naTiVeFS-windows-x64-setup.exe")
     } else if cfg!(all(target_os = "windows", target_arch = "aarch64")) {
-        Some("naTiVeFS-windows-arm64.zip")
+        Some("naTiVeFS-windows-arm64-setup.exe")
     } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
         Some("naTiVeFS-macos-arm64.tar.gz")
     } else {
