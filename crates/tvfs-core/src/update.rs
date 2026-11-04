@@ -49,15 +49,15 @@ pub struct ReleaseInfo {
 /// Release asset name for the platform this binary was built for.
 pub fn platform_asset_name() -> Option<&'static str> {
     if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-        Some("naTiVeFS-linux-x64.tar.gz")
+        Some("naTiVeFS-linux-x64-portable.tar.gz")
     } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
-        Some("naTiVeFS-linux-arm64.tar.gz")
+        Some("naTiVeFS-linux-arm64-portable.tar.gz")
     } else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
         Some("naTiVeFS-windows-x64-setup.exe")
     } else if cfg!(all(target_os = "windows", target_arch = "aarch64")) {
         Some("naTiVeFS-windows-arm64-setup.exe")
     } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        Some("naTiVeFS-macos-arm64.tar.gz")
+        Some("naTiVeFS-macos-apple-silicon.dmg")
     } else {
         None
     }

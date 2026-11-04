@@ -9,7 +9,9 @@ Naming — use exactly this, never invent other names:
   `naTiVeFS-link`, and release packages ship them lowercase as `nativefs` / `nativefs-link` (`release.yml` renames them,
   `naTiVeFS-link` finds the app under either name).
 - Cargo packages (must be lowercase): `nativefs-app`, `nativefs-link`, `nativefs-ipc`, `nativefs-audio` (+ `tvfs-core`).
-- Release assets: `naTiVeFS-<windows-x64|windows-arm64|linux-x64|linux-arm64|macos-arm64>.<zip|tar.gz>` + `.minisig`.
+- Release assets (+ `.minisig`), named so the file says what it is and without a version, so download links stay stable:
+  `naTiVeFS-windows-<x64|arm64>-<setup.exe|portable.zip>`, `naTiVeFS-linux-<x64|arm64>-<debian-ubuntu.deb|fedora-opensuse.rpm|arch.pkg.tar.zst|portable.tar.gz>`,
+  `naTiVeFS-linux-<x64|arm64>.AppImage`, `naTiVeFS-macos-apple-silicon.dmg`.
 - Config dir: `%APPDATA%\TomasekValla\naTiVeFS\config\` (Windows), `~/.config/nativefs/` (Linux). IPC socket: `nativefs-ipc-<user>`.
 
 Rules:

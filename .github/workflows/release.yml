@@ -36,6 +36,9 @@ jobs:
           dnf install -y --allowerasing gcc gcc-c++ make cmake git curl tar gzip file pkgconf-pkg-config \
             fontconfig-devel freetype-devel libxkbcommon-devel libxkbcommon-x11-devel wayland-devel libX11-devel \
             libxcb-devel mesa-libGL-devel mesa-libEGL-devel dbus-devel
+          # libopus is built with CMake, which would install into lib64 here; audiopus_sys looks in lib
+          echo 'set(CMAKE_INSTALL_LIBDIR lib CACHE PATH "")' > /tmp/libdir.cmake
+          echo "CMAKE_TOOLCHAIN_FILE=/tmp/libdir.cmake" >> "$GITHUB_ENV"
 
       - uses: actions/checkout@v4
 
@@ -60,7 +63,9 @@ jobs:
           mkdir -p pkg out
           cp target/release/naTiVeFS pkg/nativefs
           cp target/release/naTiVeFS-link pkg/nativefs-link
-          tar -czf out/naTiVeFS-${{ matrix.name }}.tar.gz -C pkg nativefs nativefs-link
+          if [ "$RUNNER_OS" = Linux ]; then
+            tar -czf out/naTiVeFS-${{ matrix.name }}-portable.tar.gz -C pkg nativefs nativefs-link
+          fi
 
       - name: AppImage
         if: runner.os == 'Linux'
@@ -85,7 +90,7 @@ jobs:
           cp assets/app.icns "$app/Resources/app.icns"
           sed "s/__VERSION__/$VERSION/g" packaging/macos/Info.plist > "$app/Info.plist"
           ln -s /Applications dmg/Applications
-          hdiutil create -volname naTiVeFS -srcfolder dmg -ov -format UDZO out/naTiVeFS-${{ matrix.name }}.dmg
+          hdiutil create -volname naTiVeFS -srcfolder dmg -ov -format UDZO out/naTiVeFS-macos-apple-silicon.dmg
 
       - name: Package and installer (windows)
         if: matrix.ext == 'zip'
@@ -94,7 +99,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force stage, out | Out-Null
           Copy-Item target/release/naTiVeFS.exe, target/release/naTiVeFS-link.exe, target/release/libmpv-2.dll stage/
-          Compress-Archive -Path stage/* -DestinationPath out/naTiVeFS-${{ matrix.name }}.zip
+          Compress-Archive -Path stage/* -DestinationPath out/naTiVeFS-${{ matrix.name }}-portable.zip
           choco install nsis -y --no-progress
           $src = (Resolve-Path stage).Path
           $setup = Join-Path (Resolve-Path out).Path "naTiVeFS-${{ matrix.name }}-setup.exe"
@@ -143,10 +148,10 @@ jobs:
             short=${name%%:*}
             export ARCH=${name##*:}
             rm -rf pkg && mkdir pkg
-            tar -xzf "dist/naTiVeFS-linux-$short.tar.gz" -C pkg
-            ./nfpm package -f packaging/linux/nfpm.yaml -p deb -t "dist/naTiVeFS-linux-$short.deb"
-            ./nfpm package -f packaging/linux/nfpm.yaml -p rpm -t "dist/naTiVeFS-linux-$short.rpm"
-            ./nfpm package -f packaging/linux/nfpm.yaml -p archlinux -t "dist/naTiVeFS-linux-$short.pkg.tar.zst"
+            tar -xzf "dist/naTiVeFS-linux-$short-portable.tar.gz" -C pkg
+            ./nfpm package -f packaging/linux/nfpm.yaml -p deb -t "dist/naTiVeFS-linux-$short-debian-ubuntu.deb"
+            ./nfpm package -f packaging/linux/nfpm.yaml -p rpm -t "dist/naTiVeFS-linux-$short-fedora-opensuse.rpm"
+            ./nfpm package -f packaging/linux/nfpm.yaml -p archlinux -t "dist/naTiVeFS-linux-$short-arch.pkg.tar.zst"
           done
           ls -la dist
 
