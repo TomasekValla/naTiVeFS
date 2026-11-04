@@ -51,7 +51,7 @@ pub fn how() -> How {
     }
     let dir = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf));
     match (dir, std::env::var_os("HOME").map(PathBuf::from)) {
-        (Some(dir), Some(home)) if dir.starts_with(home) => How::Archive(dir),
+        (Some(dir), Some(home)) if dir.starts_with(&home) => How::Archive(dir),
         _ => How::Manual("Update naTiVeFS with your package manager, or run the install command again."),
     }
 }
