@@ -1,40 +1,43 @@
 name: Release
 
-# Tag `vX.Y.Z` -> builds all 5 targets, signs the archives with minisign
-# (free key, NOT an OS code-signing certificate) and publishes a GitHub release
-# that the in-app updater reads.
+# Tag `vX.Y.Z` -> builds all 5 targets with their installers and packages, signs every file with minisign
+# (free key, NOT an OS code-signing certificate) and publishes a GitHub release that the in-app updater reads.
+# A push to the branch `release-test` runs everything except signing and publishing.
 #
-# One-time setup: `minisign -G`, put the public key into
-# crates/tvfs-core/src/update.rs (UPDATE_PUBLIC_KEY) and add the repo secrets
-# MINISIGN_KEY (contents of minisign.key) and MINISIGN_PASSWORD.
+# One-time setup: `minisign -G`, put the public key into crates/tvfs-core/src/update.rs (UPDATE_PUBLIC_KEY) and add
+# the repo secrets MINISIGN_KEY (contents of the secret key file) and MINISIGN_PASSWORD.
 
 on:
   push:
     tags: ["v*"]
+    branches: [release-test]
 
 jobs:
   build:
     name: build ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    # Linux builds on an old glibc (2.34), so one binary runs on every supported distribution
+    container: ${{ matrix.image }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { name: linux-x64,     os: ubuntu-24.04,     ext: tar.gz }
-          - { name: linux-arm64,   os: ubuntu-24.04-arm, ext: tar.gz }
+          - { name: linux-x64,     os: ubuntu-24.04,     ext: tar.gz, image: "almalinux:9", appimage: x86_64 }
+          - { name: linux-arm64,   os: ubuntu-24.04-arm, ext: tar.gz, image: "almalinux:9", appimage: aarch64 }
           - { name: windows-x64,   os: windows-latest,   ext: zip }
           - { name: windows-arm64, os: windows-11-arm,   ext: zip }
           - { name: macos-arm64,   os: macos-latest,     ext: tar.gz }
     steps:
-      - uses: actions/checkout@v4
-
       - name: Linux build dependencies
-        if: startsWith(matrix.os, 'ubuntu')
+        if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libfontconfig1-dev libxkbcommon-dev \
-            libxkbcommon-x11-dev libwayland-dev libx11-dev libxcb1-dev \
-            libgl1-mesa-dev libegl1-mesa-dev libdbus-1-dev
+          dnf install -y dnf-plugins-core
+          dnf config-manager --set-enabled crb
+          dnf install -y --allowerasing gcc gcc-c++ make cmake git curl tar gzip file pkgconf-pkg-config \
+            fontconfig-devel freetype-devel libxkbcommon-devel libxkbcommon-x11-devel wayland-devel libX11-devel \
+            libxcb-devel mesa-libGL-devel mesa-libEGL-devel dbus-devel
+
+      - uses: actions/checkout@v4
 
       - name: libmpv for the video player (Windows)
         if: runner.os == 'Windows'
@@ -46,25 +49,78 @@ jobs:
 
       - run: cargo build --release --locked -p nativefs-app -p nativefs-link
 
+      - name: Version
+        shell: bash
+        run: echo "VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_ENV"
+
       - name: Package (unix)
         if: matrix.ext == 'tar.gz'
         # Linux/macOS executables are lowercase: nativefs, nativefs-link
         run: |
-          mkdir -p pkg
+          mkdir -p pkg out
           cp target/release/naTiVeFS pkg/nativefs
           cp target/release/naTiVeFS-link pkg/nativefs-link
-          tar -czf naTiVeFS-${{ matrix.name }}.tar.gz -C pkg nativefs nativefs-link
+          tar -czf out/naTiVeFS-${{ matrix.name }}.tar.gz -C pkg nativefs nativefs-link
 
-      - name: Package (windows)
+      - name: AppImage
+        if: runner.os == 'Linux'
+        # video and camera use the system's libmpv and ffmpeg; without them the rest of the app works
+        run: |
+          curl -fsSL -o appimagetool "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${{ matrix.appimage }}.AppImage"
+          chmod +x appimagetool
+          mkdir -p AppDir/usr/bin
+          cp pkg/nativefs pkg/nativefs-link AppDir/usr/bin/
+          cp packaging/linux/AppRun AppDir/AppRun
+          chmod +x AppDir/AppRun
+          cp packaging/linux/nativefs.desktop AppDir/
+          cp assets/app-256.png AppDir/nativefs.png
+          ARCH=${{ matrix.appimage }} ./appimagetool --appimage-extract-and-run AppDir out/naTiVeFS-${{ matrix.name }}.AppImage
+
+      - name: dmg
+        if: runner.os == 'macOS'
+        run: |
+          app=dmg/naTiVeFS.app/Contents
+          mkdir -p "$app/MacOS" "$app/Resources"
+          cp pkg/nativefs pkg/nativefs-link "$app/MacOS/"
+          cp assets/app.icns "$app/Resources/app.icns"
+          sed "s/__VERSION__/$VERSION/g" packaging/macos/Info.plist > "$app/Info.plist"
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname naTiVeFS -srcfolder dmg -ov -format UDZO out/naTiVeFS-${{ matrix.name }}.dmg
+
+      - name: Package and installer (windows)
         if: matrix.ext == 'zip'
         shell: pwsh
         # libmpv-2.dll: the video player (vendor/libmpv/README.md)
-        run: Compress-Archive -Path target/release/naTiVeFS.exe, target/release/naTiVeFS-link.exe, target/release/libmpv-2.dll -DestinationPath naTiVeFS-${{ matrix.name }}.zip
+        run: |
+          New-Item -ItemType Directory -Force stage, out | Out-Null
+          Copy-Item target/release/naTiVeFS.exe, target/release/naTiVeFS-link.exe, target/release/libmpv-2.dll stage/
+          Compress-Archive -Path stage/* -DestinationPath out/naTiVeFS-${{ matrix.name }}.zip
+          choco install nsis -y --no-progress
+          $src = (Resolve-Path stage).Path
+          $setup = Join-Path (Resolve-Path out).Path "naTiVeFS-${{ matrix.name }}-setup.exe"
+          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /V2 "/DVERSION=$env:VERSION" "/DSRC=$src" "/DOUT=$setup" packaging\windows\nativefs.nsi
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Test the installer (windows)
+        if: matrix.ext == 'zip'
+        shell: pwsh
+        run: |
+          $setup = (Resolve-Path "out/naTiVeFS-${{ matrix.name }}-setup.exe").Path
+          $dir = "$env:LOCALAPPDATA\Programs\naTiVeFS"
+          Start-Process $setup -ArgumentList "/S" -Wait
+          foreach ($f in "naTiVeFS.exe", "naTiVeFS-link.exe", "libmpv-2.dll", "uninstall.exe") {
+            if (-not (Test-Path "$dir\$f")) { throw "missing after install: $f" }
+          }
+          $key = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\naTiVeFS"
+          if ((Get-ItemProperty $key).DisplayVersion -ne $env:VERSION) { throw "wrong version in the uninstall key" }
+          Start-Process "$dir\uninstall.exe" -ArgumentList "/S", "_?=$dir" -Wait
+          if (Test-Path "$dir\naTiVeFS.exe") { throw "still there after uninstall" }
+          if (Test-Path $key) { throw "uninstall key left behind" }
 
       - uses: actions/upload-artifact@v4
         with:
           name: naTiVeFS-${{ matrix.name }}
-          path: naTiVeFS-${{ matrix.name }}.${{ matrix.ext }}
+          path: out/*
 
   publish:
     needs: build
@@ -72,12 +128,37 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
 
-      - name: Sign archives with minisign
+      - name: Linux packages (.deb, .rpm, Arch)
+        run: |
+          curl -fsSL https://github.com/goreleaser/nfpm/releases/download/v2.41.0/nfpm_2.41.0_Linux_x86_64.tar.gz | tar -xz nfpm
+          export VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          for name in x64:amd64 arm64:arm64; do
+            short=${name%%:*}
+            export ARCH=${name##*:}
+            rm -rf pkg && mkdir pkg
+            tar -xzf "dist/naTiVeFS-linux-$short.tar.gz" -C pkg
+            ./nfpm package -f packaging/linux/nfpm.yaml -p deb -t "dist/naTiVeFS-linux-$short.deb"
+            ./nfpm package -f packaging/linux/nfpm.yaml -p rpm -t "dist/naTiVeFS-linux-$short.rpm"
+            ./nfpm package -f packaging/linux/nfpm.yaml -p archlinux -t "dist/naTiVeFS-linux-$short.pkg.tar.zst"
+          done
+          ls -la dist
+
+      - name: Keep the test result
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: all-packages
+          path: dist/*
+
+      - name: Sign everything with minisign
+        if: github.ref_type == 'tag'
         env:
           MINISIGN_KEY: ${{ secrets.MINISIGN_KEY }}
           MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
@@ -90,6 +171,7 @@ jobs:
           rm -f "$RUNNER_TEMP/minisign.key"
 
       - uses: softprops/action-gh-release@v2
+        if: github.ref_type == 'tag'
         with:
           files: dist/*
           generate_release_notes: true
