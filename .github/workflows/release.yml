@@ -35,8 +35,7 @@ jobs:
           dnf config-manager --set-enabled crb
           dnf install -y --allowerasing gcc gcc-c++ make cmake git curl tar gzip file pkgconf-pkg-config \
             fontconfig-devel freetype-devel libxkbcommon-devel libxkbcommon-x11-devel wayland-devel libX11-devel \
-            libxcb-devel mesa-libGL-devel mesa-libEGL-devel dbus-devel systemd-devel openssl-devel \
-            clang clang-devel perl
+            libxcb-devel mesa-libGL-devel mesa-libEGL-devel dbus-devel
 
       - uses: actions/checkout@v4
 
