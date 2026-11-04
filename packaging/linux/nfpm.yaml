@@ -29,5 +29,5 @@ overrides:
     depends: [fontconfig]
     recommends: ["(mpv-libs or libmpv2)", ffmpeg, "(alsa-lib or libasound2)"]
   archlinux:
-    depends: [fontconfig]
-    recommends: [mpv, ffmpeg, alsa-lib]
+    # nfpm's Arch packager drops `recommends`, and these features should work out of the box
+    depends: [fontconfig, mpv, ffmpeg, alsa-lib]
