@@ -24,7 +24,7 @@ jobs:
           - { name: linux-arm64,   os: ubuntu-24.04-arm, ext: tar.gz }
           - { name: windows-x64,   os: windows-latest,   ext: zip }
           - { name: windows-arm64, os: windows-11-arm,   ext: zip }
-          - { name: macos-arm64,   os: macos-15,         ext: tar.gz }
+          - { name: macos-arm64,   os: macos-latest,     ext: tar.gz }
     steps:
       - uses: actions/checkout@v4
 
