@@ -105,7 +105,12 @@ jobs:
           New-Item -ItemType Directory -Force stage, out | Out-Null
           Copy-Item target/release/naTiVeFS.exe, target/release/naTiVeFS-link.exe, target/release/libmpv-2.dll, LICENSE, packaging/THIRD-PARTY.txt stage/
           Compress-Archive -Path stage/* -DestinationPath out/naTiVeFS-${{ matrix.name }}-portable.zip
-          choco install nsis -y --no-progress
+          # the Chocolatey feed sometimes answers 504: try again before giving up
+          foreach ($try in 1..3) {
+            choco install nsis -y --no-progress
+            if ($LASTEXITCODE -eq 0) { break }
+            Start-Sleep -Seconds 30
+          }
           $src = (Resolve-Path stage).Path
           $setup = Join-Path (Resolve-Path out).Path "naTiVeFS-${{ matrix.name }}-setup.exe"
           & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /V2 "/DVERSION=$env:VERSION" "/DSRC=$src" "/DOUT=$setup" packaging\windows\nativefs.nsi
