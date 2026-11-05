@@ -123,7 +123,9 @@ jobs:
           $key = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\naTiVeFS"
           if ((Get-ItemProperty $key).DisplayVersion -ne $env:VERSION) { throw "wrong version in the uninstall key" }
           Start-Process "$dir\uninstall.exe" -ArgumentList "/S", "_?=$dir" -Wait
-          if (Test-Path $dir) { throw "folder still there after uninstall" }
+          # `_?=` keeps uninstall.exe running from this folder, so it and the folder itself stay in this test
+          $left = Get-ChildItem $dir | Where-Object Name -ne "uninstall.exe"
+          if ($left) { throw "left after uninstall: $($left.Name -join ', ')" }
           if (Test-Path $key) { throw "uninstall key left behind" }
 
       - uses: actions/upload-artifact@v4
