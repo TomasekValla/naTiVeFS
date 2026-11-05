@@ -128,11 +128,17 @@ jobs:
           }
           $key = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\naTiVeFS"
           if ((Get-ItemProperty $key).DisplayVersion -ne $env:VERSION) { throw "wrong version in the uninstall key" }
-          # a silent update from the tray restarts the app hidden
-          Start-Process $setup -ArgumentList "/S", "/UPDATE", "/HIDDEN" -Wait
-          Start-Sleep -Seconds 5
-          $run = Get-CimInstance Win32_Process -Filter "Name='naTiVeFS.exe'"
-          if (-not ($run.CommandLine -like "*--minimized*")) { throw "not restarted hidden: $($run.CommandLine)" }
+          # a silent update from the tray restarts the app hidden. The runner has no real desktop, so the app may exit
+          # again at once: this watches the command lines while the installer runs instead of what is left afterwards
+          $update = Start-Process $setup -ArgumentList "/S", "/UPDATE", "/HIDDEN" -PassThru
+          $seen = @()
+          $until = (Get-Date).AddSeconds(45)
+          while ((Get-Date) -lt $until -and -not ($seen -like "*--minimized*")) {
+            $seen += @(Get-CimInstance Win32_Process -Filter "Name='naTiVeFS.exe'" | ForEach-Object { $_.CommandLine })
+            Start-Sleep -Milliseconds 100
+          }
+          $update.WaitForExit()
+          if (-not ($seen -like "*--minimized*")) { throw "not restarted hidden: $($seen -join ' | ')" }
           Start-Process "$dir\uninstall.exe" -ArgumentList "/S", "_?=$dir" -Wait
           # `_?=` keeps uninstall.exe running from this folder, so it and the folder itself stay in this test
           $left = Get-ChildItem $dir | Where-Object Name -ne "uninstall.exe"
