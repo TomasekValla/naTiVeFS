@@ -57,7 +57,28 @@ mod imp {
         Ok(true)
     }
 
+    fn user_files(data: &Path) -> [PathBuf; 3] {
+        [
+            data.join(format!("icons/hicolor/256x256/apps/{APP_ID}.png")),
+            data.join(format!("icons/hicolor/64x64/apps/{APP_ID}.png")),
+            data.join(format!("applications/{APP_ID}.desktop")),
+        ]
+    }
+
+    /// Removes this user's entry and icons (`--cleanup`).
+    pub fn remove() {
+        let Some(data) = data_home() else { return };
+        for f in user_files(&data) {
+            let _ = std::fs::remove_file(f);
+        }
+    }
+
     pub fn sync() {
+        // a package installed the system copy: a user copy would only stay behind after uninstalling it
+        if std::env::var_os("APPIMAGE").is_none() && Path::new(&format!("/usr/share/applications/{APP_ID}.desktop")).exists() {
+            remove();
+            return;
+        }
         let (Some(data), Some(exe)) = (data_home(), exe()) else { return };
         let name = if cfg!(debug_assertions) { "naTiVeFS (dev)" } else { "naTiVeFS" };
         // release builds also own the `tvfs://` scheme (see `router::register_scheme`)
@@ -90,6 +111,7 @@ mod imp {
 #[cfg(not(target_os = "linux"))]
 mod imp {
     pub fn sync() {}
+    pub fn remove() {}
 }
 
-pub use imp::sync;
+pub use imp::{remove, sync};

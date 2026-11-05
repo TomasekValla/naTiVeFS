@@ -467,7 +467,9 @@ fn wire(shared: &Arc<Shared>, cam: &Rc<RefCell<Cam>>) {
         w.window().on_close_requested(move || {
             if let Some(cam) = weak.upgrade() {
                 // a photo / video that was not used is thrown away
-                if let Some(p) = cam.borrow_mut().result.take() {
+                // (taken first: the `if let` would hold the mutable borrow for its whole body)
+                let unused = cam.borrow_mut().result.take();
+                if let Some(p) = unused {
                     let recording = cam.borrow().window.get_state() == 2;
                     if !recording {
                         let _ = std::fs::remove_file(p);

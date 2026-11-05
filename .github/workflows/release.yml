@@ -63,8 +63,11 @@ jobs:
           mkdir -p pkg out
           cp target/release/naTiVeFS pkg/nativefs
           cp target/release/naTiVeFS-link pkg/nativefs-link
+          cp LICENSE packaging/THIRD-PARTY.txt pkg/
           if [ "$RUNNER_OS" = Linux ]; then
-            tar -czf out/naTiVeFS-${{ matrix.name }}-portable.tar.gz -C pkg nativefs nativefs-link
+            cp packaging/linux/nativefs.desktop pkg/
+            cp assets/app-256.png pkg/nativefs.png
+            tar -czf out/naTiVeFS-${{ matrix.name }}-portable.tar.gz -C pkg .
           fi
 
       - name: AppImage
@@ -73,8 +76,9 @@ jobs:
         run: |
           curl -fsSL -o appimagetool "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${{ matrix.appimage }}.AppImage"
           chmod +x appimagetool
-          mkdir -p AppDir/usr/bin
+          mkdir -p AppDir/usr/bin AppDir/usr/share/licenses/nativefs
           cp pkg/nativefs pkg/nativefs-link AppDir/usr/bin/
+          cp LICENSE packaging/THIRD-PARTY.txt AppDir/usr/share/licenses/nativefs/
           cp packaging/linux/AppRun AppDir/AppRun
           chmod +x AppDir/AppRun
           cp packaging/linux/nativefs.desktop AppDir/
@@ -87,7 +91,7 @@ jobs:
           app=dmg/naTiVeFS.app/Contents
           mkdir -p "$app/MacOS" "$app/Resources"
           cp pkg/nativefs pkg/nativefs-link "$app/MacOS/"
-          cp assets/app.icns "$app/Resources/app.icns"
+          cp assets/app.icns LICENSE packaging/THIRD-PARTY.txt "$app/Resources/"
           sed "s/__VERSION__/$VERSION/g" packaging/macos/Info.plist > "$app/Info.plist"
           ln -s /Applications dmg/Applications
           hdiutil create -volname naTiVeFS -srcfolder dmg -ov -format UDZO out/naTiVeFS-macos-apple-silicon.dmg
@@ -98,7 +102,7 @@ jobs:
         # libmpv-2.dll: the video player (vendor/libmpv/README.md)
         run: |
           New-Item -ItemType Directory -Force stage, out | Out-Null
-          Copy-Item target/release/naTiVeFS.exe, target/release/naTiVeFS-link.exe, target/release/libmpv-2.dll stage/
+          Copy-Item target/release/naTiVeFS.exe, target/release/naTiVeFS-link.exe, target/release/libmpv-2.dll, LICENSE, packaging/THIRD-PARTY.txt stage/
           Compress-Archive -Path stage/* -DestinationPath out/naTiVeFS-${{ matrix.name }}-portable.zip
           choco install nsis -y --no-progress
           $src = (Resolve-Path stage).Path
@@ -113,13 +117,13 @@ jobs:
           $setup = (Resolve-Path "out/naTiVeFS-${{ matrix.name }}-setup.exe").Path
           $dir = "$env:LOCALAPPDATA\Programs\naTiVeFS"
           Start-Process $setup -ArgumentList "/S" -Wait
-          foreach ($f in "naTiVeFS.exe", "naTiVeFS-link.exe", "libmpv-2.dll", "uninstall.exe") {
+          foreach ($f in "naTiVeFS.exe", "naTiVeFS-link.exe", "libmpv-2.dll", "LICENSE", "THIRD-PARTY.txt", "uninstall.exe") {
             if (-not (Test-Path "$dir\$f")) { throw "missing after install: $f" }
           }
           $key = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\naTiVeFS"
           if ((Get-ItemProperty $key).DisplayVersion -ne $env:VERSION) { throw "wrong version in the uninstall key" }
           Start-Process "$dir\uninstall.exe" -ArgumentList "/S", "_?=$dir" -Wait
-          if (Test-Path "$dir\naTiVeFS.exe") { throw "still there after uninstall" }
+          if (Test-Path $dir) { throw "folder still there after uninstall" }
           if (Test-Path $key) { throw "uninstall key left behind" }
 
       - uses: actions/upload-artifact@v4

@@ -512,16 +512,17 @@ export component ReaderWindow inherits Window {
                 padding-top: 8px;
                 padding-bottom: 8px;
                 spacing: 8px;
+                // one group in the middle of the bar; the match count sits inside the field, like in a browser
+                alignment: center;
                 Rectangle {
-                    horizontal-stretch: 1;
-                    max-width: 420px;
+                    width: min(420px, root.width - (root.narrow ? 28px : 48px) - 200px);
                     border-radius: 8px;
                     border-width: 1px;
                     border-color: find-input.has-focus ? RP.hover : RP.btn-border;
                     background: RP.btn;
                     find-input := TextInput {
                         x: 10px;
-                        width: parent.width - 20px;
+                        width: parent.width - 20px - (root.find-info != "" ? find-count.preferred-width + 8px : 0px);
                         height: parent.height;
                         vertical-alignment: center;
                         text <=> root.find-text;
@@ -544,8 +545,15 @@ export component ReaderWindow inherits Window {
                         font-size: 13px;
                         color: RP.dim;
                     }
+                    find-count := Text {
+                        x: parent.width - self.width - 10px;
+                        height: parent.height;
+                        vertical-alignment: center;
+                        text: root.find-info;
+                        font-size: 12px;
+                        color: RP.dim;
+                    }
                 }
-                Text { text: root.find-info; font-size: 12px; color: RP.dim; vertical-alignment: center; min-width: 70px; }
                 TbBtn { y: 1px; path: "M 5.5 10 L 5.5 1.5 M 2 5 L 5.5 1.5 L 9 5"; label: "Prev"; compact: true; clicked => { root.find-step(-1); } }
                 TbBtn { y: 1px; path: "M 5.5 1 L 5.5 9.5 M 2 6 L 5.5 9.5 L 9 6"; label: "Next"; compact: true; clicked => { root.find-step(1); } }
                 Rectangle {
@@ -553,7 +561,6 @@ export component ReaderWindow inherits Window {
                     XMark { x: 8px; y: (parent.height - self.height) / 2; size: 10px; color: close-ta.has-hover ? RP.hover : RP.fg; }
                     close-ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.find-open = false; root.find-closed(); root.focus-page(); } }
                 }
-                Rectangle { horizontal-stretch: 0.0001; }
             }
         }
 

@@ -1,0 +1,28 @@
+naTiVeFS is free software under the GNU General Public License, version 3 or later (see LICENSE).
+Source code: https://github.com/TomasekValla/naTiVeFS
+
+Other open-source parts it uses. The app's settings page (About > Open-source libraries) lists every Rust library
+with its version, licence and source.
+
+libmpv (video player), GPL-2.0-or-later
+  Windows packages ship libmpv-2.dll, which contains FFmpeg and other libraries.
+  Source: https://github.com/mpv-player/mpv (commit e471496c56)
+  Build recipe: https://github.com/shinchiro/mpv-winbuild-cmake (tag 20261021)
+  Linux and macOS use the system's libmpv.
+
+FFmpeg (camera and voice notes on Linux), LGPL-2.1-or-later or GPL-2.0-or-later depending on the build
+  Used as the system's ffmpeg program. Source: https://ffmpeg.org
+
+ALSA (audio on Linux), LGPL-2.1-or-later
+  Loaded from the system. Source: https://github.com/alsa-project/alsa-lib
+
+Fontconfig (fonts on Linux), MIT-style licence
+  Source: https://gitlab.freedesktop.org/fontconfig/fontconfig
+
+libopus (voice notes), BSD-3-Clause
+  Built into the app. Source: https://github.com/xiph/opus
+
+Fonts, SIL Open Font License 1.1
+  Inter, Syne, Space Grotesk, JetBrains Mono, Manrope, Sora, Outfit, Plus Jakarta Sans, Poppins, Lora, Merriweather,
+  PT Serif, EB Garamond, Atkinson Hyperlegible, Lexend, Space Mono, Quicksand, Noto Sans JP, OpenDyslexic.
+  The licence texts are in assets/fonts in the source code.

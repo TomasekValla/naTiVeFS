@@ -21,6 +21,10 @@ contents:
     dst: /usr/share/icons/hicolor/256x256/apps/nativefs.png
   - src: assets/app-64.png
     dst: /usr/share/icons/hicolor/64x64/apps/nativefs.png
+  - src: LICENSE
+    dst: /usr/share/licenses/nativefs/LICENSE
+  - src: packaging/THIRD-PARTY.txt
+    dst: /usr/share/licenses/nativefs/THIRD-PARTY.txt
 overrides:
   deb:
     depends: [libfontconfig1]

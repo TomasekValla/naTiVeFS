@@ -1427,6 +1427,26 @@ fn apply_demo(ui: &MainWindow) {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("naTiVeFS {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!(
+            "naTiVeFS {}: native client for TVFS\n\n\
+             Usage: nativefs [options] [link or files]\n\n\
+             A TVFS link opens in its viewer; files are added to the upload queue.\n\n\
+             --local <file>  Open a file from this computer in its viewer\n\
+             --upload        Upload the files that follow\n\
+             --minimized     Start hidden in the tray\n\
+             --quit          Quit the running app\n\
+             --cleanup       Quit and remove this user's menus, autostart and browser registration\n\
+             --version       Show the version\n\
+             --help          Show this help",
+            env!("CARGO_PKG_VERSION")
+        );
+        return Ok(());
+    }
     // the installer: close a running copy before replacing its files
     if args.iter().any(|a| a == "--quit") {
         let _ = nativefs_ipc::send(&Message::Quit);
@@ -1437,6 +1457,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let _ = nativefs_ipc::send(&Message::Quit);
         shellmenu::uninstall();
         router::cleanup();
+        desktop_entry::remove();
         let _ = autostart::set(false);
         return Ok(());
     }
