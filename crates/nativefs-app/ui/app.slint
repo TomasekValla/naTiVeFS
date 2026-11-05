@@ -152,6 +152,8 @@ export component MainWindow inherits Window {
     // an update is downloading: its progress from 0 to 1
     in property <bool> update-installing: false;
     in property <float> update-progress: 0;
+    // a downloaded update offers the restart; "Later" leaves it for a quiet moment
+    in-out property <bool> update-offer: false;
     in property <[LibInfo]> libs;
     property <bool> show-libs: false;
 
@@ -2098,7 +2100,7 @@ export component MainWindow inherits Window {
                                             }
                                         }
                                         if root.update-status != "" : Text { text: root.update-status; font-size: 11.52px; font-weight: 600; color: Palette.text; wrap: word-wrap; }
-                                        Explain { text: "Updates come from GitHub releases of TomasekValla/naTiVeFS and are only accepted with a valid minisign signature. Beta offers the newest version, stable or pre-release. Automatic updates: checks at startup and every hour, and installs by itself when no upload or viewer is open."; }
+                                        Explain { text: "Updates come from GitHub releases of TomasekValla/naTiVeFS and are only accepted with a valid minisign signature. Beta offers the newest version, stable or pre-release. Automatic updates: checks at startup and every hour, downloads by itself and offers a restart; it restarts by itself only while the app rests in the tray."; }
                                     }
                                 }
                             }
@@ -2444,6 +2446,33 @@ export component MainWindow inherits Window {
                         clicked => { root.confirm-answer(root.confirm-kind, root.confirm-id, false); root.confirm-kind = 0; }
                     }
                 }
+            }
+        }
+    }
+
+    if root.update-offer : Rectangle {
+        opacity: 0;
+        init => { self.opacity = 1; }
+        animate opacity { duration: Anim.overlay; }
+        x: (root.width - self.width) / 2;
+        y: root.height - self.height - 16px;
+        width: min(380px, root.width - 32px);
+        height: offer-l.preferred-height;
+        border-radius: 14px;
+        border-width: 1px;
+        border-color: Palette.border;
+        background: Palette.light ? #1a1a1ae6 : #2a2a2ae6;
+        TouchArea { }
+        offer-l := VerticalLayout {
+            padding: 14px;
+            spacing: 10px;
+            Text { text: "An update is ready"; color: #ffffff; font-size: 13.12px; font-weight: 700; }
+            Text { text: "Restart naTiVeFS to install it. Later, it installs by itself while the app rests in the tray."; color: #ffffffb3; font-size: 11.84px; wrap: word-wrap; }
+            HorizontalLayout {
+                alignment: start;
+                spacing: 8px;
+                SmallBtn { label: "Restart now"; clicked => { root.update-offer = false; root.install-update(); } }
+                SmallBtn { label: "Later"; clicked => { root.update-offer = false; } }
             }
         }
     }

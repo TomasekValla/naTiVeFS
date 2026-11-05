@@ -912,18 +912,25 @@ fn build_info() -> String {
 enum UpdateCheck {
     /// The button: shows the result, installs only when asked.
     Manual,
-    /// At startup: an update installs by itself unless something is in use.
-    Startup,
-    /// Every hour while the app runs: installs only when nothing is open.
-    Hourly,
+    /// At startup and every hour while the app runs: downloads by itself, never restarts in the user's face.
+    Automatic,
 }
 
-/// Nothing the user would lose: no upload, no viewer, and for the hourly check no main window either.
-fn update_may_start(shared: &Shared, kind: UpdateCheck) -> bool {
-    !upload_ui::busy() && windows::live() == 0 && (kind == UpdateCheck::Startup || !shared.window_visible.load(Ordering::Relaxed))
+/// The app can restart unnoticed: it waits in the tray, with no window, viewer or upload.
+fn restart_unnoticed(shared: &Shared) -> bool {
+    !upload_ui::busy() && windows::live() == 0 && !shared.window_visible.load(Ordering::Relaxed)
 }
 
 fn check_updates(shared: &Arc<Shared>, weak: &Weak<MainWindow>, kind: UpdateCheck) {
+    // already downloaded: it only waits for a quiet moment
+    if let (UpdateCheck::Automatic, Some(file)) = (kind, updater::ready()) {
+        if restart_unnoticed(shared) && updater::install(&file).is_ok() {
+            on_ui(weak, |_| {
+                let _ = slint::quit_event_loop();
+            });
+        }
+        return;
+    }
     let beta = shared.config.lock().unwrap().update_channel == UpdateChannel::Beta;
     on_ui(weak, |ui| {
         ui.set_update_busy(true);
@@ -962,8 +969,8 @@ fn check_updates(shared: &Arc<Shared>, weak: &Weak<MainWindow>, kind: UpdateChec
             ui.set_update_status(status.into());
             ui.set_update_url(url.into());
             ui.set_update_installable(installable);
-            if installable && kind != UpdateCheck::Manual && updater::silent_possible() && update_may_start(&shared, kind) {
-                install_update(&shared, &ui.as_weak(), Some(kind));
+            if installable && kind == UpdateCheck::Automatic && updater::silent_possible() {
+                install_update(&shared, &ui.as_weak(), true);
             }
         });
     });
@@ -982,9 +989,18 @@ fn download_status(done: u64, total: Option<u64>, started: Instant) -> String {
     }
 }
 
-/// Download, verify the signature, start the installer and quit. `automatic`: the check that started it; if something
-/// came into use during the download, the update waits for the next start.
-fn install_update(shared: &Arc<Shared>, weak: &Weak<MainWindow>, automatic: Option<UpdateCheck>) {
+/// Download, verify the signature, start the installer and quit. `automatic`: nobody asked, so the restart happens only
+/// when nobody would notice; otherwise the main window offers it and the app keeps waiting for a quiet moment.
+fn install_update(shared: &Arc<Shared>, weak: &Weak<MainWindow>, automatic: bool) {
+    if let Some(file) = updater::ready() {
+        match updater::install(&file) {
+            Ok(()) => on_ui(weak, |_| {
+                let _ = slint::quit_event_loop();
+            }),
+            Err(e) => on_ui(weak, move |ui| ui.set_update_status(format!("The update did not install: {e}").into())),
+        }
+        return;
+    }
     on_ui(weak, |ui| {
         ui.set_update_installing(true);
         ui.set_update_progress(0.0);
@@ -1010,18 +1026,22 @@ fn install_update(shared: &Arc<Shared>, weak: &Weak<MainWindow>, automatic: Opti
         })
         .await;
         on_ui(&weak, move |ui| {
-            let result = result.and_then(|file| match automatic {
-                Some(kind) if !update_may_start(&shared, kind) => Err("It will install at the next start.".into()),
-                _ => updater::install(&file),
+            ui.set_update_installing(false);
+            let result = result.and_then(|file| {
+                if automatic && !restart_unnoticed(&shared) {
+                    updater::set_ready(file);
+                    ui.set_update_status("The update is ready. It installs when you restart naTiVeFS.".into());
+                    ui.set_update_offer(true);
+                    return Ok(false);
+                }
+                updater::install(&file).map(|()| true)
             });
             match result {
-                Ok(()) => {
+                Ok(true) => {
                     let _ = slint::quit_event_loop();
                 }
-                Err(e) => {
-                    ui.set_update_installing(false);
-                    ui.set_update_status(format!("The update did not install: {e}").into());
-                }
+                Ok(false) => {}
+                Err(e) => ui.set_update_status(format!("The update did not install: {e}").into()),
             }
         });
     });
@@ -1641,6 +1661,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // the offer names the browser that gets the other links
         refresh_router(&ui, &shared);
     }
+    // debug builds: `NATIVEFS_UPDATE_OFFER=1` shows the restart offer (screenshots)
+    ui.set_update_offer(cfg!(debug_assertions) && std::env::var_os("NATIVEFS_UPDATE_OFFER").is_some());
     ui.set_file_menus(config.file_menus);
     ui.set_file_menus_available(cfg!(any(windows, target_os = "linux")));
     ui.set_autostart(autostart::enabled());
@@ -2253,7 +2275,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     {
         let (shared, weak) = (shared.clone(), weak.clone());
-        ui.on_install_update(move || install_update(&shared, &weak, None));
+        ui.on_install_update(move || install_update(&shared, &weak, false));
     }
     {
         let shared = shared.clone();
@@ -2495,7 +2517,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if config.check_updates {
         let (shared, weak) = (shared.clone(), weak.clone());
-        slint::Timer::single_shot(Duration::from_secs(3), move || check_updates(&shared, &weak, UpdateCheck::Startup));
+        slint::Timer::single_shot(Duration::from_secs(3), move || check_updates(&shared, &weak, UpdateCheck::Automatic));
     }
     // while the app keeps running (tray): once an hour, if the setting is still on
     {
@@ -2506,7 +2528,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tokio::time::sleep(Duration::from_secs(3600)).await;
                 if shared.config.lock().unwrap().check_updates {
                     let (shared, weak2) = (shared.clone(), weak.clone());
-                    on_ui(&weak, move |_| check_updates(&shared, &weak2, UpdateCheck::Hourly));
+                    on_ui(&weak, move |_| check_updates(&shared, &weak2, UpdateCheck::Automatic));
                 }
             }
         });

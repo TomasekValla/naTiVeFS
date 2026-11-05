@@ -18,6 +18,17 @@ pub enum How {
     Manual(&'static str),
 }
 
+/// A verified update waiting for a moment when restarting bothers nobody.
+static READY: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+pub fn set_ready(file: PathBuf) {
+    *READY.lock().unwrap() = Some(file);
+}
+
+pub fn ready() -> Option<PathBuf> {
+    READY.lock().unwrap().clone()
+}
+
 pub fn remember(info: Option<ReleaseInfo>) {
     *PENDING.lock().unwrap() = info;
 }
