@@ -59,10 +59,13 @@ fn main() {
     for (name, version, license, url) in &libs {
         out.push_str(&format!("    ({name:?}, {version:?}, {license:?}, {url:?}),\n"));
     }
-    // not crates: the video player library and the bundled fonts
+    // not crates: the video player library, the system libraries and tools used at run time, and the bundled fonts
     for (name, version, license, url) in [
         ("libmpv (video player)", "git e471496c56", "GPL-2.0-or-later", "https://github.com/mpv-player/mpv"),
         ("libmpv Windows build", "20261021", "GPL-2.0-or-later", "https://github.com/shinchiro/mpv-winbuild-cmake"),
+        ("FFmpeg (Linux: camera and voice notes)", "system", "LGPL-2.1-or-later or GPL, by build", "https://ffmpeg.org"),
+        ("ALSA library (Linux: audio output)", "system", "LGPL-2.1-or-later", "https://www.alsa-project.org"),
+        ("Fontconfig (Linux)", "system", "HPND AND Unicode-DFS-2016", "https://www.freedesktop.org/wiki/Software/fontconfig/"),
         ("Inter, Syne, Space Grotesk, JetBrains Mono, Manrope, Sora, Outfit, Plus Jakarta Sans, Poppins, Lora, Merriweather, PT Serif, EB Garamond, Atkinson Hyperlegible, Lexend, Space Mono, Quicksand, Noto Sans JP (fonts)", "", "OFL-1.1", "https://github.com/google/fonts"),
         ("OpenDyslexic (font)", "0.910.12", "OFL-1.1", "https://github.com/antijingoist/opendyslexic"),
     ] {
