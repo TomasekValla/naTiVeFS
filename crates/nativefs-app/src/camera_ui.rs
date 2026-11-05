@@ -232,14 +232,22 @@ fn start(cam: &Rc<RefCell<Cam>>) {
 }
 
 fn close(cam: &Rc<RefCell<Cam>>) {
+    close_discarding(cam, None);
+}
+
+/// `unfinished`: a recording to delete once the session has stopped writing it.
+fn close_discarding(cam: &Rc<RefCell<Cam>>, unfinished: Option<PathBuf>) {
     let mut c = cam.borrow_mut();
     c.rec_timer.stop();
     // dropping the session releases the camera (a running recording is finished first)
     let session = c.session.take();
     drop(c);
-    if let Some(s) = session {
-        std::thread::spawn(move || drop(s));
-    }
+    std::thread::spawn(move || {
+        drop(session);
+        if let Some(p) = unfinished {
+            let _ = std::fs::remove_file(p);
+        }
+    });
     CAMERA.with(|x| *x.borrow_mut() = None);
 }
 
@@ -469,13 +477,16 @@ fn wire(shared: &Arc<Shared>, cam: &Rc<RefCell<Cam>>) {
                 // a photo / video that was not used is thrown away
                 // (taken first: the `if let` would hold the mutable borrow for its whole body)
                 let unused = cam.borrow_mut().result.take();
+                let recording = cam.borrow().window.get_state() == 2;
+                let mut unfinished = None;
                 if let Some(p) = unused {
-                    let recording = cam.borrow().window.get_state() == 2;
-                    if !recording {
+                    if recording {
+                        unfinished = Some(p);
+                    } else {
                         let _ = std::fs::remove_file(p);
                     }
                 }
-                close(&cam);
+                close_discarding(&cam, unfinished);
             }
             windows::closed();
             slint::CloseRequestResponse::HideWindow
