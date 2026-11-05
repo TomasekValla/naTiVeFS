@@ -41,6 +41,9 @@ component RoundBtn inherits Rectangle {
     in property <bool> muted;
     in property <bool> enabled: true;
     in property <string> tip;
+    // pause bars drawn as shapes: an SVG switched in during the press animation stayed rasterized at the pressed size
+    // and showed jagged edges and light pixels
+    in property <bool> pause;
     callback clicked();
     width: root.size;
     height: root.size;
@@ -74,7 +77,19 @@ component RoundBtn inherits Rectangle {
             animate background { duration: Motion.fast; }
         }
     }
+    if root.pause : Rectangle {
+        // the web's pause.svg: two 4.5 x 15 bars 3 apart in a 24 px box
+        property <length> unit: root.icon-size * root.s / 24;
+        property <brush> bar: root.primary || root.on ? #04101c : #ffffff;
+        width: self.unit * 12;
+        height: self.unit * 15;
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        Rectangle { x: 0px; y: 0px; width: parent.unit * 4.5; height: parent.height; border-radius: parent.unit * 1.4; background: parent.bar; }
+        Rectangle { x: parent.unit * 7.5; y: 0px; width: parent.unit * 4.5; height: parent.height; border-radius: parent.unit * 1.4; background: parent.bar; }
+    }
     Icon {
+        visible: !root.pause;
         width: root.icon-size * root.s;
         height: root.icon-size * root.s;
         x: (parent.width - self.width) / 2;
@@ -1335,7 +1350,8 @@ export component AudioWindow inherits Window {
                         icon-size: 24px;
                         primary: true;
                         enabled: root.ready;
-                        icon: root.playing ? @image-url("../../../assets/img/audio/pause.svg") : @image-url("../../../assets/img/audio/play.svg");
+                        icon: @image-url("../../../assets/img/audio/play.svg");
+                        pause: root.playing;
                         tip: "Play / Pause (Space)";
                         clicked => { root.play-pause(); }
                     }
