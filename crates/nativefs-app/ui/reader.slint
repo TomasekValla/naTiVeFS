@@ -234,10 +234,12 @@ export component ReaderWindow inherits Window {
     preferred-height: 1000px;
 
     property <bool> narrow: root.width <= 600px;
+    // the full toolbar needs more room than the web's 600 px breakpoint, more still with the Local badge
+    property <bool> compact-bar: root.narrow || root.width <= (root.local ? 860px : 720px);
     property <length> pad-x: root.narrow ? 16px : (root.markdown ? 24px : 20px);
     property <length> pad-y: root.narrow ? 24px : 40px;
     property <length> col-w: min(root.markdown ? 860px : 820px, root.width) - 2 * root.pad-x;
-    property <length> bar-h: root.narrow ? 69px : 58px;
+    property <length> bar-h: root.compact-bar ? 69px : 58px;
     property <length> find-h: root.find-open ? 44px : 0px;
 
     // ── scrolling ──────────────────────────────────────────────────────
@@ -571,7 +573,7 @@ export component ReaderWindow inherits Window {
             background: RP.bar;
             Rectangle { y: parent.height - 1px; height: 1px; background: RP.border; }
             TouchArea { }
-            if !root.narrow : HorizontalLayout {
+            if !root.compact-bar : HorizontalLayout {
                 padding-left: 24px;
                 padding-right: 24px;
                 spacing: 8px;
@@ -598,7 +600,7 @@ export component ReaderWindow inherits Window {
                     TbBtn { has-img: true; ico-img: @image-url("../../../assets/img/emoji-doc.png"); label: "Copy all"; clicked => { root.copy-all(); } }
                 }
             }
-            if root.narrow : VerticalLayout {
+            if root.compact-bar : VerticalLayout {
                 HorizontalLayout {
                     padding-left: 14px;
                     padding-right: 14px;
@@ -624,6 +626,9 @@ export component ReaderWindow inherits Window {
                     TbBtn { compact: true; has-img: true; ico-img: root.light ? @image-url("../../../assets/img/emoji-moon.png") : @image-url("../../../assets/img/emoji-sun.png"); label: root.light ? "Dark" : "Light"; clicked => { root.toggle-theme(); } }
                     TbBtn { compact: true; path: "M 5.5 1 L 5.5 8.5 M 2.2 5.4 L 5.5 8.7 L 8.8 5.4 M 1.5 10.2 L 9.5 10.2"; label: root.local ? "Folder" : "Download"; clicked => { root.download(); } }
                     TbBtn { compact: true; path: "M 4.6 1.2 A 3.4 3.4 0 1 1 4.59 1.2 M 7.1 7.1 L 10 10"; label: ""; active: root.find-open; clicked => { root.find-open = !root.find-open; if (root.find-open) { root.focus-find(); } else { root.find-closed(); root.focus-page(); } } }
+                    if !root.narrow : HorizontalLayout {
+                        TbBtn { compact: true; has-img: true; ico-img: @image-url("../../../assets/img/emoji-doc.png"); label: "Copy all"; clicked => { root.copy-all(); } }
+                    }
                 }
             }
         }
