@@ -128,6 +128,11 @@ jobs:
           }
           $key = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\naTiVeFS"
           if ((Get-ItemProperty $key).DisplayVersion -ne $env:VERSION) { throw "wrong version in the uninstall key" }
+          # a silent update from the tray restarts the app hidden
+          Start-Process $setup -ArgumentList "/S", "/UPDATE", "/HIDDEN" -Wait
+          Start-Sleep -Seconds 5
+          $run = Get-CimInstance Win32_Process -Filter "Name='naTiVeFS.exe'"
+          if (-not ($run.CommandLine -like "*--minimized*")) { throw "not restarted hidden: $($run.CommandLine)" }
           Start-Process "$dir\uninstall.exe" -ArgumentList "/S", "_?=$dir" -Wait
           # `_?=` keeps uninstall.exe running from this folder, so it and the folder itself stay in this test
           $left = Get-ChildItem $dir | Where-Object Name -ne "uninstall.exe"
