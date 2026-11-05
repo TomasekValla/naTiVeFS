@@ -1,7 +1,7 @@
 # Maintainer: Tomas Valla
 # AUR recipe: installs the release binaries. The sha256sums are filled in for every release.
 pkgname=nativefs-bin
-pkgver=0.9.1
+pkgver=0.9.2
 pkgrel=1
 pkgdesc="Native client for TVFS with a local video player, reader and audio player"
 arch=('x86_64' 'aarch64')
