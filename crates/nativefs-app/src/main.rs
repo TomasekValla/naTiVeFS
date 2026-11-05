@@ -924,7 +924,7 @@ fn restart_unnoticed(shared: &Shared) -> bool {
 fn check_updates(shared: &Arc<Shared>, weak: &Weak<MainWindow>, kind: UpdateCheck) {
     // already downloaded: it only waits for a quiet moment
     if let (UpdateCheck::Automatic, Some(file)) = (kind, updater::ready()) {
-        if restart_unnoticed(shared) && updater::install(&file).is_ok() {
+        if restart_unnoticed(shared) && updater::install(&file, true).is_ok() {
             on_ui(weak, |_| {
                 let _ = slint::quit_event_loop();
             });
@@ -993,7 +993,7 @@ fn download_status(done: u64, total: Option<u64>, started: Instant) -> String {
 /// when nobody would notice; otherwise the main window offers it and the app keeps waiting for a quiet moment.
 fn install_update(shared: &Arc<Shared>, weak: &Weak<MainWindow>, automatic: bool) {
     if let Some(file) = updater::ready() {
-        match updater::install(&file) {
+        match updater::install(&file, false) {
             Ok(()) => on_ui(weak, |_| {
                 let _ = slint::quit_event_loop();
             }),
@@ -1034,7 +1034,7 @@ fn install_update(shared: &Arc<Shared>, weak: &Weak<MainWindow>, automatic: bool
                     ui.set_update_offer(true);
                     return Ok(false);
                 }
-                updater::install(&file).map(|()| true)
+                updater::install(&file, automatic).map(|()| true)
             });
             match result {
                 Ok(true) => {
@@ -1375,13 +1375,14 @@ fn on_window_event(ui: &MainWindow, shared: &Arc<Shared>, w: &slint::Window, ev:
             }
             EventResult::Propagate
         }
+        // Wayland reports these for a window that was never shown (started in the tray) too
         E::Occluded(hidden) => {
-            set_visible(ui, shared, !hidden);
+            set_visible(ui, shared, !hidden && shared.main_shown.load(Ordering::Relaxed));
             EventResult::Propagate
         }
         // Windows reports minimizing as a 0x0 resize rather than `Occluded`
         E::Resized(size) => {
-            set_visible(ui, shared, size.width > 0 && size.height > 0);
+            set_visible(ui, shared, size.width > 0 && size.height > 0 && shared.main_shown.load(Ordering::Relaxed));
             // the first resize comes right after winit created the window (before that there is no system scale
             // to multiply); afterwards this is a no-op while the scale factor already matches
             apply_zoom(ui, shared);

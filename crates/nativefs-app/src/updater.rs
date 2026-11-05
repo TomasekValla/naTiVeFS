@@ -82,11 +82,12 @@ pub async fn download(progress: impl FnMut(u64, Option<u64>)) -> Result<PathBuf,
     Ok(file)
 }
 
-/// Start the installer or replace the binaries. `Ok` means the app should quit now.
-pub fn install(file: &Path) -> Result<(), String> {
+/// Start the installer or replace the binaries. `Ok` means the app should quit now. `hidden`: nobody is looking, so
+/// the new version starts in the tray again.
+pub fn install(file: &Path, hidden: bool) -> Result<(), String> {
     match how() {
         How::Manual(text) => Err(text.into()),
-        how => apply(how, file),
+        how => apply(how, file, hidden),
     }
 }
 
@@ -96,7 +97,7 @@ pub fn silent_possible() -> bool {
 }
 
 #[cfg(windows)]
-fn apply(how: How, file: &Path) -> Result<(), String> {
+fn apply(how: How, file: &Path, _hidden: bool) -> Result<(), String> {
     use windows::core::HSTRING;
     use windows::Win32::UI::Shell::ShellExecuteW;
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
@@ -110,7 +111,7 @@ fn apply(how: How, file: &Path) -> Result<(), String> {
 }
 
 #[cfg(target_os = "linux")]
-fn apply(how: How, file: &Path) -> Result<(), String> {
+fn apply(how: How, file: &Path, hidden: bool) -> Result<(), String> {
     use std::process::Command;
     let How::Archive(dir) = how else { return Err("nothing to install".into()) };
     // unpacked beside the binaries, so the final renames stay on one file system
@@ -129,12 +130,18 @@ fn apply(how: How, file: &Path) -> Result<(), String> {
     };
     let result = unpack();
     let _ = std::fs::remove_dir_all(&tmp);
+    let exe = result?;
+    // the download's own folder, not needed any more
+    if let Some(download) = file.parent() {
+        let _ = std::fs::remove_dir_all(download);
+    }
     // started a moment later: this process must release the instance socket first
-    Command::new("sh").args(["-c", "sleep 1; exec \"$0\""]).arg(result?).spawn().map_err(|e| e.to_string())?;
+    let args = hidden.then_some("--minimized");
+    Command::new("sh").args(["-c", "sleep 1; exec \"$0\" \"$@\""]).arg(exe).args(args).spawn().map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]
-fn apply(_how: How, _file: &Path) -> Result<(), String> {
+fn apply(_how: How, _file: &Path, _hidden: bool) -> Result<(), String> {
     Err("Download the new version from the release page.".into())
 }
