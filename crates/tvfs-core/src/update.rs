@@ -163,11 +163,22 @@ pub fn verify_signature(data: &[u8], signature_text: &str, public_key_b64: &str)
     pk.verify(data, &sig, false).map_err(|e| Error::Update(format!("signature check failed: {e}")))
 }
 
-/// Download the release archive and its signature, verify, then write `dest`.
-/// Nothing is written unless the signature is valid.
-pub async fn download_verified(info: &ReleaseInfo, dest: &Path) -> Result<()> {
-    let client = http()?;
-    let data = client.get(&info.asset_url).send().await?.error_for_status()?.bytes().await?;
+/// Download the release file and its signature, verify, then write `dest`. `progress` gets the bytes so far and the
+/// total size when the server tells it. Nothing is written unless the signature is valid.
+pub async fn download_verified(info: &ReleaseInfo, dest: &Path, mut progress: impl FnMut(u64, Option<u64>)) -> Result<()> {
+    // no overall time limit here (a large file on a slow line), only for a connection that stops answering
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("naTiVeFS/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .read_timeout(std::time::Duration::from_secs(60))
+        .build()?;
+    let mut response = client.get(&info.asset_url).send().await?.error_for_status()?;
+    let total = response.content_length();
+    let mut data = Vec::with_capacity(total.unwrap_or(0) as usize);
+    while let Some(chunk) = response.chunk().await? {
+        data.extend_from_slice(&chunk);
+        progress(data.len() as u64, total);
+    }
     let sig = client.get(&info.signature_url).send().await?.error_for_status()?.text().await?;
     verify_signature(&data, &sig, UPDATE_PUBLIC_KEY)?;
     tokio::fs::write(dest, &data).await?;

@@ -908,7 +908,22 @@ fn build_info() -> String {
     s
 }
 
-fn check_updates(shared: &Arc<Shared>, weak: &Weak<MainWindow>) {
+#[derive(Clone, Copy, PartialEq)]
+enum UpdateCheck {
+    /// The button: shows the result, installs only when asked.
+    Manual,
+    /// At startup: an update installs by itself unless something is in use.
+    Startup,
+    /// Every hour while the app runs: installs only when nothing is open.
+    Hourly,
+}
+
+/// Nothing the user would lose: no upload, no viewer, and for the hourly check no main window either.
+fn update_may_start(shared: &Shared, kind: UpdateCheck) -> bool {
+    !upload_ui::busy() && windows::live() == 0 && (kind == UpdateCheck::Startup || !shared.window_visible.load(Ordering::Relaxed))
+}
+
+fn check_updates(shared: &Arc<Shared>, weak: &Weak<MainWindow>, kind: UpdateCheck) {
     let beta = shared.config.lock().unwrap().update_channel == UpdateChannel::Beta;
     on_ui(weak, |ui| {
         ui.set_update_busy(true);
@@ -916,8 +931,9 @@ fn check_updates(shared: &Arc<Shared>, weak: &Weak<MainWindow>) {
         ui.set_update_url("".into());
         ui.set_update_installable(false);
     });
-    let weak = weak.clone();
-    shared.rt.spawn(async move {
+    let (weak, shared) = (weak.clone(), shared.clone());
+    let task = shared.clone();
+    task.rt.spawn(async move {
         let mut installable = false;
         updater::remember(None);
         let (status, url) = match update::check(env!("CARGO_PKG_VERSION"), beta).await {
@@ -946,26 +962,66 @@ fn check_updates(shared: &Arc<Shared>, weak: &Weak<MainWindow>) {
             ui.set_update_status(status.into());
             ui.set_update_url(url.into());
             ui.set_update_installable(installable);
+            if installable && kind != UpdateCheck::Manual && updater::silent_possible() && update_may_start(&shared, kind) {
+                install_update(&shared, &ui.as_weak(), Some(kind));
+            }
         });
     });
 }
 
-/// "Install update": download, verify the signature, start the installer and quit.
-fn install_update(shared: &Arc<Shared>, weak: &Weak<MainWindow>) {
+/// The status line while downloading: `12.3 of 48.0 MB, 5.2 MB/s, about 7 s left`.
+fn download_status(done: u64, total: Option<u64>, started: Instant) -> String {
+    let mb = |b: u64| b as f64 / 1_000_000.0;
+    let speed = done as f64 / started.elapsed().as_secs_f64().max(0.1);
+    match total {
+        Some(total) if total > 0 => {
+            let left = total.saturating_sub(done) as f64 / speed.max(1.0);
+            format!("Downloading the update: {:.1} of {:.1} MB, {:.1} MB/s, about {:.0} s left", mb(done), mb(total), speed / 1_000_000.0, left.ceil())
+        }
+        _ => format!("Downloading the update: {:.1} MB, {:.1} MB/s", mb(done), speed / 1_000_000.0),
+    }
+}
+
+/// Download, verify the signature, start the installer and quit. `automatic`: the check that started it; if something
+/// came into use during the download, the update waits for the next start.
+fn install_update(shared: &Arc<Shared>, weak: &Weak<MainWindow>, automatic: Option<UpdateCheck>) {
     on_ui(weak, |ui| {
-        ui.set_update_busy(true);
+        ui.set_update_installing(true);
+        ui.set_update_progress(0.0);
         ui.set_update_status("Downloading the update...".into());
     });
-    let weak = weak.clone();
-    shared.rt.spawn(async move {
-        let result = updater::download_and_install().await;
-        on_ui(&weak, move |ui| match result {
-            Ok(()) => {
-                let _ = slint::quit_event_loop();
+    let (weak, shared) = (weak.clone(), shared.clone());
+    let task = shared.clone();
+    task.rt.spawn(async move {
+        let started = Instant::now();
+        let mut last = Instant::now();
+        let progress_ui = weak.clone();
+        let result = updater::download(move |done, total| {
+            if last.elapsed() < Duration::from_millis(200) {
+                return;
             }
-            Err(e) => {
-                ui.set_update_busy(false);
-                ui.set_update_status(format!("The update failed: {e}").into());
+            last = Instant::now();
+            let status = download_status(done, total, started);
+            let part = total.filter(|t| *t > 0).map_or(0.0, |t| done as f32 / t as f32);
+            on_ui(&progress_ui, move |ui| {
+                ui.set_update_status(status.into());
+                ui.set_update_progress(part);
+            });
+        })
+        .await;
+        on_ui(&weak, move |ui| {
+            let result = result.and_then(|file| match automatic {
+                Some(kind) if !update_may_start(&shared, kind) => Err("It will install at the next start.".into()),
+                _ => updater::install(&file),
+            });
+            match result {
+                Ok(()) => {
+                    let _ = slint::quit_event_loop();
+                }
+                Err(e) => {
+                    ui.set_update_installing(false);
+                    ui.set_update_status(format!("The update did not install: {e}").into());
+                }
             }
         });
     });
@@ -2193,11 +2249,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     {
         let (shared, weak) = (shared.clone(), weak.clone());
-        ui.on_check_updates(move || check_updates(&shared, &weak));
+        ui.on_check_updates(move || check_updates(&shared, &weak, UpdateCheck::Manual));
     }
     {
         let (shared, weak) = (shared.clone(), weak.clone());
-        ui.on_install_update(move || install_update(&shared, &weak));
+        ui.on_install_update(move || install_update(&shared, &weak, None));
     }
     {
         let shared = shared.clone();
@@ -2260,8 +2316,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Message::Show => show_window(ui, &shared),
                 Message::Open(url) => {
                     // links open in their own window; the main window stays as it is
-                    let _ = ui;
-                    if !open::open_link(&shared, &url) {
+                                    if !open::open_link(&shared, &url) {
                         show_window(ui, &shared);
                     }
                 }
@@ -2440,7 +2495,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if config.check_updates {
         let (shared, weak) = (shared.clone(), weak.clone());
-        slint::Timer::single_shot(Duration::from_secs(3), move || check_updates(&shared, &weak));
+        slint::Timer::single_shot(Duration::from_secs(3), move || check_updates(&shared, &weak, UpdateCheck::Startup));
+    }
+    // while the app keeps running (tray): once an hour, if the setting is still on
+    {
+        let (shared, weak) = (shared.clone(), weak.clone());
+        let task = shared.clone();
+        task.rt.spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(3600)).await;
+                if shared.config.lock().unwrap().check_updates {
+                    let (shared, weak2) = (shared.clone(), weak.clone());
+                    on_ui(&weak, move |_| check_updates(&shared, &weak2, UpdateCheck::Hourly));
+                }
+            }
+        });
     }
 
     slint::run_event_loop_until_quit()?;

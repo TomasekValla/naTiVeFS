@@ -100,6 +100,11 @@ pub fn push_queue(ui: &MainWindow) {
 }
 
 /// Add local paths (files or folders) to the queue, like the web's `addFiles` / folder drop.
+/// Files are queued or uploading (an automatic update must wait).
+pub fn busy() -> bool {
+    with_state(|s| s.run.is_some() || !s.queue.is_empty())
+}
+
 pub fn add_paths(ui: &MainWindow, paths: Vec<PathBuf>) {
     let mut errors = Vec::new();
     let mut added = Vec::new();

@@ -149,6 +149,9 @@ export component MainWindow inherits Window {
     in property <string> update-url;
     // a verified update can be installed from here (otherwise the release page)
     in property <bool> update-installable: false;
+    // an update is downloading: its progress from 0 to 1
+    in property <bool> update-installing: false;
+    in property <float> update-progress: 0;
     in property <[LibInfo]> libs;
     property <bool> show-libs: false;
 
@@ -2063,7 +2066,7 @@ export component MainWindow inherits Window {
                                             }
                                         }
                                         SettingRow {
-                                            label: "Check at startup";
+                                            label: "Automatic updates";
                                             Seg {
                                                 controlled: true;
                                                 options: ["Off", "On"];
@@ -2074,15 +2077,28 @@ export component MainWindow inherits Window {
                                         HorizontalLayout {
                                             spacing: 8px;
                                             alignment: start;
-                                            SmallBtn {
+                                            // at most two buttons, so the row always fits the card
+                                            if !root.update-installable : SmallBtn {
                                                 label: root.update-busy ? "Checking…" : "Check for updates";
                                                 clicked => { if (!root.update-busy) { root.check-updates(); } }
                                             }
-                                            if root.update-installable && !root.update-busy : SmallBtn { label: "Install update"; clicked => { root.install-update(); } }
+                                            if root.update-installable && !root.update-installing : SmallBtn { label: "Install update"; clicked => { root.install-update(); } }
                                             if root.update-url != "" : SmallBtn { label: "Open release page"; clicked => { root.open-link(root.update-url); } }
                                         }
+                                        if root.update-installing : Rectangle {
+                                            height: 4px;
+                                            border-radius: 2px;
+                                            background: #ffffff1f;
+                                            Rectangle {
+                                                x: 0px;
+                                                width: parent.width * clamp(root.update-progress, 0, 1);
+                                                border-radius: 2px;
+                                                background: Palette.brand;
+                                                animate width { duration: Anim.fast; }
+                                            }
+                                        }
                                         if root.update-status != "" : Text { text: root.update-status; font-size: 11.52px; font-weight: 600; color: Palette.text; wrap: word-wrap; }
-                                        Explain { text: "Updates come from GitHub releases of TomasekValla/naTiVeFS and are only accepted with a valid minisign signature. Beta also offers pre-releases (0.9.x release candidates). Installed copies can update themselves from here."; }
+                                        Explain { text: "Updates come from GitHub releases of TomasekValla/naTiVeFS and are only accepted with a valid minisign signature. Beta offers the newest version, stable or pre-release. Automatic updates: checks at startup and every hour, and installs by itself when no upload or viewer is open."; }
                                     }
                                 }
                             }

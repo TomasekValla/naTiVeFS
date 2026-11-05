@@ -61,18 +61,27 @@ pub fn how() -> How {
     How::Manual("Download the new version from the release page.")
 }
 
-/// Download and verify the pending update, then install it. `Ok` means the app should quit now.
-pub async fn download_and_install() -> Result<(), String> {
+/// Download and verify the pending update.
+pub async fn download(progress: impl FnMut(u64, Option<u64>)) -> Result<PathBuf, String> {
     let info = PENDING.lock().unwrap().clone().ok_or("no update to install")?;
-    let how = how();
-    if let How::Manual(text) = how {
-        return Err(text.into());
-    }
     let dir = std::env::temp_dir().join(format!("nativefs-update-{}", std::process::id()));
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let file = dir.join(&info.asset_name);
-    update::download_verified(&info, &file).await.map_err(|e| e.to_string())?;
-    apply(how, &file)
+    update::download_verified(&info, &file, progress).await.map_err(|e| e.to_string())?;
+    Ok(file)
+}
+
+/// Start the installer or replace the binaries. `Ok` means the app should quit now.
+pub fn install(file: &Path) -> Result<(), String> {
+    match how() {
+        How::Manual(text) => Err(text.into()),
+        how => apply(how, file),
+    }
+}
+
+/// Automatic updates never ask for anything: a copy installed for all users needs an administrator prompt.
+pub fn silent_possible() -> bool {
+    !matches!(how(), How::Manual(_) | How::Installer { all_users: true })
 }
 
 #[cfg(windows)]
