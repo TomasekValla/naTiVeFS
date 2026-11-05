@@ -21,6 +21,8 @@ contents:
     dst: /usr/share/icons/hicolor/256x256/apps/nativefs.png
   - src: assets/app-64.png
     dst: /usr/share/icons/hicolor/64x64/apps/nativefs.png
+  - src: packaging/linux/nativefs.metainfo.xml
+    dst: /usr/share/metainfo/nativefs.metainfo.xml
   - src: LICENSE
     dst: /usr/share/licenses/nativefs/LICENSE
   - src: packaging/THIRD-PARTY.txt

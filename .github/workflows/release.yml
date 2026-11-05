@@ -40,7 +40,7 @@ jobs:
           echo 'set(CMAKE_INSTALL_LIBDIR lib CACHE PATH "")' > /tmp/libdir.cmake
           echo "CMAKE_TOOLCHAIN_FILE=/tmp/libdir.cmake" >> "$GITHUB_ENV"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: libmpv for the video player (Windows)
         if: runner.os == 'Windows'
@@ -76,14 +76,15 @@ jobs:
         run: |
           curl -fsSL -o appimagetool "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${{ matrix.appimage }}.AppImage"
           chmod +x appimagetool
-          mkdir -p AppDir/usr/bin AppDir/usr/share/licenses/nativefs
+          mkdir -p AppDir/usr/bin AppDir/usr/share/licenses/nativefs AppDir/usr/share/metainfo
+          cp packaging/linux/nativefs.metainfo.xml AppDir/usr/share/metainfo/nativefs.appdata.xml
           cp pkg/nativefs pkg/nativefs-link AppDir/usr/bin/
           cp LICENSE packaging/THIRD-PARTY.txt AppDir/usr/share/licenses/nativefs/
           cp packaging/linux/AppRun AppDir/AppRun
           chmod +x AppDir/AppRun
           cp packaging/linux/nativefs.desktop AppDir/
           cp assets/app-256.png AppDir/nativefs.png
-          ARCH=${{ matrix.appimage }} ./appimagetool --appimage-extract-and-run AppDir out/naTiVeFS-${{ matrix.name }}.AppImage
+          ARCH=${{ matrix.appimage }} ./appimagetool --appimage-extract-and-run --no-appstream AppDir out/naTiVeFS-${{ matrix.name }}.AppImage
 
       - name: dmg
         if: runner.os == 'macOS'
@@ -128,7 +129,7 @@ jobs:
           if ($left) { throw "left after uninstall: $($left.Name -join ', ')" }
           if (Test-Path $key) { throw "uninstall key left behind" }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: naTiVeFS-${{ matrix.name }}
           path: out/*
@@ -139,9 +140,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -163,7 +164,7 @@ jobs:
 
       - name: Keep the test result
         if: github.ref_type != 'tag'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: all-packages
           path: dist/*

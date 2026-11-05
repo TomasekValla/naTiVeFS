@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>nativefs</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>naTiVeFS</name>
+  <summary>Native client for TVFS</summary>
+  <description>
+    <p>Upload and share files on TVFS and open them in a local video player, reader and audio player.</p>
+  </description>
+  <launchable type="desktop-id">nativefs.desktop</launchable>
+  <url type="homepage">https://github.com/TomasekValla/naTiVeFS</url>
+  <developer id="cz.tomasekvalla">
+    <name>Tomáš Valla</name>
+  </developer>
+</component>
