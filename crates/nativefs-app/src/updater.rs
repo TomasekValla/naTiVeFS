@@ -97,12 +97,16 @@ pub fn silent_possible() -> bool {
 }
 
 #[cfg(windows)]
-fn apply(how: How, file: &Path, _hidden: bool) -> Result<(), String> {
+fn apply(how: How, file: &Path, hidden: bool) -> Result<(), String> {
     use windows::core::HSTRING;
     use windows::Win32::UI::Shell::ShellExecuteW;
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
     let How::Installer { all_users } = how else { return Err("nothing to run".into()) };
-    let (verb, params) = if all_users { ("runas", "/S /UPDATE /ALLUSERS") } else { ("open", "/S /UPDATE") };
+    let (verb, params) = match (all_users, hidden) {
+        (true, _) => ("runas", "/S /UPDATE /ALLUSERS"),
+        (false, true) => ("open", "/S /UPDATE /HIDDEN"),
+        (false, false) => ("open", "/S /UPDATE"),
+    };
     let result = unsafe {
         ShellExecuteW(None, &HSTRING::from(verb), &HSTRING::from(file.as_os_str()), &HSTRING::from(params), None, SW_SHOWNORMAL)
     };

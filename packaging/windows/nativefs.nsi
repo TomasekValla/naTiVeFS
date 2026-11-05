@@ -1,6 +1,6 @@
 ; naTiVeFS installer. makensis -DVERSION=0.9.0 -DSRC=<folder with the exes> -DOUT=<setup.exe> nativefs.nsi
 ; Starts without admin rights; "For all users" restarts it elevated. Silent: /S, /ALLUSERS for Program Files,
-; /UPDATE waits for the running app, keeps the mode and starts the new version.
+; /UPDATE waits for the running app and starts the new version; /HIDDEN starts it in the tray.
 Unicode true
 SetCompressor /SOLID lzma
 RequestExecutionLevel user
@@ -24,6 +24,7 @@ VIAddVersionKey "LegalCopyright" "Tomas Valla, GPL-3.0-or-later"
 
 Var AllUsers
 Var Update
+Var Hidden
 Var ModeUser
 Var ModeAll
 
@@ -63,6 +64,11 @@ Function .onInit
   ${IfNot} ${Errors}
     StrCpy $Update 1
   ${EndIf}
+  ClearErrors
+  ${GetOptions} $0 "/HIDDEN" $1
+  ${IfNot} ${Errors}
+    StrCpy $Hidden 1
+  ${EndIf}
   Call SetDefaultDir
 FunctionEnd
 
@@ -95,6 +101,11 @@ Function ModeLeave
 FunctionEnd
 
 Function StartApp
+  ; a silent update back to the tray (per user, so never elevated)
+  ${If} $Hidden == 1
+    Exec '"$INSTDIR\naTiVeFS.exe" --minimized'
+    Return
+  ${EndIf}
   ; through Explorer: an elevated installer must not start the app elevated
   Exec '"$WINDIR\explorer.exe" "$INSTDIR\naTiVeFS.exe"'
 FunctionEnd
