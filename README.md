@@ -32,6 +32,24 @@ TVFS keeps your files exactly as you uploaded them. naTiVeFS does the same on yo
 - **Lives in the tray** — player controls, open a file, upload, the link on your clipboard; start with the computer if you want
 - **Updates itself, safely** — signed updates, downloaded in the background, never restarting in your face
 
+## What it costs your computer
+
+Same window size, same file, a clean browser with one tab, every process counted. Median of three 30-second runs, CPU as a share of one core.
+
+| Powerful 8-core gaming desktop, Windows | naTiVeFS | Chrome | Zen |
+|---|---|---|---|
+| TVFS main page: CPU / memory | **9 %** / **300 MB** | 19 % / 406 MB | 150 % / 1263 MB |
+| 1080p60 video: CPU / memory | 11 % / **530 MB** | **9 %** / 677 MB | 116 % / 1005 MB |
+| 4K image: CPU / memory | **0 %** / 371 MB | 0.3 % / **298 MB** | 1.7 % / 750 MB |
+
+| Power-saving 4-core laptop, Linux | naTiVeFS | Chrome | Zen |
+|---|---|---|---|
+| TVFS main page: CPU / memory | **11 %** / **118 MB** | 27 % / 581 MB | 79 % / 663 MB |
+| 1080p60 video: CPU / memory | **10 %** / **281 MB** | 12 % / 536 MB | 29 % / 664 MB |
+| 4K image: CPU / memory | **0 %** / **153 MB** | 0.8 % / 528 MB | 16 % / 592 MB |
+
+Not a clean sweep: on that Linux laptop the app's video uses more GPU than the browsers (61 % against 14 and 20 %). Memory is private memory on Windows and PSS on Linux, so compare within one table. A build tuned for your own PC measured about the same as the normal one.
+
 ## Platforms
 
 | | Windows | Linux | macOS |
