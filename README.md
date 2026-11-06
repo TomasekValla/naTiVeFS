@@ -38,8 +38,8 @@ Same window size, same file, a clean browser with one tab, every process counted
 
 | Powerful 8-core gaming desktop, Windows | naTiVeFS | Chrome | Zen |
 |---|---|---|---|
-| TVFS main page: CPU / memory | **9 %** / **300 MB** | 19 % / 406 MB | 150 % / 1263 MB |
-| 1080p60 video: CPU / memory | 11 % / **530 MB** | **9 %** / 677 MB | 116 % / 1005 MB |
+| TVFS main page: CPU / memory | **7 %** / **281 MB** | 19 % / 406 MB | 150 % / 1263 MB |
+| 1080p60 video: CPU / memory | 9.3 % / **491 MB** | **8.9 %** / 677 MB | 116 % / 1005 MB |
 | 4K image: CPU / memory | **0 %** / 371 MB | 0.3 % / **298 MB** | 1.7 % / 750 MB |
 
 | Power-saving 4-core laptop, Linux | naTiVeFS | Chrome | Zen |
@@ -50,7 +50,7 @@ Same window size, same file, a clean browser with one tab, every process counted
 
 Not a clean sweep: on that Linux laptop the app's video still uses a little more GPU than the browsers (23 % against 14 and 20 %, all GPU engines added up, without the desktop compositor). Memory is private memory on Windows and PSS on Linux, so compare within one table. A build tuned for your own PC measured about the same as the normal one.
 
-The Linux video row is measured on the code in `main`, which is newer than the latest release; the rest on v0.9.4. naTiVeFS is still young, and more optimisation is coming in later versions.
+naTiVeFS is still young, and more optimisation is coming in later versions.
 
 ## Platforms
 
