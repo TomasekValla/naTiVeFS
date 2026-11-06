@@ -43,10 +43,23 @@ const P_VID: u64 = 13;
 const P_PITCH: u64 = 14;
 const LOADFILE: u64 = 100;
 
+/// mpv's `fast` profile. Its default scalers cost an integrated GPU about three times as much for the same video.
+const FAST_SCALING: [(&str, &str); 8] = [
+    ("scale", "bilinear"),
+    ("dscale", "bilinear"),
+    ("dither", "no"),
+    ("correct-downscaling", "no"),
+    ("linear-downscaling", "no"),
+    ("sigmoid-upscaling", "no"),
+    ("hdr-compute-peak", "no"),
+    ("allow-delayed-peak-detect", "yes"),
+];
+
 struct Player {
     id: u64,
     window: PlayerWindow,
     mpv: Arc<Mpv>,
+    quality_scaling: Vec<(&'static str, String)>,
     content: Content,
     playing: bool,
     position: f64,
@@ -230,6 +243,14 @@ pub fn open(shared: &Arc<Shared>, content: Content) {
             return;
         }
     };
+    // mpv's own defaults, to go back to when high quality is switched on
+    let quality_scaling: Vec<(&'static str, String)> =
+        FAST_SCALING.iter().filter_map(|(k, _)| player_mpv.get_str(k).map(|v| (*k, v))).collect();
+    if !cfg.player_high_quality && extra.is_empty() {
+        for (k, v) in FAST_SCALING {
+            let _ = player_mpv.set_str(k, v);
+        }
+    }
     // "TVFS Users Only" videos need the session cookie (only sent to the TVFS server)
     if content.protected {
         if let Some(token) = shared.client.session_token() {
@@ -269,6 +290,7 @@ pub fn open(shared: &Arc<Shared>, content: Content) {
     window.set_status("Loading…".into());
     window.set_volume(cfg.player_volume as f32);
     window.set_hwdec(cfg.player_hwdec);
+    window.set_high_quality(cfg.player_high_quality);
     window.set_pitch_correction(cfg.player_pitch_correction);
     window.set_stats_level(0);
     window.set_ask_volume(ask);
@@ -277,6 +299,7 @@ pub fn open(shared: &Arc<Shared>, content: Content) {
         id,
         window: window.clone_strong(),
         mpv: mpv.clone(),
+        quality_scaling,
         content: content.clone(),
         playing: false,
         position: 0.0,
@@ -942,6 +965,7 @@ fn save_later(p: &Rc<RefCell<Player>>, shared: &Arc<Shared>) {
         cfg.player_volume = w.get_volume() as f64;
         cfg.player_pitch_correction = w.get_pitch_correction();
         cfg.player_hwdec = w.get_hwdec();
+        cfg.player_high_quality = w.get_high_quality();
         cfg.player_stats = w.get_stats_level().clamp(0, 3) as u8;
         let _ = cfg.save();
     });
@@ -1037,6 +1061,26 @@ fn wire(shared: &Arc<Shared>, p: &Rc<RefCell<Player>>) {
                 let _ = mpv.set_str("hwdec", if on { "auto-safe" } else { "no" });
                 p.borrow().window.set_hwdec(on);
                 osd(p, format!("Hardware decoding {}", if on { "on" } else { "off" }));
+                save_later(p, &shared);
+            });
+        });
+    }
+    {
+        let (mpv, with, shared) = (mpv.clone(), with.clone(), shared.clone());
+        w.on_toggle_high_quality(move || {
+            with(&|p| {
+                let on = !p.borrow().window.get_high_quality();
+                if on {
+                    for (k, v) in &p.borrow().quality_scaling {
+                        let _ = mpv.set_str(k, v);
+                    }
+                } else {
+                    for (k, v) in FAST_SCALING {
+                        let _ = mpv.set_str(k, v);
+                    }
+                }
+                p.borrow().window.set_high_quality(on);
+                osd(p, format!("High quality scaling {}", if on { "on" } else { "off" }));
                 save_later(p, &shared);
             });
         });

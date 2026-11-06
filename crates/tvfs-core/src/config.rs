@@ -120,6 +120,8 @@ pub struct Config {
     pub player_pitch_correction: bool,
     /// Hardware video decoding when available.
     pub player_hwdec: bool,
+    /// mpv's slower, sharper scalers instead of the fast ones.
+    pub player_high_quality: bool,
     /// Statistics overlay detail: 0 off, 1 basic, 2 full, 3 full + graphs.
     pub player_stats: u8,
     /// Zoom of the video player's controls (Ctrl + wheel), like `zoom` for the main window.
@@ -188,6 +190,7 @@ impl Default for Config {
             player_volume: 100.0,
             player_pitch_correction: true,
             player_hwdec: true,
+            player_high_quality: false,
             player_stats: 2,
             player_zoom: 1.0,
             camera_device: String::new(),

@@ -227,6 +227,7 @@ export component PlayerWindow inherits Window {
     in property <float> speed: 1;
     in property <bool> pitch-correction: true;
     in property <bool> hwdec: true;
+    in property <bool> high-quality: false;
     in property <[TrackItem]> sub-tracks;
     in property <[TrackItem]> audio-tracks;
     in property <bool> has-video: true;
@@ -260,6 +261,7 @@ export component PlayerWindow inherits Window {
     callback custom-speed-accepted(string);
     callback toggle-pitch();
     callback toggle-hwdec();
+    callback toggle-high-quality();
     callback pick-sub(int);
     callback pick-audio(int);
     callback cycle-sub();
@@ -729,6 +731,14 @@ export component PlayerWindow inherits Window {
                     spacing: 8px;
                     Text { horizontal-stretch: 1; text: "Hardware decoding"; color: #ffffff; font-size: 13px; vertical-alignment: center; }
                     VerticalLayout { alignment: center; Toggle { on: root.hwdec; toggled => { root.toggle-hwdec(); } } }
+                }
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 8px;
+                    height: 34px;
+                    spacing: 8px;
+                    Text { horizontal-stretch: 1; text: "High quality scaling"; color: #ffffff; font-size: 13px; vertical-alignment: center; }
+                    VerticalLayout { alignment: center; Toggle { on: root.high-quality; toggled => { root.toggle-high-quality(); } } }
                 }
                 MenuItem { label: "Statistics"; hint: root.stats-level == 0 ? "off" : (root.stats-level == 1 ? "basic" : (root.stats-level == 2 ? "full" : "graphs")); clicked => { root.cycle-stats(); } }
                 MenuItem { label: "Next frame"; hint: "E"; clicked => { root.frame-step(); } }
