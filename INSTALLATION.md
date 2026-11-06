@@ -73,7 +73,7 @@ Windows (also needs the Visual Studio C++ build tools, CMake, Git and 7-Zip):
 irm https://raw.githubusercontent.com/TomasekValla/naTiVeFS/main/install/build-for-this-pc.ps1 | iex
 ```
 
-Turn off **Automatic updates** in Settings afterwards on Linux, or an update replaces the tuned build with the normal one.
+The build needs a few GB of free space in the temporary folder. Turn off **Automatic updates** in Settings afterwards on Linux, or an update replaces the tuned build with the normal one.
 
 ## Checking a download yourself
 

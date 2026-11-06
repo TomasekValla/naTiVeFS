@@ -67,7 +67,7 @@ case "$family" in
     suse) $root zypper --non-interactive install --allow-unsigned-rpm "$tmp/$file" ;;
     *)
         mkdir -p "$HOME/.local/bin"
-        tar -xzf "$tmp/$file" -C "$tmp" nativefs nativefs-link
+        tar -xzf "$tmp/$file" -C "$tmp" ./nativefs ./nativefs-link
         install -m 755 "$tmp/nativefs" "$tmp/nativefs-link" "$HOME/.local/bin/"
         case ":$PATH:" in
             *":$HOME/.local/bin:"*) ;;
@@ -77,5 +77,8 @@ case "$family" in
 esac
 
 say "naTiVeFS $tag is installed. Start it from your app menu or with: nativefs"
+if [ "$family" != other ] && [ -e "$HOME/.local/bin/nativefs" ]; then
+    say "An older copy in ~/.local/bin would start instead of this one. Run it with --cleanup and delete it."
+fi
 command -v ffmpeg >/dev/null 2>&1 || say "Without ffmpeg the camera and voice notes will not work."
-ldconfig -p 2>/dev/null | grep -q 'libmpv\.so' || say "Without libmpv (mpv) the video player will not work."
+{ ldconfig -p || /sbin/ldconfig -p; } 2>/dev/null | grep -q 'libmpv\.so' || say "Without libmpv (mpv) the video player will not work."
