@@ -78,6 +78,7 @@ pub fn open(shared: &Arc<Shared>, main: &MainWindow, video: bool) {
     windows::attach(window.window(), windows::Hooks::new());
     windows::place(window.window());
     let _ = window.show();
+    windows::raise(window.window());
 
     // device lists take a moment (Media Foundation / ffmpeg): off the UI thread
     let (cfg_cam, cfg_mic) = {

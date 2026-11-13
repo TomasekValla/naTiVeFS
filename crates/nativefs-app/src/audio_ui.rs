@@ -294,6 +294,7 @@ fn open_source(shared: &Arc<Shared>, source: Source) {
     }
     windows::place(w.window());
     let _ = w.show();
+    windows::raise(w.window());
     // media keys and the system media overlay (needs the native window, so after show)
     {
         let weak = w.as_weak();

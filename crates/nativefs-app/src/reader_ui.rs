@@ -183,6 +183,7 @@ pub fn open(shared: &Arc<Shared>, content: Content) {
     READERS.with(|r| r.borrow_mut().push(reader.clone()));
     windows::place(window.window());
     let _ = window.show();
+    windows::raise(window.window());
     let zoom = reader.borrow().zoom;
     let w2 = window.as_weak();
     slint::Timer::single_shot(std::time::Duration::ZERO, move || {

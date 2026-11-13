@@ -468,6 +468,7 @@ pub fn open(shared: &Arc<Shared>, content: Content) {
     wire(shared, &player);
     windows::place(window.window());
     let _ = window.show();
+    windows::raise(window.window());
     // the controls start visible: subtitles start above them
     sub_margin(&player.borrow(), true);
     activity(&player);

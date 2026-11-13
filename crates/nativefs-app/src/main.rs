@@ -560,6 +560,36 @@ fn update_refresh_hz(ui: &MainWindow) {
     }
 }
 
+/// A message from another naTiVeFS process (second launch, link router, file manager menu, tray).
+fn handle_ipc(ui: &MainWindow, shared: &Arc<Shared>, msg: Message) {
+    match msg {
+        Message::Ping => {}
+        Message::Show => show_window(ui, shared),
+        Message::Open(url) => {
+            // links open in their own window; the main window stays as it is
+            if !open::open_link(shared, &url) {
+                show_window(ui, shared);
+            }
+        }
+        Message::Upload(paths) => {
+            show_window(ui, shared);
+            if ui.get_mode() == 3 || ui.get_mode() == 2 {
+                ui.set_mode(0);
+            }
+            upload_ui::add_paths(ui, paths.into_iter().map(PathBuf::from).collect());
+        }
+        Message::OpenLocal(path) => {
+            if let Err(msg) = open::open_local(shared, std::path::Path::new(&path)) {
+                show_window(ui, shared);
+                show_toast(ui, msg);
+            }
+        }
+        Message::Quit => {
+            let _ = slint::quit_event_loop();
+        }
+    }
+}
+
 fn show_window(ui: &MainWindow, shared: &Arc<Shared>) {
     let first = !shared.main_shown.swap(true, Ordering::Relaxed) && !ui.window().is_visible();
     if first {
@@ -567,7 +597,7 @@ fn show_window(ui: &MainWindow, shared: &Arc<Shared>) {
         ui.window().set_size(slint::LogicalSize::new(ui.get_preferred_w(), ui.get_preferred_h()));
     }
     let _ = ui.show();
-    ui.window().set_minimized(false);
+    windows::raise(ui.window());
     apply_zoom(ui, shared);
     if first {
         update_refresh_hz(ui);
@@ -797,6 +827,7 @@ fn delete_recent(shared: &Arc<Shared>, weak: &Weak<MainWindow>, handle: &tokio::
 }
 
 fn open_external(url: &str, cfg: &Config) {
+    nativefs_ipc::allow_foreground();
     let ok = cfg.browser.as_deref().is_some_and(|b| !b.trim().is_empty()) && cfg.open_in_browser(url).is_ok();
     if !ok {
         if let Err(e) = opener::open_browser(url) {
@@ -2332,33 +2363,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── IPC (second launches, link router, OS menus) ───────────────────────
     {
         let (shared, weak) = (shared.clone(), weak.clone());
-        let _ipc = nativefs_ipc::serve(listener, move |msg| {
+        let _ipc = nativefs_ipc::serve(listener, move |msg, reply| {
             let shared = shared.clone();
-            on_ui(&weak, move |ui| match msg {
-                Message::Ping => {}
-                Message::Show => show_window(ui, &shared),
-                Message::Open(url) => {
-                    // links open in their own window; the main window stays as it is
-                                    if !open::open_link(&shared, &url) {
-                        show_window(ui, &shared);
-                    }
-                }
-                Message::Upload(paths) => {
-                    show_window(ui, &shared);
-                    if ui.get_mode() == 3 || ui.get_mode() == 2 {
-                        ui.set_mode(0);
-                    }
-                    upload_ui::add_paths(ui, paths.into_iter().map(PathBuf::from).collect());
-                }
-                Message::OpenLocal(path) => {
-                    if let Err(msg) = open::open_local(&shared, std::path::Path::new(&path)) {
-                        show_window(ui, &shared);
-                        show_toast(ui, msg);
-                    }
-                }
-                Message::Quit => {
-                    let _ = slint::quit_event_loop();
-                }
+            // the answer goes out only after the UI thread handled it, so the link router can tell a stuck app
+            on_ui(&weak, move |ui| {
+                handle_ipc(ui, &shared, msg);
+                reply.ok();
             });
         });
     }

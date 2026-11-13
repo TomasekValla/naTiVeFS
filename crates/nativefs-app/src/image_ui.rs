@@ -197,6 +197,7 @@ pub fn open(shared: &Arc<Shared>, content: Content) {
     }
     windows::place(w.window());
     let _ = w.show();
+    windows::raise(w.window());
     let _ = w.window().with_winit_window(|_| ());
 
     let (s2, weak, url) = (shared.clone(), w.as_weak(), content.url.clone());

@@ -75,6 +75,7 @@ pub fn open_file(shared: &Arc<Shared>, c: Content) {
     keep_file(&w);
     windows::place(w.window());
     let _ = w.show();
+    windows::raise(w.window());
     // the size, without downloading anything
     let (s2, weak, url) = (shared.clone(), w.as_weak(), w.get_link().to_string());
     let _ = (s2, url);
@@ -103,6 +104,7 @@ pub fn show_error(shared: &Arc<Shared>, link: &str, message: &str) {
     keep_file(&w);
     windows::place(w.window());
     let _ = w.show();
+    windows::raise(w.window());
 }
 
 /// "Show in folder" for a local file: Explorer selects it (Windows), elsewhere its folder opens.
@@ -129,6 +131,7 @@ pub fn save_as(shared: &Arc<Shared>, c: &Content) {
     keep_file(&w);
     windows::place(w.window());
     let _ = w.show();
+    windows::raise(w.window());
     w.invoke_download();
 }
 
@@ -472,6 +475,7 @@ fn open_list(
     }
     windows::place(w.window());
     let _ = w.show();
+    windows::raise(w.window());
 }
 
 /// "Download All": pick a folder, then download the files one after another (row progress).
