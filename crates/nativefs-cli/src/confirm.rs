@@ -1,8 +1,11 @@
 //! One-time confirmation codes for the AI agent mode.
 //!
 //! Step 1 of an agent upload issues a code bound to a hash of the exact file list (paths, sizes,
-//! modification times) and the options (expiry, Users Only, anonymize); a delete code is bound to the file id. Step 2 must present that code: it is single use, valid for
-//! 10 minutes, and refused when anything it was bound to changed. Codes live in the app's data dir.
+//! modification times, voice-note flags), the options (expiry, Users Only, anonymize) and the logged-in account; a
+//! delete code is bound to the file id. Step 2 must present that code: it is single use, valid for 10 minutes, and
+//! refused when anything it was bound to changed. File contents are not hashed (size + modification time only).
+//! Codes live in the app's data dir; every change of the store happens under an exclusive lock file and is written by
+//! atomic rename, so two parallel runs can never both consume one code.
 
 use std::path::{Path, PathBuf};
 
@@ -27,6 +30,8 @@ pub enum ConfirmError {
     Expired,
     /// The code is valid but was issued for other files or options.
     Mismatch,
+    /// The code store could not be locked or written (nothing was consumed).
+    Store(String),
 }
 
 impl std::fmt::Display for ConfirmError {
@@ -34,7 +39,8 @@ impl std::fmt::Display for ConfirmError {
         match self {
             Self::Unknown => write!(f, "Confirmation code not recognised (wrong, or already used). Nothing was uploaded or deleted. Run step 1 again to get a new code."),
             Self::Expired => write!(f, "Confirmation code expired (codes are valid for 10 minutes). Nothing was uploaded or deleted. Run step 1 again to get a new code."),
-            Self::Mismatch => write!(f, "The files, file id or options changed since this code was issued. Nothing was uploaded or deleted. Run step 1 again to get a new code."),
+            Self::Mismatch => write!(f, "The files, file id, account or options changed since this code was issued. Nothing was uploaded or deleted. Run step 1 again to get a new code."),
+            Self::Store(e) => write!(f, "The confirmation code store could not be used ({e}). Nothing was uploaded or deleted. Try again."),
         }
     }
 }
@@ -47,18 +53,57 @@ fn load(dir: &Path) -> Vec<Entry> {
     std::fs::read_to_string(store_path(dir)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
 }
 
+/// Write to a temp file and rename it over the store: a crash never leaves a truncated file.
 fn save(dir: &Path, entries: &[Entry]) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
-    std::fs::write(store_path(dir), serde_json::to_string(entries).unwrap_or_else(|_| "[]".into()))
+    let tmp = dir.join(format!("cli-confirm.json.{}.tmp", std::process::id()));
+    std::fs::write(&tmp, serde_json::to_string(entries).unwrap_or_else(|_| "[]".into()))?;
+    std::fs::rename(&tmp, store_path(dir)).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
+}
+
+/// Exclusive lock on the store: a lock file created with `create_new`, removed on drop. A lock older than 30 s
+/// (a crashed run) is taken over.
+struct Lock(PathBuf);
+
+impl Lock {
+    fn acquire(dir: &Path) -> std::io::Result<Self> {
+        std::fs::create_dir_all(dir)?;
+        let path = dir.join("cli-confirm.lock");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(_) => return Ok(Self(path)),
+                Err(e) => {
+                    let stale = std::fs::metadata(&path).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > std::time::Duration::from_secs(30));
+                    if stale {
+                        let _ = std::fs::remove_file(&path);
+                        continue;
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        return Err(e);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(40));
+                }
+            }
+        }
+    }
+}
+
+impl Drop for Lock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 /// Hash of the exact file list and options a code is bound to.
-pub fn binding(files: &[UploadFile], expire_min: u32, protected: bool, anonymize: bool) -> String {
+pub fn binding(files: &[UploadFile], expire_min: u32, protected: bool, anonymize: bool, account: &str) -> String {
     let mut data = String::new();
     for f in files {
-        data.push_str(&format!("{}\u{1}{}\u{1}{}\u{1}{}\n", f.path.display(), f.size, f.modified_ms, f.upload_name()));
+        data.push_str(&format!("{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\n", f.path.display(), f.size, f.modified_ms, f.upload_name(), f.voice_note));
     }
-    data.push_str(&format!("expire={expire_min};protected={protected};anonymize={anonymize}"));
+    data.push_str(&format!("expire={expire_min};protected={protected};anonymize={anonymize};account={account}"));
     sha256_hex(data.as_bytes())
 }
 
@@ -73,6 +118,7 @@ fn normalize(code: &str) -> String {
 
 /// Issue a code for `binding`; an older code for the same binding is replaced.
 pub fn issue(dir: &Path, binding: &str, now_ms: i64) -> std::io::Result<String> {
+    let _lock = Lock::acquire(dir)?;
     let mut entries: Vec<Entry> = load(dir).into_iter().filter(|e| e.expires_ms > now_ms && e.binding != binding).collect();
     let raw: String = (0..8).map(|_| ALPHABET[fastrand::usize(..ALPHABET.len())] as char).collect();
     let code = format!("{}-{}", &raw[..4], &raw[4..]);
@@ -87,6 +133,7 @@ pub fn issue(dir: &Path, binding: &str, now_ms: i64) -> std::io::Result<String> 
 /// Check and use up a code.
 pub fn consume(dir: &Path, code: &str, binding: &str, now_ms: i64) -> Result<(), ConfirmError> {
     let wanted = normalize(code);
+    let _lock = Lock::acquire(dir).map_err(|e| ConfirmError::Store(e.to_string()))?;
     let mut entries = load(dir);
     let Some(pos) = entries.iter().position(|e| normalize(&e.code) == wanted) else { return Err(ConfirmError::Unknown) };
     if entries[pos].expires_ms <= now_ms {
@@ -98,8 +145,8 @@ pub fn consume(dir: &Path, code: &str, binding: &str, now_ms: i64) -> Result<(),
         return Err(ConfirmError::Mismatch);
     }
     entries.remove(pos);
-    let _ = save(dir, &entries);
-    Ok(())
+    // if the used-up store cannot be written the code would stay valid: refuse instead
+    save(dir, &entries).map_err(|e| ConfirmError::Store(e.to_string()))
 }
 
 // ── SHA-256 (small, self-contained: no extra dependency for one hash) ──────────────────────────
@@ -175,10 +222,10 @@ mod tests {
     #[test]
     fn code_is_single_use_and_bound() {
         let dir = tempfile::tempdir().unwrap();
-        let b = binding(&[file("a.txt", 5, 1)], 1440, false, false);
+        let b = binding(&[file("a.txt", 5, 1)], 1440, false, false, "u");
         let code = issue(dir.path(), &b, 1000).unwrap();
         assert_eq!(code.len(), 9);
-        let other = binding(&[file("a.txt", 6, 1)], 1440, false, false);
+        let other = binding(&[file("a.txt", 6, 1)], 1440, false, false, "u");
         assert_eq!(consume(dir.path(), &code, &other, 2000), Err(ConfirmError::Mismatch));
         // the lowercase / dash-less form works, and only once
         assert_eq!(consume(dir.path(), &code.to_lowercase().replace('-', ""), &b, 2000), Ok(()));
@@ -188,7 +235,7 @@ mod tests {
     #[test]
     fn codes_expire_after_ten_minutes() {
         let dir = tempfile::tempdir().unwrap();
-        let b = binding(&[file("a.txt", 5, 1)], 60, false, false);
+        let b = binding(&[file("a.txt", 5, 1)], 60, false, false, "u");
         let code = issue(dir.path(), &b, 0).unwrap();
         assert_eq!(consume(dir.path(), &code, &b, VALID_MS + 1), Err(ConfirmError::Expired));
         assert_eq!(consume(dir.path(), &code, &b, 1), Err(ConfirmError::Unknown));
@@ -198,23 +245,24 @@ mod tests {
 
     #[test]
     fn binding_covers_files_mtime_and_options() {
-        let a = binding(&[file("a.txt", 5, 1)], 60, false, false);
-        assert_ne!(a, binding(&[file("a.txt", 5, 2)], 60, false, false));
-        assert_ne!(a, binding(&[file("a.txt", 5, 1)], 120, false, false));
-        assert_ne!(a, binding(&[file("a.txt", 5, 1)], 60, true, false));
-        assert_ne!(a, binding(&[file("a.txt", 5, 1)], 60, false, true));
-        assert_ne!(a, binding(&[file("b.txt", 5, 1)], 60, false, false));
-        assert_eq!(a, binding(&[file("a.txt", 5, 1)], 60, false, false));
+        let a = binding(&[file("a.txt", 5, 1)], 60, false, false, "u");
+        assert_ne!(a, binding(&[file("a.txt", 5, 2)], 60, false, false, "u"));
+        assert_ne!(a, binding(&[file("a.txt", 5, 1)], 120, false, false, "u"));
+        assert_ne!(a, binding(&[file("a.txt", 5, 1)], 60, true, false, "u"));
+        assert_ne!(a, binding(&[file("a.txt", 5, 1)], 60, false, true, "u"));
+        assert_ne!(a, binding(&[file("b.txt", 5, 1)], 60, false, false, "u"));
+        assert_eq!(a, binding(&[file("a.txt", 5, 1)], 60, false, false, "u"));
+        assert_ne!(a, binding(&[file("a.txt", 5, 1)], 60, false, false, "other"));
     }
 
     #[test]
     fn anonymize_and_users_only_changes_refuse_the_code() {
         let dir = tempfile::tempdir().unwrap();
         let f = [file("a.txt", 5, 1)];
-        let code = issue(dir.path(), &binding(&f, 60, false, false), 0).unwrap();
-        assert_eq!(consume(dir.path(), &code, &binding(&f, 60, false, true), 1), Err(ConfirmError::Mismatch));
-        assert_eq!(consume(dir.path(), &code, &binding(&f, 60, true, false), 1), Err(ConfirmError::Mismatch));
-        assert_eq!(consume(dir.path(), &code, &binding(&f, 60, false, false), 1), Ok(()));
+        let code = issue(dir.path(), &binding(&f, 60, false, false, "u"), 0).unwrap();
+        assert_eq!(consume(dir.path(), &code, &binding(&f, 60, false, true, "u"), 1), Err(ConfirmError::Mismatch));
+        assert_eq!(consume(dir.path(), &code, &binding(&f, 60, true, false, "u"), 1), Err(ConfirmError::Mismatch));
+        assert_eq!(consume(dir.path(), &code, &binding(&f, 60, false, false, "u"), 1), Ok(()));
     }
 
     #[test]
@@ -223,9 +271,31 @@ mod tests {
         let code = issue(dir.path(), &delete_binding("abc"), 0).unwrap();
         assert_eq!(consume(dir.path(), &code, &delete_binding("abd"), 1), Err(ConfirmError::Mismatch));
         // an upload binding never matches a delete code
-        assert_eq!(consume(dir.path(), &code, &binding(&[file("a.txt", 5, 1)], 60, false, false), 1), Err(ConfirmError::Mismatch));
+        assert_eq!(consume(dir.path(), &code, &binding(&[file("a.txt", 5, 1)], 60, false, false, "u"), 1), Err(ConfirmError::Mismatch));
         assert_eq!(consume(dir.path(), &code, &delete_binding("abc"), 1), Ok(()));
         assert_eq!(consume(dir.path(), &code, &delete_binding("abc"), 1), Err(ConfirmError::Unknown));
+    }
+
+    #[test]
+    fn parallel_consumers_use_a_code_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let b = binding(&[file("a.txt", 5, 1)], 60, false, false, "u");
+        let code = issue(dir.path(), &b, 0).unwrap();
+        let wins: usize = std::thread::scope(|sc| {
+            let hs: Vec<_> = (0..8).map(|_| sc.spawn(|| consume(dir.path(), &code, &b, 1).is_ok() as usize)).collect();
+            hs.into_iter().map(|h| h.join().unwrap()).sum()
+        });
+        assert_eq!(wins, 1);
+        assert!(!dir.path().join("cli-confirm.lock").exists());
+    }
+
+    #[test]
+    fn a_truncated_store_is_treated_as_empty_and_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("cli-confirm.json"), "[{\"code\":\"AB").unwrap();
+        let b = binding(&[file("a.txt", 5, 1)], 60, false, false, "u");
+        let code = issue(dir.path(), &b, 0).unwrap();
+        assert_eq!(consume(dir.path(), &code, &b, 1), Ok(()));
     }
 
     #[test]

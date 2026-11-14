@@ -33,64 +33,90 @@ pub fn collect_files(paths: &[PathBuf]) -> (Vec<UploadFile>, Vec<String>) {
     (files, problems)
 }
 
-/// A file left out of an upload by `--skip-unsupported`.
+/// A file left out of an upload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Skipped {
     pub path: String,
     pub reason: String,
-    /// Left out because it has no detectable extension and sat inside a given folder (the app and the web skip those
-    /// silently too); everything else that is skipped needs `--skip-unsupported`.
-    pub in_folder_no_ext: bool,
+    /// Left out even without `--skip-unsupported`: a file without a detectable extension inside a given folder (the app
+    /// and the web skip those silently too), or a hidden / secret-looking file inside a folder. Everything else that is
+    /// skipped needs `--skip-unsupported`.
+    pub soft: bool,
+}
+
+pub fn is_audio(f: &UploadFile) -> bool {
+    f.mime.starts_with("audio/")
+}
+
+/// File names that look like secrets; folder uploads leave them out unless `--include-hidden` is given.
+pub fn looks_secret(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    const EXT: [&str; 10] = [".pem", ".key", ".p12", ".pfx", ".p8", ".jks", ".keystore", ".ppk", ".kdbx", ".tfstate"];
+    const PREFIX: [&str; 9] = ["id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "credentials", "secrets", ".env", ".netrc", "terraform.tfstate"];
+    EXT.iter().any(|e| n.ends_with(e)) || PREFIX.iter().any(|p| n.starts_with(p)) || n.ends_with(".env")
+}
+
+/// Walk a folder the way `walk_folder` does (depth first, in name order, folder paths relative to its parent), but
+/// leave out dot files / dot folders and secret-looking names unless `include_hidden`, and report everything left out.
+fn walk_folder_checked(dir: &Path, include_hidden: bool, files: &mut Vec<UploadFile>, skipped: &mut Vec<Skipped>, problems: &mut Vec<String>) {
+    let root = dir.parent().unwrap_or(dir);
+    let mut stack = vec![dir.to_owned()];
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        let mut entries: Vec<_> = rd.filter_map(Result::ok).collect();
+        entries.sort_by_key(|e| e.file_name());
+        for e in entries.iter().rev().filter(|e| e.file_type().is_ok_and(|t| t.is_dir())) {
+            if !include_hidden && e.file_name().to_string_lossy().starts_with('.') {
+                skipped.push(Skipped { path: display_path(&e.path()), reason: "hidden folder (starts with a dot; add --include-hidden to upload it)".into(), soft: true });
+            } else {
+                stack.push(e.path());
+            }
+        }
+        for e in entries.iter().filter(|e| e.file_type().is_ok_and(|t| t.is_file())) {
+            let p = e.path();
+            let name = e.file_name().to_string_lossy().into_owned();
+            if !include_hidden {
+                if name.starts_with('.') {
+                    skipped.push(Skipped { path: display_path(&p), reason: "hidden file (starts with a dot; add --include-hidden to upload it)".into(), soft: true });
+                    continue;
+                }
+                if looks_secret(&name) {
+                    skipped.push(Skipped { path: display_path(&p), reason: "looks like a secret or key file (add --include-hidden to upload it)".into(), soft: true });
+                    continue;
+                }
+            }
+            let folder = d.strip_prefix(root).unwrap_or(&d).to_string_lossy().replace('\\', "/");
+            match inspect(&p, Some(folder)) {
+                Ok(f) => files.push(f),
+                Err(r @ Rejected::NoExtension(_)) => skipped.push(Skipped { path: display_path(&p), reason: r.to_string(), soft: true }),
+                Err(r @ Rejected::TooLarge(_)) => skipped.push(Skipped { path: display_path(&p), reason: r.to_string(), soft: false }),
+                Err(r) => problems.push(r.to_string()),
+            }
+        }
+    }
 }
 
 /// Like `collect_files`, but files the server cannot take (no detectable extension, over the size limit) are
-/// skipped and reported instead of being errors. Unreadable or missing paths stay problems.
-pub fn collect_files_skipping(paths: &[PathBuf]) -> (Vec<UploadFile>, Vec<Skipped>, Vec<String>) {
+/// skipped and reported instead of being errors, and folders skip hidden and secret-looking files (see
+/// `walk_folder_checked`). Unreadable or missing paths stay problems.
+pub fn collect_files_skipping(paths: &[PathBuf], include_hidden: bool) -> (Vec<UploadFile>, Vec<Skipped>, Vec<String>) {
     let mut files: Vec<UploadFile> = Vec::new();
     let mut skipped: Vec<Skipped> = Vec::new();
     let mut problems = Vec::new();
-    let judge = |p: &Path, r: Rejected, in_folder: bool, skipped: &mut Vec<Skipped>, problems: &mut Vec<String>| match r {
-        Rejected::NoExtension(_) | Rejected::TooLarge(_) => {
-            let in_folder_no_ext = in_folder && matches!(r, Rejected::NoExtension(_));
-            skipped.push(Skipped { path: display_path(p), reason: r.to_string(), in_folder_no_ext })
-        }
-        Rejected::Unreadable(..) => problems.push(r.to_string()),
-    };
     for p in paths {
         if p.is_dir() {
-            let (f, _) = walk_folder(p);
-            // `walk_folder` drops what it rejects (without a trace for files lacking an extension): find those again
-            let kept: std::collections::HashSet<PathBuf> = f.iter().map(|x| x.path.clone()).collect();
-            files.extend(f);
-            let mut all = Vec::new();
-            list_files(p, &mut all);
-            all.sort();
-            for q in all.into_iter().filter(|q| !kept.contains(q)) {
-                if let Err(r) = inspect(&q, None) {
-                    judge(&q, r, true, &mut skipped, &mut problems);
-                }
-            }
+            walk_folder_checked(p, include_hidden, &mut files, &mut skipped, &mut problems);
             continue;
         }
         match inspect(p, None) {
             Ok(f) => files.push(f),
-            Err(r) => judge(p, r, false, &mut skipped, &mut problems),
+            Err(r @ (Rejected::NoExtension(_) | Rejected::TooLarge(_))) => skipped.push(Skipped { path: display_path(p), reason: r.to_string(), soft: false }),
+            Err(r) => problems.push(r.to_string()),
         }
     }
     let mut seen = std::collections::HashSet::new();
     files.retain(|f| seen.insert(std::fs::canonicalize(&f.path).unwrap_or_else(|_| f.path.clone())));
     (files, skipped, problems)
-}
-
-fn list_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
-    for e in rd.filter_map(Result::ok) {
-        match e.file_type() {
-            Ok(t) if t.is_dir() => list_files(&e.path(), out),
-            Ok(t) if t.is_file() => out.push(e.path()),
-            _ => {}
-        }
-    }
 }
 
 pub fn chunk_mode(c: &Config) -> ChunkMode {
@@ -136,6 +162,16 @@ pub fn display_path(p: &Path) -> String {
 mod tests {
     use super::*;
 
+    fn names(files: &[UploadFile]) -> Vec<String> {
+        let mut n: Vec<_> = files.iter().map(|f| f.share_path()).collect();
+        n.sort();
+        n
+    }
+
+    fn last(p: &str) -> String {
+        p.rsplit(['/', '\\']).next().unwrap().to_owned()
+    }
+
     #[test]
     fn skip_unsupported_lists_what_it_leaves_out() {
         let d = tempfile::tempdir().unwrap();
@@ -147,18 +183,41 @@ mod tests {
         std::fs::write(dir.join("sub").join("NOTICE"), "more").unwrap();
         let lone = d.path().join("COPYING");
         std::fs::write(&lone, "text").unwrap();
-        let (files, skipped, problems) = collect_files_skipping(&[dir.clone(), lone.clone(), d.path().join("missing.txt")]);
-        let mut names: Vec<_> = files.iter().map(|f| f.upload_name()).collect();
-        names.sort();
-        assert_eq!(names, vec!["a.txt", "b.md"]);
-        let mut sk: Vec<_> = skipped.iter().map(|s| s.path.rsplit(['/', '\\']).next().unwrap().to_owned()).collect();
+        let (files, skipped, problems) = collect_files_skipping(&[dir.clone(), lone.clone(), d.path().join("missing.txt")], false);
+        assert_eq!(names(&files), vec!["proj/a.txt", "proj/sub/b.md"]);
+        let mut sk: Vec<_> = skipped.iter().map(|s| last(&s.path)).collect();
         sk.sort();
         assert_eq!(sk, vec!["COPYING", "LICENSE", "NOTICE"]);
         assert!(skipped.iter().all(|s| s.reason.contains("no extension")));
-        // a missing path is still an error, not a silent skip
+        // only the files inside the folder are left out without --skip-unsupported; the named file is not soft
+        assert_eq!(skipped.iter().filter(|s| s.soft).count(), 2);
         assert_eq!(problems.len(), 1);
-        // strict collection keeps its behaviour: a loose file without extension is a problem
         let (_, strict) = collect_files(&[lone]);
         assert_eq!(strict.len(), 1);
+    }
+
+    #[test]
+    fn folders_skip_hidden_and_secret_files_unless_included() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join("proj");
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        for f in ["a.txt", "src/b.md", ".git/config.txt", ".env.local", "server.pem", "id_rsa.pub", "credentials.json", "src/prod.key", ".hidden.txt", "keyboard.txt"] {
+            std::fs::write(dir.join(f), "x").unwrap();
+        }
+        let (files, skipped, problems) = collect_files_skipping(std::slice::from_ref(&dir), false);
+        assert!(problems.is_empty());
+        assert_eq!(names(&files), vec!["proj/a.txt", "proj/keyboard.txt", "proj/src/b.md"]);
+        let mut sk: Vec<_> = skipped.iter().map(|s| last(&s.path)).collect();
+        sk.sort();
+        assert_eq!(sk, vec![".env.local", ".git", ".hidden.txt", "credentials.json", "id_rsa.pub", "prod.key", "server.pem"]);
+        assert!(skipped.iter().all(|s| s.soft && s.reason.contains("--include-hidden")));
+        // the override takes everything
+        let (all, skipped, _) = collect_files_skipping(std::slice::from_ref(&dir), true);
+        assert!(skipped.is_empty());
+        assert_eq!(all.len(), 10);
+        // a file named directly is never filtered
+        let (one, sk, _) = collect_files_skipping(&[dir.join("server.pem")], false);
+        assert_eq!((one.len(), sk.len()), (1, 0));
     }
 }
