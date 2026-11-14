@@ -11,7 +11,7 @@ use serde_json::json;
 use tvfs_core::config::Config;
 use tvfs_core::models::RecentFiles;
 use tvfs_core::fmt::{fmt_bytes, fmt_speed_mbs, fmt_time};
-use tvfs_core::upload::{Control, Run, UploadRequest};
+use tvfs_core::upload::{protected_limit_message, Control, Run, UploadRequest, PROTECTED_MAX_FILES};
 
 use crate::args::AgentArgs;
 use crate::common::*;
@@ -69,11 +69,12 @@ async fn run_async(a: AgentArgs) -> i32 {
     if let Some(id) = a.delete.clone() {
         return delete_flow(&a, &id).await;
     }
-    let (files, mut skipped, mut problems) = collect_files_skipping(&a.paths);
+    let (mut files, mut skipped, mut problems) = collect_files_skipping(&a.paths, a.include_hidden);
     if !a.skip_unsupported {
         // strict (default): a named file or a too large file the server cannot take fails the command; files without an
-        // extension inside a folder are still left out like in the app, but listed as skipped instead of vanishing
-        let (keep, refuse): (Vec<_>, Vec<_>) = skipped.into_iter().partition(|s| s.in_folder_no_ext);
+        // extension, hidden files and secret-looking files inside a folder are left out like in the app, but listed as
+        // skipped instead of vanishing
+        let (keep, refuse): (Vec<_>, Vec<_>) = skipped.into_iter().partition(|s| s.soft);
         problems.extend(refuse.into_iter().map(|s| format!("{}: {}", s.path, s.reason)));
         skipped = keep;
     }
@@ -89,8 +90,22 @@ async fn run_async(a: AgentArgs) -> i32 {
     }
     let cfg = Config::load();
     let protected = a.users_only.unwrap_or(cfg.tvfs_users_only);
+    if protected && files.len() > PROTECTED_MAX_FILES {
+        return fail(a.json, EXIT_USAGE, "invalid_files", &protected_limit_message(files.len()));
+    }
+    if a.voice_note {
+        if protected {
+            return fail(a.json, EXIT_USAGE, "invalid_files", "--voice-note is for public uploads only, but this upload is a TVFS Users Only share (add --public to override the setting).");
+        }
+        if !files.iter().any(is_audio) {
+            return fail(a.json, EXIT_USAGE, "invalid_files", "--voice-note needs at least one audio file among the files to upload.");
+        }
+        for f in files.iter_mut().filter(|f| is_audio(f)) {
+            f.voice_note = true;
+        }
+    }
 
-    let (client, _user) = match client_with_saved_session() {
+    let (client, user) = match client_with_saved_session() {
         Ok(Some(c)) => c,
         Ok(None) => return fail(a.json, EXIT_NOT_LOGGED_IN, "not_logged_in", NOT_LOGGED_IN),
         Err(e) => return fail(a.json, EXIT_FAILED, "error", &format!("Could not read the saved login: {e}")),
@@ -102,7 +117,7 @@ async fn run_async(a: AgentArgs) -> i32 {
     };
 
     let total: u64 = files.iter().map(|f| f.size).sum();
-    let binding = confirm::binding(&files, a.expire_min, protected, a.anonymize);
+    let binding = confirm::binding(&files, a.expire_min, protected, a.anonymize, &user);
     let dir = match Config::data_dir() {
         Ok(d) => d,
         Err(e) => return fail(a.json, EXIT_FAILED, "error", &e.to_string()),
@@ -114,7 +129,6 @@ async fn run_async(a: AgentArgs) -> i32 {
     if let Err(e) = confirm::consume(&dir, code, &binding, now_ms()) {
         return fail(a.json, EXIT_BAD_CODE, "bad_confirmation", &e.to_string());
     }
-    let mut files = files;
     if a.anonymize {
         for f in &mut files {
             f.set_anonymized(true);
@@ -132,7 +146,7 @@ fn step_one(a: &AgentArgs, files: &[tvfs_core::upload::UploadFile], skipped: &[S
     let note = notice(files.len(), &size, protected);
     let expiry_label = expiry::label(a.expire_min);
     if a.json {
-        let list: Vec<_> = files.iter().map(|f| json!({ "path": display_path(&f.path), "name": f.upload_name(), "size": f.size })).collect();
+        let list: Vec<_> = files.iter().map(|f| json!({ "path": display_path(&f.path), "name": f.upload_name(), "size": f.size, "voice_note": f.voice_note })).collect();
         println!(
             "{}",
             json!({
@@ -154,11 +168,12 @@ fn step_one(a: &AgentArgs, files: &[tvfs_core::upload::UploadFile], skipped: &[S
     } else {
         println!("NOTHING UPLOADED YET - confirmation required.\n");
         println!("Files ({}), total {}, link expires in {}:", files.len(), size, expiry_label);
-        for f in files.iter().take(50) {
-            println!("  {} ({})", display_path(&f.path), fmt_bytes(f.size));
+        // every file, never a truncated list: the user (or the agent reporting to them) must see exactly what goes out
+        for f in files.iter() {
+            println!("  {} ({}){}", display_path(&f.path), fmt_bytes(f.size), if f.voice_note { " [voice note]" } else { "" });
         }
-        if files.len() > 50 {
-            println!("  ... and {} more", files.len() - 50);
+        if files.len() > 20 {
+            println!("Total: {} files, {}.", files.len(), size);
         }
         if a.anonymize {
             println!("File names will be replaced by random names (extensions kept).");
@@ -209,21 +224,22 @@ async fn upload(a: &AgentArgs, files: Vec<tvfs_core::upload::UploadFile>, skippe
     }
 }
 
-/// Name of one of the user's recent uploads, if the sync list knows the id (a failed lookup is not an error).
-async fn recent_name(client: &tvfs_core::Client, id: &str) -> Option<String> {
-    let resp = client.sync(None).await.ok()?;
+/// Name of one of the user's recent uploads: `Ok(None)` = the sync list does not know the id, `Err` = the list could
+/// not be fetched.
+async fn recent_name(client: &tvfs_core::Client, id: &str) -> Result<Option<String>, String> {
+    let resp = client.sync(None).await.map_err(|e| e.to_string())?;
     let mut rf = RecentFiles::default();
     rf.apply(resp);
-    rf.files.into_iter().find(|f| f.id == id).map(|f| f.name)
+    Ok(rf.files.into_iter().find(|f| f.id == id).map(|f| f.name))
 }
 
 pub fn delete_notice(id: &str, name: Option<&str>) -> String {
     let what = match name {
         Some(n) => format!("the uploaded file \"{n}\" (id {id})"),
-        None => format!("the uploaded file with id {id} (name unknown: it is not in the recent uploads)"),
+        None => format!("the uploaded file with id {id} (name unknown: it is not in the recent uploads; --force-unknown-id was given)"),
     };
     format!(
-        "You are about to PERMANENTLY DELETE {what} from TVFS. Its links stop working and this cannot be undone. Only delete what the user asked you to delete. By running the command again with `--confirm <CODE>` you, the AI agent, confirm that you understand this and that the user wants this deletion."
+        "You are about to PERMANENTLY DELETE {what} from TVFS. Its links stop working and this cannot be undone. A deletion always needs the user's approval: show the user what will be deleted and run the command again with `--confirm <CODE>` only after they said yes to exactly this deletion."
     )
 }
 
@@ -245,8 +261,21 @@ async fn delete_flow(a: &AgentArgs, id: &str) -> i32 {
         Err(e) => return fail(a.json, EXIT_FAILED, "error", &e.to_string()),
     };
     let binding = confirm::delete_binding(id);
-    let name = recent_name(&client, id).await;
+    let looked_up = recent_name(&client, id).await;
     let Some(code) = a.confirm.as_deref() else {
+        // step 1 only goes on for an id the user's own recent list knows (a wrong or injected id is refused)
+        let name = match looked_up {
+            Err(e) => return fail(a.json, EXIT_FAILED, "error", &format!("Could not check the id against your uploads (is TVFS reachable?): {e}")),
+            Ok(None) if !a.force_unknown_id => {
+                return fail(
+                    a.json,
+                    EXIT_USAGE,
+                    "unknown_id",
+                    &format!("The id {id} is not among your recent uploads, so nothing was prepared. Check the id (the file_id of an upload); if you are sure, add --force-unknown-id."),
+                )
+            }
+            Ok(n) => n,
+        };
         let code = match confirm::issue(&dir, &binding, now_ms()) {
             Ok(c) => c,
             Err(e) => return fail(a.json, EXIT_FAILED, "error", &format!("Could not store the confirmation code: {e}")),
@@ -267,6 +296,7 @@ async fn delete_flow(a: &AgentArgs, id: &str) -> i32 {
     if let Err(e) = confirm::consume(&dir, code, &binding, now_ms()) {
         return fail(a.json, EXIT_BAD_CODE, "bad_confirmation", &e.to_string());
     }
+    let name = looked_up.ok().flatten();
     match client.delete_file(id).await {
         Ok(()) => {
             if a.json {
@@ -344,7 +374,7 @@ pub fn render_json(fin: &Finished, prefs: Prefs, elapsed: f64, avg: f64, skipped
         })
         .collect();
     json!({
-        "status": if fin.any_failed() { "failed" } else { "uploaded" },
+        "status": if !fin.any_failed() { "uploaded" } else if fin.any_ok() { "partial" } else { "failed" },
         "uploaded": fin.any_ok(),
         "files": files,
         "skipped": skipped_json(skipped),
@@ -388,7 +418,8 @@ mod tests {
     fn json_output_marks_default_and_errors() {
         let p = Prefs { auto: AutoCopy::Styled, prefer_tool: true, image_styled: false };
         let v = render_json(&fin(), p, 2.0, 1.0, &[]);
-        assert_eq!(v["status"], "failed");
+        // one file uploaded, one failed: not "failed" as a whole
+        assert_eq!(v["status"], "partial");
         assert_eq!(v["files"][0]["default_link"], "[a](https://x/f/a.png)");
         assert_eq!(v["files"][0]["links"][1]["default"], true);
         assert_eq!(v["files"][1]["ok"], false);
@@ -401,7 +432,7 @@ mod tests {
             r.file_id = "id42".into();
         }
         let p = Prefs { auto: AutoCopy::Normal, prefer_tool: true, image_styled: false };
-        let sk = [Skipped { path: "/x/LICENSE".into(), reason: "no extension".into(), in_folder_no_ext: true }];
+        let sk = [Skipped { path: "/x/LICENSE".into(), reason: "no extension".into(), soft: true }];
         let v = render_json(&f, p, 1.0, 1.0, &sk);
         assert_eq!(v["files"][0]["file_id"], "id42");
         assert_eq!(v["skipped"][0]["path"], "/x/LICENSE");
@@ -424,6 +455,7 @@ mod tests {
     fn delete_notice_names_the_file_when_known() {
         assert!(delete_notice("abc", Some("a.png")).contains("\"a.png\" (id abc)"));
         assert!(delete_notice("abc", None).contains("id abc (name unknown"));
+        assert!(delete_notice("abc", None).contains("always needs the user's approval"));
     }
 
     #[test]

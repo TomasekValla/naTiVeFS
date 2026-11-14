@@ -689,3 +689,41 @@ async fn protected_share_large_is_chunked_per_file() {
     assert_eq!(chunks.get(&(1, 0)).map(Vec::len), Some(0));
     assert!(max_req <= 3, "server-recommended parallelism: {max_req}");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn users_only_share_over_200_files_is_refused_before_anything_is_sent() {
+    let (server, state) = fake_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut files = Vec::new();
+    for i in 0..=PROTECTED_MAX_FILES {
+        let (p, _) = data_file(dir.path(), &format!("f{i}.txt"), 10, i as u64);
+        files.push(inspect(&p, None).unwrap());
+    }
+    let n = files.len();
+    let up = uploader(&server.uri(), Arc::new(ResumeStore::in_memory()));
+    let mut req = request(files, ChunkMode::Auto);
+    req.protected = true;
+    let (report, _, _) = run_upload(&up, req).await;
+    match report.outcome {
+        Outcome::Failed(m) => assert_eq!(m, format!("TVFS Users Only takes at most 200 files per share (this has {n}). Turn Users Only off or upload in parts.")),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    assert!(state.protected_init.lock().unwrap().is_none() && state.protected_direct.lock().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fallback_errors_name_the_http_status() {
+    // a proxy-style HTML 413 for the share start must not end as a bare "Failed to start upload"
+    let server = MockServer::start().await;
+    Mock::given(any()).respond_with(ResponseTemplate::new(413).set_body_string("<html>Request Entity Too Large</html>")).mount(&server).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (p, _) = data_file(dir.path(), "big.bin.txt", 30 * MIB, 3);
+    let up = uploader(&server.uri(), Arc::new(ResumeStore::in_memory()));
+    let mut req = request(vec![inspect(&p, None).unwrap()], ChunkMode::Auto);
+    req.protected = true;
+    let (report, _, _) = run_upload(&up, req).await;
+    match report.outcome {
+        Outcome::Protected(Err(m)) => assert!(m.contains("Failed to start upload (HTTP 413)"), "{m}"),
+        other => panic!("expected a failed share, got {other:?}"),
+    }
+}

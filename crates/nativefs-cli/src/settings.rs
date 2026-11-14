@@ -52,10 +52,39 @@ impl ThemeMode {
     }
 }
 
+/// What the Upload entry of the menu opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PickerMode {
+    /// The file browser inside the terminal.
+    #[default]
+    Terminal,
+    /// The operating system's own file dialog.
+    System,
+}
+
+impl PickerMode {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Terminal => "terminal browser",
+            Self::System => "system dialog",
+        }
+    }
+
+    pub fn toggled(self) -> Self {
+        match self {
+            Self::Terminal => Self::System,
+            Self::System => Self::Terminal,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CliSettings {
     pub theme: ThemeMode,
+    /// How the Upload entry picks files.
+    pub picker: PickerMode,
     /// Last folder of the file picker.
     pub last_dir: Option<String>,
     /// Last expiry (minutes).
@@ -77,7 +106,11 @@ impl CliSettings {
                 let _ = std::fs::create_dir_all(dir);
             }
             if let Ok(text) = toml::to_string_pretty(self) {
-                let _ = std::fs::write(p, text);
+                // temp file + rename: a crash never leaves a half-written settings file
+                let tmp = p.with_extension("toml.tmp");
+                if std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, &p).is_err() {
+                    let _ = std::fs::remove_file(&tmp);
+                }
             }
         }
     }

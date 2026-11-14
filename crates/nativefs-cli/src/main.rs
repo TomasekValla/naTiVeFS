@@ -12,7 +12,8 @@ mod tui;
 use args::Command;
 
 fn main() {
-    let code = match args::parse(std::env::args().skip(1)) {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    let code = match args::parse(argv.clone()) {
         Ok(Command::Help) => {
             print!("{}", args::HELP);
             0
@@ -29,6 +30,10 @@ fn main() {
         Ok(Command::Tui { theme, paths }) => tui::run(theme, paths),
         Err(e) => {
             eprintln!("naTiVeFS-cli: {e}");
+            // an agent that asked for JSON reads stdout: give it the error there too
+            if argv.iter().any(|a| a == "--json") {
+                println!("{}", serde_json::json!({ "status": "usage_error", "error": e }));
+            }
             agent::EXIT_USAGE
         }
     };

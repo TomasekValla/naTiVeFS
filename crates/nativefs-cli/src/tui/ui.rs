@@ -93,6 +93,13 @@ pub fn draw(app: &mut App, f: &mut Frame) {
     draw_status(app, f, status);
     let body = Rect::new(body.x + 1, body.y, body.width.saturating_sub(2), body.height);
     let body = centered(body, 110, body.height);
+    // "‹ Back" row on top of the screens that have a way back (Up from the first item reaches it)
+    let body = if app.screen.has_back() && body.height > 6 {
+        draw_back(app, f, Rect::new(body.x, body.y, body.width, 1));
+        Rect::new(body.x, body.y + 1, body.width, body.height - 1)
+    } else {
+        body
+    };
     match app.screen {
         Screen::Login => draw_login(app, f, body),
         Screen::Menu => draw_menu(app, f, body),
@@ -102,6 +109,7 @@ pub fn draw(app: &mut App, f: &mut Frame) {
         Screen::Result => draw_result(app, f, body),
         Screen::Recent => draw_recent(app, f, body),
         Screen::Settings => draw_settings(app, f, body),
+        Screen::SystemPick => draw_system_pick(app, f, body),
     }
     draw_footer(app, f, foot);
     if let Some((text, _, bad)) = &app.toast {
@@ -111,6 +119,13 @@ pub fn draw(app: &mut App, f: &mut Frame) {
         let color = if *bad { app.theme.bad } else { app.theme.good };
         f.render_widget(Paragraph::new(format!(" {} ", fit(text, (w as usize).saturating_sub(2)))).alignment(Alignment::Center).style(Style::new().fg(app.theme.bg).bg(color).add_modifier(Modifier::BOLD)), r);
     }
+}
+
+fn draw_back(app: &mut App, f: &mut Frame, r: Rect) {
+    let focus = app.back_focus == Some(app.screen);
+    let style = if focus { Style::new().bg(app.theme.sel_bg).fg(app.theme.text).add_modifier(Modifier::BOLD) } else { Style::new().fg(app.theme.dim) };
+    f.render_widget(Paragraph::new(Line::styled(pad_right("  ‹ Back", r.width as usize), style)), r);
+    app.hits.push((r, Hit::Back));
 }
 
 fn draw_header(app: &App, f: &mut Frame, r: Rect) {
@@ -191,12 +206,13 @@ fn draw_footer(app: &App, f: &mut Frame, r: Rect) {
     let hints: &[(&str, &str)] = match app.screen {
         Screen::Login => &[("Tab", "switch field"), ("Enter", "log in"), ("Esc", "quit")],
         Screen::Menu => &[("↑↓", "move"), ("Enter", "open"), ("u r s l q", "shortcuts")],
-        Screen::Picker => &[("type", "filter"), ("Space", "select"), ("Enter", "open"), ("Tab", "continue"), ("^O", "system dialog"), ("Esc", "back")],
-        Screen::Options => &[("←→", "change"), ("↑↓", "row"), ("Enter", "start upload"), ("Esc", "back")],
+        Screen::Picker => &[("type", "filter"), ("Space", "select"), ("Enter", "open"), ("Tab", "continue"), ("^O", "system dialog"), ("Esc/←", "back")],
+        Screen::Options => &[("←→", "change"), ("↑↓", "row"), ("Enter", "start upload"), ("Esc/⌫", "back")],
         Screen::Uploading => &[("p", "pause"), ("c", "cancel")],
-        Screen::Result => &[("↑↓", "move"), ("Enter", "copy"), ("o", "open"), ("n", "new upload"), ("m", "menu")],
-        Screen::Recent => &[("↑↓", "move"), ("Enter", "copy"), ("l/s", "plain/styled"), ("o", "open"), ("r", "refresh"), ("d", "delete"), ("Esc", "back")],
-        Screen::Settings => &[("↑↓", "move"), ("Enter/←→", "change"), ("Esc", "back")],
+        Screen::Result => &[("↑↓", "move"), ("Enter", "copy"), ("o", "open"), ("n", "new upload"), ("m/←", "menu")],
+        Screen::Recent => &[("↑↓", "move"), ("Enter", "copy"), ("l/s", "plain/styled"), ("o", "open"), ("r", "refresh"), ("d", "delete"), ("Esc/←", "back")],
+        Screen::Settings => &[("↑↓", "move"), ("Enter/←→", "change"), ("Esc/⌫", "back")],
+        Screen::SystemPick => &[("Enter", "choose files"), ("f", "choose a folder"), ("t", "terminal browser"), ("Esc/←", "back")],
     };
     let t = &app.theme;
     if let (Screen::Recent, Some((_, name))) = (app.screen, &app.recent.pending_delete) {
@@ -336,47 +352,99 @@ fn draw_picker(app: &mut App, f: &mut Frame, body: Rect) {
 
 fn draw_options(app: &mut App, f: &mut Frame, body: Rect) {
     let t = app.theme.clone();
-    let r = centered(body, 90, body.height.min(22));
+    let r = centered(body, 90, body.height.min(24));
     f.render_widget(panel(app, "Upload options"), r);
     let inner = Rect::new(r.x + 3, r.y + 2, r.width.saturating_sub(6), r.height.saturating_sub(3));
+    let w = inner.width as usize;
+    let n_files = app.opts.files.len();
     let total: u64 = app.opts.files.iter().map(|x| x.size).sum();
-    let mut lines = vec![Line::from(vec![
-        Span::styled(format!("{} file(s), {}", app.opts.files.len(), fmt_bytes(total)), Style::new().fg(t.text).add_modifier(Modifier::BOLD)),
-    ])];
-    for fl in app.opts.files.iter().take(5) {
-        lines.push(Line::styled(format!("  {}", fit(&fl.share_path(), (inner.width as usize).saturating_sub(4))), Style::new().fg(t.dim)));
+    let audio = app.opts.has_audio();
+    let users_only = app.opts.users_only;
+    let too_many = users_only && n_files > tvfs_core::upload::PROTECTED_MAX_FILES;
+    // the 12 expiry chips take one row when they fit, else two
+    let chip_total: usize = expiry::LABELS.iter().map(|l| l.chars().count() + 3).sum();
+    let chip_rows = if chip_total <= w { 1 } else { 2 };
+    // everything below the file list is fixed: label, chips, blank, toggles, warning(s), Enter row
+    let fixed = 1 + 1 + 1 + chip_rows + 1 + app.opts.rows() + 1 + usize::from(too_many) + 1;
+    let room = (inner.height as usize).saturating_sub(fixed).min(5);
+    let mut lines = vec![Line::from(vec![Span::styled(format!("{n_files} file(s), {}", fmt_bytes(total)), Style::new().fg(t.text).add_modifier(Modifier::BOLD))])];
+    let shown = if n_files <= room { n_files } else { room.saturating_sub(1) };
+    for fl in app.opts.files.iter().take(shown) {
+        lines.push(Line::styled(format!("  {}", fit(&fl.share_path(), w.saturating_sub(4))), Style::new().fg(t.dim)));
     }
-    if app.opts.files.len() > 5 {
-        lines.push(Line::styled(format!("  … and {} more", app.opts.files.len() - 5), Style::new().fg(t.dim)));
+    if n_files > shown && room > 0 {
+        lines.push(Line::styled(format!("  … and {} more", n_files - shown), Style::new().fg(t.dim)));
     }
     lines.push(Line::raw(""));
     let label_style = |row: usize| if app.opts.row == row { Style::new().fg(t.accent2).add_modifier(Modifier::BOLD) } else { Style::new().fg(t.dim) };
     lines.push(Line::styled("Link expires after", label_style(0)));
-    let y_chips = inner.y + lines.len() as u16;
-    let mut chip_spans = vec![];
-    let mut x = inner.x;
-    for (i, l) in expiry::LABELS.iter().enumerate() {
-        let text = format!(" {l} ");
-        let w = text.chars().count() as u16;
-        let sel = app.opts.expiry == i;
-        chip_spans.push(Span::styled(text, if sel { Style::new().bg(t.accent).fg(t.bg).add_modifier(Modifier::BOLD) } else { Style::new().fg(t.text) }));
-        chip_spans.push(Span::raw(" "));
-        app.hits.push((Rect::new(x, y_chips, w, 1), Hit::Expiry(i)));
-        x += w + 1;
+    let per_row = expiry::LABELS.len().div_ceil(chip_rows);
+    let mut hits: Vec<(Rect, Hit)> = Vec::new();
+    for (row_i, chunk) in expiry::LABELS.chunks(per_row).enumerate() {
+        let y = inner.y + lines.len() as u16;
+        let mut spans = vec![];
+        let mut x = inner.x;
+        for (j, l) in chunk.iter().enumerate() {
+            let i = row_i * per_row + j;
+            let text = format!(" {l} ");
+            let cw = text.chars().count() as u16;
+            let sel = app.opts.expiry == i;
+            spans.push(Span::styled(text, if sel { Style::new().bg(t.accent).fg(t.bg).add_modifier(Modifier::BOLD) } else { Style::new().fg(t.text) }));
+            spans.push(Span::raw(" "));
+            if x + cw <= inner.x + inner.width {
+                hits.push((Rect::new(x, y, cw, 1), Hit::Expiry(i)));
+            }
+            x += cw + 1;
+        }
+        lines.push(Line::from(spans));
     }
-    lines.push(Line::from(chip_spans));
     lines.push(Line::raw(""));
     let toggle = |on: bool| if on { Span::styled("[x] ", Style::new().fg(t.good)) } else { Span::styled("[ ] ", Style::new().fg(t.dim)) };
     let y_opt = inner.y + lines.len() as u16;
     lines.push(Line::from(vec![toggle(app.opts.anonymize), Span::styled("Anonymize file names (random name, same extension)", label_style(1))]));
-    lines.push(Line::from(vec![toggle(app.opts.users_only), Span::styled("TVFS Users Only (only logged-in users can open the link)", label_style(2))]));
-    app.hits.push((Rect::new(inner.x, y_opt, inner.width, 1), Hit::OptRow(1)));
-    app.hits.push((Rect::new(inner.x, y_opt + 1, inner.width, 1), Hit::OptRow(2)));
-    lines.push(Line::raw(""));
-    lines.push(Line::from(vec![Span::styled(" Enter ", Style::new().bg(t.accent2).fg(t.bg).add_modifier(Modifier::BOLD)), Span::styled("  start the upload", Style::new().fg(t.text))]));
-    if !app.opts.users_only {
-        lines.push(Line::styled("The link will be public: anyone with it can open the file.", Style::new().fg(t.warn)));
+    lines.push(Line::from(vec![toggle(users_only), Span::styled("TVFS Users Only (only logged-in users can open the link)", label_style(2))]));
+    if audio {
+        let mut v = vec![toggle(app.opts.voice_note && !users_only), Span::styled("Upload as voice note", label_style(3))];
+        if users_only {
+            v.push(Span::styled("  (public uploads only)", Style::new().fg(t.dim)));
+        }
+        lines.push(Line::from(v));
     }
+    for i in 0..app.opts.rows() - 1 {
+        hits.push((Rect::new(inner.x, y_opt + i as u16, inner.width, 1), Hit::OptRow(i + 1)));
+    }
+    // the warnings come before the Enter row, so they are never the part that gets cut off on a small terminal
+    if too_many {
+        lines.push(Line::styled(fit(&tvfs_core::upload::protected_limit_message(n_files), w), Style::new().fg(t.bad)));
+    }
+    if !users_only {
+        lines.push(Line::styled(fit("The link will be public: anyone with it can open the file.", w), Style::new().fg(t.warn)));
+    } else {
+        lines.push(Line::raw(""));
+    }
+    lines.push(Line::from(vec![Span::styled(" Enter ", Style::new().bg(t.accent2).fg(t.bg).add_modifier(Modifier::BOLD)), Span::styled("  start the upload", Style::new().fg(t.text))]));
+    // clickable areas only where something is drawn
+    let bottom = inner.y + inner.height;
+    app.hits.extend(hits.into_iter().filter(|(r, _)| r.y < bottom));
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+fn draw_system_pick(app: &mut App, f: &mut Frame, body: Rect) {
+    let t = app.theme.clone();
+    let r = centered(body, 70, body.height.min(11));
+    f.render_widget(panel(app, "Choose files"), r);
+    let inner = Rect::new(r.x + 3, r.y + 2, r.width.saturating_sub(6), r.height.saturating_sub(3));
+    let state = if app.dialog_open { "The system file dialog is open (it may be behind this window)." } else { "The system file dialog is closed." };
+    let key = |k: &'static str| Span::styled(format!(" {k} "), Style::new().bg(t.accent2).fg(t.bg).add_modifier(Modifier::BOLD));
+    let lines = vec![
+        Line::styled(fit(state, inner.width as usize), Style::new().fg(t.accent)),
+        Line::raw(""),
+        Line::from(vec![key("Enter"), Span::styled("  choose files (several at once)", Style::new().fg(t.text))]),
+        Line::from(vec![key("f"), Span::styled("  choose a folder instead", Style::new().fg(t.text))]),
+        Line::from(vec![key("t"), Span::styled("  use the terminal file browser this time", Style::new().fg(t.text))]),
+        Line::raw(""),
+        Line::styled(fit("Change this under Settings: Pick files with.", inner.width as usize), Style::new().fg(t.dim)),
+    ];
     f.render_widget(Paragraph::new(lines), inner);
 }
 
@@ -438,14 +506,13 @@ fn draw_uploading(app: &mut App, f: &mut Frame, body: Rect) {
     }
     lines.push(Line::raw(""));
     let room = (inner.height as usize).saturating_sub(lines.len() + 2);
-    for (i, (name, (phase, bytes, size))) in up.run.files.iter().map(|f| &f.name).zip(s.files.iter()).enumerate().take(room) {
+    for (name, (phase, bytes, size)) in up.run.files.iter().map(|f| &f.name).zip(s.files.iter()).take(room) {
         let (icon, color) = match phase {
             Phase::Waiting => ("·", t.dim),
             Phase::Active => (spinner(app), t.accent),
             Phase::Done => ("✔", t.good),
             Phase::Failed => ("✘", t.bad),
         };
-        let _ = i;
         lines.push(Line::from(vec![
             Span::styled(format!("{icon} "), Style::new().fg(color)),
             Span::styled(pad_right(&fit(name, (inner.width as usize).saturating_sub(24)), (inner.width as usize).saturating_sub(24)), Style::new().fg(t.text)),
@@ -512,13 +579,11 @@ fn draw_result(app: &mut App, f: &mut Frame, body: Rect) {
     }
     let cur_pos = flat.iter().position(|(i, _)| *i == Some(app.result.cursor)).unwrap_or(0);
     let start = if avail == 0 { 0 } else { (cur_pos + 1).saturating_sub(avail) };
-    let mut y = inner.y + top;
-    for (idx, line) in flat.into_iter().skip(start).take(avail) {
+    for (y, (idx, line)) in (inner.y + top..).zip(flat.into_iter().skip(start).take(avail)) {
         if let Some(i) = idx {
             app.hits.push((Rect::new(inner.x, y, inner.width, 1), Hit::ResultRow(i)));
         }
         lines.push(line);
-        y += 1;
     }
     f.render_widget(Paragraph::new(lines), inner);
 }
@@ -568,7 +633,7 @@ fn draw_recent(app: &mut App, f: &mut Frame, body: Rect) {
 /// while any such text is on screen (nothing ticks when everything fits).
 fn marquee(app: &mut App, text: &str, w: usize) -> String {
     let chars: Vec<char> = text.chars().collect();
-    if chars.len() <= w || w == 0 {
+    if width(text) <= w || w == 0 {
         return text.to_owned();
     }
     app.marquee_active = true;
@@ -584,7 +649,7 @@ fn marquee(app: &mut App, text: &str, w: usize) -> String {
 fn draw_settings(app: &mut App, f: &mut Frame, body: Rect) {
     let t = app.theme.clone();
     // wide enough for the notes on a normal terminal; on narrower ones a note that does not fit scrolls (marquee)
-    let r = centered(body, 112, body.height.min(14));
+    let r = centered(body, 112, body.height.min(16));
     f.render_widget(panel(app, "Settings"), r);
     let c = &app.cfg;
     let copy = match c.auto_copy {
@@ -593,7 +658,8 @@ fn draw_settings(app: &mut App, f: &mut Frame, body: Rect) {
         tvfs_core::config::AutoCopy::Styled => "styled link",
     };
     let rows: [(&str, String, &str); SETTINGS_ROWS] = [
-        ("Theme", app.cli.theme.name().to_owned(), "auto follows the naTiVeFS app"),
+        ("Theme", app.theme_override.unwrap_or(app.cli.theme).name().to_owned(), "auto follows the naTiVeFS app"),
+        ("Pick files with", app.cli.picker.name().to_owned(), "what Upload opens: terminal browser or the system file dialog"),
         ("Auto copy after upload", copy.to_owned(), "shared with the app"),
         ("When a reader / player page exists", if c.auto_copy_prefer_tool { "copy the tool link" } else { "copy the file link" }.to_owned(), "shared with the app"),
         ("If an image was uploaded", if c.auto_copy_image_styled { "styled link" } else { "normal link" }.to_owned(), "shared with the app"),
@@ -605,11 +671,12 @@ fn draw_settings(app: &mut App, f: &mut Frame, body: Rect) {
             break;
         }
         let sel = app.settings_row == i;
+        let note_w = (rect.width as usize).saturating_sub(2 + 38 + 26);
         let line = Line::from(vec![
             Span::styled(if sel { "▸ " } else { "  " }, Style::new().fg(t.accent2)),
             Span::styled(pad_right(label, 38), Style::new().fg(t.text)),
             Span::styled(pad_right(&format!("‹ {value} ›"), 26), Style::new().fg(t.accent).add_modifier(Modifier::BOLD)),
-            Span::styled(marquee(app, note, (rect.width as usize).saturating_sub(2 + 38 + 26)), Style::new().fg(t.dim)),
+            Span::styled(if sel { marquee(app, note, note_w) } else { fit(note, note_w) }, Style::new().fg(t.dim)),
         ]);
         f.render_widget(Paragraph::new(line).style(if sel { Style::new().bg(t.sel_bg) } else { Style::new() }), rect);
         app.hits.push((rect, Hit::Setting(i)));
