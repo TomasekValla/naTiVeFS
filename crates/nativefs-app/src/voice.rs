@@ -408,7 +408,7 @@ fn use_recording(ui: &MainWindow, shared: &Arc<Shared>) {
             match result {
                 Ok(path) => {
                     close(&ui);
-                    upload_ui::add_paths(&ui, vec![path]);
+                    upload_ui::add_voice_note(&ui, path);
                 }
                 Err(e) => status(&ui, 4, &format!("Encoding failed: {e}"), true),
             }

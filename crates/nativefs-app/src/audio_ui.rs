@@ -156,11 +156,17 @@ fn find(w: &AudioWindow) -> Option<Rc<RefCell<State>>> {
 
 /// Open a TVFS audio link.
 pub fn open(shared: &Arc<Shared>, content: Content) {
+    if content.voice_note {
+        return crate::voice_player::open(shared, crate::voice_player::Source::Remote(content));
+    }
     open_source(shared, Source::Remote(content));
 }
 
 /// Open a local audio file ("Use TVFS tools locally").
 pub fn open_local(shared: &Arc<Shared>, path: PathBuf) {
+    if crate::voice_player::is_own_recording(&path) {
+        return crate::voice_player::open(shared, crate::voice_player::Source::Local(path));
+    }
     open_source(shared, Source::Local(path));
 }
 

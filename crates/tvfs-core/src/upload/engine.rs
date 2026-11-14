@@ -826,6 +826,7 @@ async fn upload_chunked(ctx: Arc<Ctx>, idx: usize, file: UploadFile, slot_state:
                 upload_mode: upload_mode(chunk_size).into(),
                 expiration_minutes: ctx.expiration,
                 batch_id: ctx.batch_id.clone(),
+                voice_note: file.voice_note,
             };
             let body = serde_json::to_value(&init).map_err(|e| FileError::Failed(e.to_string()))?;
             let r: UploadInitResponse = with_retries(&ctx, "upload init", Retry::TransientOnly, |_| {
@@ -967,6 +968,7 @@ async fn find_completed(ctx: &Ctx, cf: &ChunkedFile) -> Option<UploadCompleteRes
                 size: f.size,
                 file_id: f.id,
                 styled_link_pending: true,
+                voice_note: f.voice_note,
                 ..Default::default()
             });
         }
@@ -1024,6 +1026,9 @@ async fn upload_small(ctx: Arc<Ctx>, idx: usize, file: UploadFile, slot_state: A
             ];
             if let Some(b) = &ctx.batch_id {
                 after.push(("batchId", b.clone()));
+            }
+            if file.voice_note {
+                after.push(("voiceNote", "1".to_string()));
             }
             let r: UploadCompleteResponse =
                 send_multipart(&ctx, "api/upload", &[], &[part], &after, Some(timeout), &sent, "Upload").await?;

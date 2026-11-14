@@ -34,6 +34,8 @@ pub struct Content {
     pub protected: bool,
     /// The link that was opened (a reader / player page or the file itself), for "Copy link".
     pub page: String,
+    /// An audio player page of a voice note (recorded with the app's voice recorder).
+    pub voice_note: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -115,7 +117,7 @@ impl Content {
     pub fn local(path: &Path) -> Option<Content> {
         let url = Url::from_file_path(path).ok()?;
         let name = path.file_name()?.to_string_lossy().into_owned();
-        Some(Content { url: url.to_string(), kind: kind_from_name(&name), name, protected: false, page: String::new() })
+        Some(Content { url: url.to_string(), kind: kind_from_name(&name), name, protected: false, page: String::new(), voice_note: false })
     }
 
     /// The path of a local file (`Content::local`), `None` for a TVFS file.
@@ -185,6 +187,7 @@ pub fn parse_reader_page(html: &str, page: &str) -> Option<Content> {
         name,
         kind: if markdown { ContentKind::Markdown } else { ContentKind::Text },
         page: page.to_owned(),
+        voice_note: false,
     })
 }
 
@@ -199,6 +202,9 @@ pub struct AudioPageData {
     /// Integrated loudness measured by the server (EBU R128).
     #[serde(default)]
     pub lufs: Option<f64>,
+    /// The page of a voice note (absent on older pages = normal audio).
+    #[serde(default)]
+    pub voice_note: bool,
 }
 
 pub fn parse_audio_data(html: &str) -> Option<AudioPageData> {
@@ -211,14 +217,15 @@ pub fn parse_audio_data(html: &str) -> Option<AudioPageData> {
         let rest = &html[i + "var TRACK_BPM =".len()..];
         rest[..rest.find([';', '\n']).unwrap_or(rest.len())].trim().parse::<f64>().ok()
     });
-    Some(AudioPageData { audio_url, bpm, lufs: None })
+    Some(AudioPageData { audio_url, bpm, lufs: None, voice_note: false })
 }
 
 /// An audio player page (`/files/players/*_player.html`, protected `tools/*_player.html`).
 pub fn parse_audio_page(html: &str, page: &str) -> Option<Content> {
-    let url = parse_audio_data(html)?.audio_url;
+    let data = parse_audio_data(html)?;
+    let (url, voice_note) = (data.audio_url, data.voice_note);
     let name = page_title(html).map(|t| t.0).unwrap_or_else(|| last_segment(&url));
-    Some(Content { protected: url.contains("/api/protected/"), url, name, kind: ContentKind::Audio, page: page.to_owned() })
+    Some(Content { protected: url.contains("/api/protected/"), url, name, kind: ContentKind::Audio, page: page.to_owned(), voice_note })
 }
 
 /// Text between `<p class="{class}">` and `</p>` with the HTML entities undone.
@@ -250,7 +257,7 @@ pub fn parse_batch_page(html: &str) -> Option<BatchPage> {
 }
 
 fn file_content(url: &Url, page: &str, protected: bool, name: String) -> Content {
-    Content { url: url.to_string(), kind: kind_from_name(&name), name, protected, page: page.to_owned() }
+    Content { url: url.to_string(), kind: kind_from_name(&name), name, protected, page: page.to_owned(), voice_note: false }
 }
 
 /// Work out what `link` shows. Pages are downloaded (with the session cookie) and read.
@@ -310,7 +317,7 @@ impl ShareMeta {
     pub fn content(&self, base: &Url, file: &ShareFile) -> Content {
         let url = base.join(&format!("api/protected/{}/file/{}", crate::client::path_segment(&self.id), file.index)).map(|u| u.to_string()).unwrap_or_default();
         let name = last_segment(&file.relative_path);
-        Content { kind: kind_from_name(&name), name, protected: true, page: url.clone(), url }
+        Content { kind: kind_from_name(&name), name, protected: true, page: url.clone(), url, voice_note: false }
     }
 }
 

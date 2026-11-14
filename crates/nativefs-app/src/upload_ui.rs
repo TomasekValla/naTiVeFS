@@ -130,6 +130,12 @@ pub fn add_paths(ui: &MainWindow, paths: Vec<PathBuf>) {
     ui.set_upload_error(errors.join("\n").into());
 }
 
+/// A recording made with the voice recorder: queued like any file, but the server is told it is a voice note.
+pub fn add_voice_note(ui: &MainWindow, path: PathBuf) {
+    add_paths(ui, vec![path.clone()]);
+    with_state(|s| s.queue.iter_mut().filter(|f| f.path == path).for_each(|f| f.voice_note = true));
+}
+
 pub fn queue_rename(ui: &MainWindow, i: usize, text: &str) {
     with_state(|s| {
         if let Some(f) = s.queue.get_mut(i) {

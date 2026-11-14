@@ -1,0 +1,280 @@
+// Voice note player: a voice note opens as a chat message (round TVFS avatar, a bubble with play / pause, a waveform
+// and the time) instead of the full audio player. Only speed and volume are offered; loudness is always normalized.
+
+import { Palette } from "common.slint";
+
+component SpeedChip inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    callback clicked();
+    height: 28px;
+    width: t.preferred-width + 22px;
+    border-radius: 14px;
+    background: root.on ? #8455ff52 : (ta.has-hover ? #ffffff1f : #ffffff0f);
+    border-width: 1px;
+    border-color: root.on ? #b083ff : #ffffff24;
+    t := Text {
+        text: root.label;
+        font-size: 12px;
+        font-weight: 600;
+        color: root.on ? #ffffff : Palette.dim;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+}
+
+export component VoicePlayerWindow inherits Window {
+    default-font-family: "Inter";
+    in property <[float]> bars;
+    in property <float> progress;
+    in property <bool> ready;
+    in property <bool> playing;
+    in property <bool> muted;
+    in property <string> elapsed: "0:00";
+    in property <string> total: "0:00";
+    in property <string> date;
+    in property <string> status;
+    in property <bool> status-error;
+    in property <int> speed-index;
+    in property <float> volume: 1;
+    callback play-pause();
+    callback seek(float);
+    callback seek-by(float);
+    callback set-speed(int);
+    callback set-volume(float);
+    callback toggle-mute();
+
+    title: "Voice note - naTiVeFS";
+    icon: @image-url("../../../assets/app-64.png");
+    background: #03070a;
+    min-width: 340px;
+    min-height: 250px;
+    preferred-width: 440px;
+    preferred-height: 290px;
+
+    FocusScope {
+        key-pressed(e) => {
+            if e.text == " " { root.play-pause(); return accept; }
+            if e.text == Key.LeftArrow { root.seek-by(-5); return accept; }
+            if e.text == Key.RightArrow { root.seek-by(5); return accept; }
+            reject
+        }
+    }
+
+    property <length> col-w: min(420px, max(200px, root.width - 32px));
+    Rectangle {
+      x: 0px;
+      y: 0px;
+      width: root.width;
+      height: root.height;
+    VerticalLayout {
+        alignment: center;
+        padding: 16px;
+        spacing: 14px;
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: root.col-w;
+                height: 96px;
+                // avatar: round, TVFS logo, never a person
+                Rectangle {
+                    x: 0px;
+                    y: 52px;
+                    width: 44px;
+                    height: 44px;
+                    border-radius: 22px;
+                    background: Palette.brand;
+                    Image {
+                        x: 8px;
+                        y: 8px;
+                        width: 28px;
+                        height: 28px;
+                        source: @image-url("../../../assets/app-128.png");
+                        image-rendering: smooth;
+                    }
+                }
+                Text {
+                    x: 54px;
+                    y: 0px;
+                    text: "Voice note";
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: Palette.dim;
+                }
+                // the bubble
+                Rectangle {
+                    x: 54px;
+                    y: 18px;
+                    width: parent.width - 54px;
+                    height: 78px;
+                    border-radius: 18px;
+                    background: #1c202a;
+                    border-width: 1px;
+                    border-color: #ffffff24;
+                    Rectangle {
+                        x: 12px;
+                        y: 14px;
+                        width: 36px;
+                        height: 36px;
+                        border-radius: 18px;
+                        background: Palette.brand;
+                        opacity: root.ready ? 1 : 0.45;
+                        Path {
+                            x: 14px;
+                            y: 11px;
+                            width: 12px;
+                            height: 14px;
+                            viewbox-width: 12;
+                            viewbox-height: 14;
+                            commands: "M 0 0 L 12 7 L 0 14 Z";
+                            fill: #ffffff;
+                            visible: !root.playing;
+                        }
+                        Rectangle {
+                            x: 12px;
+                            y: 11px;
+                            width: 4px;
+                            height: 14px;
+                            border-radius: 1px;
+                            background: #ffffff;
+                            visible: root.playing;
+                        }
+                        Rectangle {
+                            x: 20px;
+                            y: 11px;
+                            width: 4px;
+                            height: 14px;
+                            border-radius: 1px;
+                            background: #ffffff;
+                            visible: root.playing;
+                        }
+                        TouchArea {
+                            enabled: root.ready;
+                            mouse-cursor: MouseCursor.pointer;
+                            clicked => { root.play-pause(); }
+                        }
+                    }
+                    // waveform: played part lit, click to seek
+                    wave := Rectangle {
+                        x: 60px;
+                        y: 12px;
+                        width: parent.width - 60px - 14px;
+                        height: 36px;
+                        property <length> slot: self.width / max(1, root.bars.length);
+                        property <float> shown: wave-ta.pressed ? clamp(wave-ta.mouse-x / wave.width, 0, 1) : root.progress;
+                        for b[i] in root.bars : Rectangle {
+                            x: i * wave.slot + wave.slot * 0.2;
+                            width: wave.slot * 0.6;
+                            height: max(3px, 36px * (0.1 + 0.9 * b));
+                            y: (wave.height - self.height) / 2;
+                            border-radius: self.width / 2;
+                            background: (i + 0.5) / root.bars.length <= wave.shown ? #2fffc4 : #ffffff40;
+                        }
+                        wave-ta := TouchArea {
+                            enabled: root.ready;
+                            mouse-cursor: MouseCursor.pointer;
+                            pointer-event(e) => {
+                                if e.kind == PointerEventKind.up && e.button == PointerEventButton.left {
+                                    root.seek(clamp(self.mouse-x / wave.width, 0, 1));
+                                }
+                            }
+                        }
+                    }
+                    Text {
+                        x: 60px;
+                        y: 54px;
+                        text: root.elapsed + " / " + root.total;
+                        font-size: 11px;
+                        color: Palette.dim;
+                    }
+                    Text {
+                        x: parent.width - self.width - 14px;
+                        y: 54px;
+                        text: root.date;
+                        font-size: 11px;
+                        color: Palette.dim;
+                    }
+                }
+            }
+        }
+        // speed
+        HorizontalLayout {
+            alignment: center;
+            spacing: 6px;
+            SpeedChip { label: "1x"; on: root.speed-index == 0; clicked => { root.set-speed(0); } }
+            SpeedChip { label: "1.25x"; on: root.speed-index == 1; clicked => { root.set-speed(1); } }
+            SpeedChip { label: "1.5x"; on: root.speed-index == 2; clicked => { root.set-speed(2); } }
+            SpeedChip { label: "2x"; on: root.speed-index == 3; clicked => { root.set-speed(3); } }
+        }
+        // volume
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: min(root.col-w, 240px);
+                height: 28px;
+                Rectangle {
+                    x: 0px;
+                    width: 54px;
+                    height: 28px;
+                    border-radius: 14px;
+                    background: mute-ta.has-hover ? #ffffff1f : #ffffff0f;
+                    Text {
+                        text: root.muted ? "Muted" : "Volume";
+                        font-size: 11px;
+                        font-weight: 600;
+                        color: root.muted ? Palette.warn : Palette.dim;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    mute-ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.toggle-mute(); } }
+                }
+                vol := Rectangle {
+                    x: 66px;
+                    width: parent.width - 66px;
+                    height: 28px;
+                    property <float> shown: root.muted ? 0 : (vol-ta.pressed ? clamp(vol-ta.mouse-x / vol.width, 0, 1) : root.volume);
+                    Rectangle {
+                        y: (parent.height - 6px) / 2;
+                        height: 6px;
+                        border-radius: 3px;
+                        background: #ffffff1f;
+                        clip: true;
+                        Rectangle {
+                            x: 0px;
+                            width: parent.width * vol.shown;
+                            background: @linear-gradient(90deg, #00e6bd 0%, #8455ff 100%);
+                        }
+                    }
+                    Rectangle {
+                        x: parent.width * vol.shown - self.width / 2;
+                        y: (parent.height - self.height) / 2;
+                        width: 14px;
+                        height: 14px;
+                        border-radius: 7px;
+                        background: #ffffff;
+                    }
+                    vol-ta := TouchArea {
+                        mouse-cursor: MouseCursor.pointer;
+                        pointer-event(e) => {
+                            if e.kind == PointerEventKind.down {
+                                root.set-volume(clamp(self.mouse-x / vol.width, 0, 1));
+                            }
+                        }
+                        moved => {
+                            if self.pressed { root.set-volume(clamp(self.mouse-x / vol.width, 0, 1)); }
+                        }
+                    }
+                }
+            }
+        }
+        Text {
+            text: root.status;
+            font-size: 12px;
+            color: root.status-error ? Palette.bad : Palette.dim;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+    }
+    }
+}

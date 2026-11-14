@@ -25,6 +25,7 @@ mod media_keys;
 mod updater;
 mod upload_ui;
 mod voice;
+mod voice_player;
 mod windows;
 
 mod about {

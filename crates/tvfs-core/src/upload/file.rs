@@ -22,6 +22,8 @@ pub struct UploadFile {
     pub folder: String,
     /// Random 16-character name (`generateAnonName`) when anonymized.
     pub anon_name: Option<String>,
+    /// Recorded with the app's voice recorder: sent to the server as `voiceNote`.
+    pub voice_note: bool,
 }
 
 impl UploadFile {
@@ -128,7 +130,7 @@ pub fn inspect(path: &Path, folder: Option<String>) -> Result<UploadFile, Reject
         mime = sniffed.mime_type().to_owned();
     }
     let folder = folder.unwrap_or_default();
-    Ok(UploadFile { path: path.to_owned(), base, ext, size: meta.len(), mime, modified_ms, folder, anon_name: None })
+    Ok(UploadFile { path: path.to_owned(), base, ext, size: meta.len(), mime, modified_ms, folder, anon_name: None, voice_note: false })
 }
 
 fn sniff(path: &Path) -> Option<infer::Type> {

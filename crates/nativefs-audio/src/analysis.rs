@@ -22,6 +22,58 @@ pub fn integrated_loudness(dec: &mut Decoder) -> Option<f64> {
     meter.loudness_global().ok().filter(|l| l.is_finite())
 }
 
+/// One pass over `dec` for a voice note: integrated loudness plus `bars` waveform values (0..1, loudest = 1).
+/// The values are the RMS of ~46 ms blocks, the largest one per bar. Stops early with `None` loudness on decode errors.
+pub fn voice_scan(dec: &mut Decoder, bars: usize) -> (Option<f64>, Vec<f32>) {
+    let info = dec.info().clone();
+    let ch = (info.channels as usize).max(1);
+    let mut meter = EbuR128::new(info.channels as u32, info.rate, Mode::I).ok();
+    let block = (info.rate as usize / 21).max(256) * ch;
+    let (mut buf, mut pending, mut levels) = (Vec::new(), Vec::<i32>::new(), Vec::<f32>::new());
+    let rms = |chunk: &[i32]| {
+        let sum: f64 = chunk.iter().map(|v| (*v as f64 / 2_147_483_648.0).powi(2)).sum();
+        (sum / chunk.len().max(1) as f64).sqrt() as f32
+    };
+    loop {
+        buf.clear();
+        match dec.next(&mut buf) {
+            Ok(true) => {
+                if let Some(m) = meter.as_mut() {
+                    if m.add_frames_i32(&buf).is_err() {
+                        meter = None;
+                    }
+                }
+                pending.extend_from_slice(&buf);
+                while pending.len() >= block {
+                    levels.push(rms(&pending[..block]));
+                    pending.drain(..block);
+                }
+            }
+            Ok(false) => break,
+            Err(_) => {
+                meter = None;
+                break;
+            }
+        }
+    }
+    if !pending.is_empty() {
+        levels.push(rms(&pending));
+    }
+    let lufs = meter.and_then(|m| m.loudness_global().ok()).filter(|l| l.is_finite());
+    let bars = bars.max(1);
+    let mut out: Vec<f32> = (0..bars)
+        .map(|i| {
+            let (a, b) = (i * levels.len() / bars, ((i + 1) * levels.len() / bars).max(i * levels.len() / bars + 1));
+            levels.get(a..b.min(levels.len())).map_or(0.0, |s| s.iter().copied().fold(0.0, f32::max))
+        })
+        .collect();
+    let top = out.iter().copied().fold(0.0, f32::max);
+    if top > 0.0 {
+        out.iter_mut().for_each(|v| *v /= top);
+    }
+    (lufs, out)
+}
+
 /// The web's `AnalyserNode` (fftSize 2048, Blackman window, smoothingTimeConstant 0.55,
 /// `getFloatFrequencyData`): magnitudes per bin in dB.
 pub struct Spectrum {

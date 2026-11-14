@@ -47,6 +47,11 @@ impl Decoder {
         Self::open(Box::new(file), ext.as_deref())
     }
 
+    /// A whole file in memory (voice notes are small).
+    pub fn open_bytes(bytes: Vec<u8>, ext: Option<&str>) -> Result<Self, Error> {
+        Self::open(Box::new(std::io::Cursor::new(bytes)), ext)
+    }
+
     /// `ext` is a hint for the prober (the file extension without the dot).
     pub fn open(source: Box<dyn MediaSource>, ext: Option<&str>) -> Result<Self, Error> {
         let mss = MediaSourceStream::new(source, Default::default());

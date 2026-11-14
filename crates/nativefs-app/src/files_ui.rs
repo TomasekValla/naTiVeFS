@@ -299,6 +299,7 @@ pub fn open_batch(shared: &Arc<Shared>, b: BatchPage) {
             name: f.name.clone(),
             protected: false,
             page: f.url.clone(),
+            voice_note: false,
         })
         .collect();
     let files: Vec<ListFile> = b
@@ -420,7 +421,7 @@ fn open_list(
                         Ok(link) => {
                             w.set_zip_label("Download ZIP".into());
                             let name = link.rsplit('/').next().unwrap_or("batch.zip").to_owned();
-                            save_as(&s3, &Content { url: link.clone(), name, kind: ContentKind::File, protected: false, page: link });
+                            save_as(&s3, &Content { url: link.clone(), name, kind: ContentKind::File, protected: false, page: link, voice_note: false });
                         }
                         Err(e) => {
                             w.set_zip_label("Failed".into());

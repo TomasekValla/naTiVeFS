@@ -88,6 +88,9 @@ pub struct SyncEntry {
     pub expires_at: Option<i64>,
     #[serde(default)]
     pub thumbnail: Option<String>,
+    /// Recorded with the voice recorder (absent on older servers = false).
+    #[serde(default)]
+    pub voice_note: bool,
 }
 
 /// `GET /api/user/sync[?since=N]`
@@ -156,6 +159,9 @@ pub struct UploadInit {
     pub expiration_minutes: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub batch_id: Option<String>,
+    /// Marks a recording made with the app's voice recorder; omitted when false so old servers see no change.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub voice_note: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -227,6 +233,8 @@ pub struct UploadCompleteResponse {
     pub audio_player_styled_link: Option<String>,
     #[serde(default)]
     pub track_bpm: Option<f64>,
+    #[serde(default)]
+    pub voice_note: bool,
 }
 
 impl UploadCompleteResponse {
@@ -412,5 +420,30 @@ mod tests {
         assert!(r.styled_link_pending);
         assert_eq!(r.tool_link(), Some("https://f/files/text/n_md_tvfsreader.html"));
         assert_eq!(r.tool_styled_link(), Some("[n.md - TVFS MD Reader](x)"));
+    }
+
+    #[test]
+    fn voice_note_flag_round_trips() {
+        let r: UploadCompleteResponse = serde_json::from_str(r#"{"link":"l","voiceNote":true}"#).unwrap();
+        assert!(r.voice_note);
+        let r: UploadCompleteResponse = serde_json::from_str(r#"{"link":"l"}"#).unwrap();
+        assert!(!r.voice_note);
+        let e: SyncEntry = serde_json::from_str(r#"{"id":"a","voiceNote":true}"#).unwrap();
+        assert!(e.voice_note);
+        let e: SyncEntry = serde_json::from_str(r#"{"id":"a"}"#).unwrap();
+        assert!(!e.voice_note);
+        let mut init = UploadInit {
+            filename: "a.opus".into(),
+            file_size: 1,
+            mime_type: "audio/ogg".into(),
+            total_chunks: None,
+            upload_mode: "weak".into(),
+            expiration_minutes: 60,
+            batch_id: None,
+            voice_note: false,
+        };
+        assert!(serde_json::to_value(&init).unwrap().get("voiceNote").is_none());
+        init.voice_note = true;
+        assert_eq!(serde_json::to_value(&init).unwrap()["voiceNote"], true);
     }
 }
