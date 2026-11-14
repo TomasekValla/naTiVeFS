@@ -8,7 +8,8 @@ Naming — use exactly this, never invent other names:
 - Executables: **`naTiVeFS.exe`** (the app) and **`naTiVeFS-link.exe`** (link router); on Linux/macOS Cargo builds `naTiVeFS` /
   `naTiVeFS-link`, and release packages ship them lowercase as `nativefs` / `nativefs-link` (`release.yml` renames them,
   `naTiVeFS-link` finds the app under either name).
-- Cargo packages (must be lowercase): `nativefs-app`, `nativefs-link`, `nativefs-ipc`, `nativefs-audio` (+ `tvfs-core`).
+- Command line client: **`naTiVeFS-cli.exe`**; Linux/macOS packages ship it as `nativefs-cli` (Cargo builds `naTiVeFS-cli`). Short aliases `nativefscli` and `nativecli` (Windows `.cmd` shims next to the exe, Linux symlinks). The installer puts the install folder on PATH.
+- Cargo packages (must be lowercase): `nativefs-app`, `nativefs-link`, `nativefs-cli`, `nativefs-ipc`, `nativefs-audio` (+ `tvfs-core`).
 - Release assets (+ `.minisig`), named so the file says what it is and without a version, so download links stay stable:
   `naTiVeFS-windows-<x64|arm64>-<setup.exe|portable.zip>`, `naTiVeFS-linux-<x64|arm64>-<debian-ubuntu.deb|fedora-opensuse.rpm|arch.pkg.tar.zst|portable.tar.gz>`,
   `naTiVeFS-linux-<x64|arm64>.AppImage`, `naTiVeFS-macos-apple-silicon.dmg`.

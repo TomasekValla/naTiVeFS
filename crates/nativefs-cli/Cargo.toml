@@ -1,0 +1,28 @@
+[package]
+name = "nativefs-cli"
+description = "naTiVeFS-cli: terminal client for TVFS (full-screen UI for people, one-shot mode for AI agents)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# The executable is naTiVeFS-cli(.exe); packages for Linux/macOS rename it to `nativefs-cli`.
+[[bin]]
+name = "naTiVeFS-cli"
+path = "src/main.rs"
+
+[dependencies]
+tvfs-core.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# terminal UI; crossterm is used through ratatui's re-export (one version)
+ratatui = "0.30"
+arboard = { version = "3", default-features = false }
+rfd = "0.17"
+fastrand = "2"
+directories = "6"
+toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3"

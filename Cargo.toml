@@ -6,6 +6,7 @@ members = [
     "crates/nativefs-link",
     "crates/nativefs-app",
     "crates/nativefs-audio",
+    "crates/nativefs-cli",
 ]
 exclude = ["vendor"]
 
