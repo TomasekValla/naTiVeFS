@@ -73,12 +73,13 @@ impl Picker {
                                 if !self.show_hidden && name.starts_with('.') {
                                     return None;
                                 }
-                                let meta = e.metadata().ok()?;
+                                // a link to a folder is a folder (DirEntry::metadata does not follow links)
+                                let meta = if e.file_type().is_ok_and(|t| t.is_symlink()) { std::fs::metadata(e.path()).ok()? } else { e.metadata().ok()? };
                                 let kind = if meta.is_dir() { Kind::Dir } else { Kind::File };
                                 Some(Entry { name, path: e.path(), kind, size: if meta.is_dir() { 0 } else { meta.len() } })
                             })
                             .collect();
-                        rows.sort_by(|a, b| (a.kind != Kind::Dir, a.name.to_lowercase()).cmp(&(b.kind != Kind::Dir, b.name.to_lowercase())));
+                        rows.sort_by_key(|a| (a.kind != Kind::Dir, a.name.to_lowercase()));
                         entries.extend(rows);
                     }
                     Err(e) => self.error = Some(format!("Cannot open this folder: {e}")),
@@ -128,9 +129,17 @@ impl Picker {
         }
     }
 
+    /// Is there a folder (or the drive list) above the current one?
+    pub fn can_up(&self) -> bool {
+        match &self.dir {
+            Some(d) => d.parent().is_some() || cfg!(windows),
+            None => false,
+        }
+    }
+
     pub fn up(&mut self) {
-        match self.dir.clone() {
-            Some(d) => match d.parent() {
+        if let Some(d) = self.dir.clone() {
+            match d.parent() {
                 Some(p) => {
                     let from = d.file_name().map(|n| n.to_string_lossy().into_owned());
                     self.go(Some(p.to_owned()));
@@ -142,8 +151,7 @@ impl Picker {
                 }
                 None if cfg!(windows) => self.go(None),
                 None => {}
-            },
-            None => {}
+            }
         }
     }
 

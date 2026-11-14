@@ -8,7 +8,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, Mo
 use ratatui::layout::Rect;
 use tvfs_core::config::{AutoCopy, Config};
 use tvfs_core::models::{RecentFiles, Status, SyncEntry};
-use tvfs_core::upload::{Control, Run, UploadRequest};
+use tvfs_core::upload::{protected_limit_message, Control, Run, UploadRequest, PROTECTED_MAX_FILES};
 use tvfs_core::{session, Client};
 
 use super::picker::{Kind, Picker};
@@ -16,7 +16,7 @@ use super::theme::Theme;
 use crate::common::*;
 use crate::expiry;
 use crate::links::{self, Finished, Prefs};
-use crate::settings::{CliSettings, ThemeMode};
+use crate::settings::{CliSettings, PickerMode, ThemeMode};
 
 pub enum Msg {
     Key(KeyEvent),
@@ -29,6 +29,10 @@ pub enum Msg {
     /// Name of the deleted upload and the outcome.
     Deleted(String, Result<(), String>),
     Picked(Vec<PathBuf>),
+    /// The system dialog opened from the Upload entry returned these files / this folder.
+    PickedDirect(Vec<PathBuf>),
+    /// The system dialog was closed without a choice.
+    PickCancelled,
     Finished(Box<Finished>, f64),
     Styled(String, Option<String>),
 }
@@ -43,10 +47,20 @@ pub enum Screen {
     Result,
     Recent,
     Settings,
+    /// Waiting for the system file dialog (setting "Pick files with: system dialog").
+    SystemPick,
+}
+
+impl Screen {
+    /// Screens with a "‹ Back" row on top (reached with Up from the first item).
+    pub fn has_back(self) -> bool {
+        matches!(self, Self::Picker | Self::Options | Self::Result | Self::Recent | Self::Settings | Self::SystemPick)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hit {
+    Back,
     Menu(usize),
     PickerRow(usize),
     Recent(usize),
@@ -57,7 +71,7 @@ pub enum Hit {
 }
 
 pub const MENU: [(&str, char); 5] = [("Upload files", 'u'), ("Recent uploads", 'r'), ("Settings", 's'), ("Log out", 'l'), ("Quit", 'q')];
-pub const SETTINGS_ROWS: usize = 5;
+pub const SETTINGS_ROWS: usize = 6;
 
 #[derive(Default)]
 pub struct LoginState {
@@ -81,8 +95,23 @@ pub struct Options {
     pub expiry: usize,
     pub anonymize: bool,
     pub users_only: bool,
+    /// Upload the audio files as voice notes (the row only exists when audio files are selected).
+    pub voice_note: bool,
     pub row: usize,
     pub files: Vec<tvfs_core::upload::UploadFile>,
+    /// The screen "Back" returns to.
+    pub from: Screen,
+}
+
+impl Options {
+    pub fn has_audio(&self) -> bool {
+        self.files.iter().any(is_audio)
+    }
+
+    /// Toggle rows after the expiry row: anonymize, users only and (with audio files) voice note.
+    pub fn rows(&self) -> usize {
+        if self.has_audio() { 4 } else { 3 }
+    }
 }
 
 pub struct UploadState {
@@ -153,6 +182,12 @@ pub struct App {
     pub result: ResultState,
     pub recent: RecentState,
     pub settings_row: usize,
+    /// `--theme` for this run only; the remembered theme stays in `cli`.
+    pub theme_override: Option<ThemeMode>,
+    /// The "‹ Back" row of this screen has the cursor.
+    pub back_focus: Option<Screen>,
+    /// A system file dialog is open.
+    pub dialog_open: bool,
     pub next_status: Option<Instant>,
     /// Files given on the command line, opened once the user is logged in.
     pending_paths: Vec<PathBuf>,
@@ -166,13 +201,9 @@ fn home_dir() -> PathBuf {
 impl App {
     pub fn new(rt: tokio::runtime::Handle, tx: std::sync::mpsc::Sender<Msg>, theme_override: Option<ThemeMode>) -> Self {
         let cfg = Config::load();
-        let mut cli = CliSettings::load();
-        if let Some(t) = theme_override {
-            cli.theme = t;
-            cli.save();
-        }
+        let cli = CliSettings::load();
         let truecolor = super::theme::detect_truecolor();
-        let theme = Theme::new(cli.theme.is_light(&cfg), truecolor);
+        let theme = Theme::new(theme_override.unwrap_or(cli.theme).is_light(&cfg), truecolor);
         let (client, user) = match client_with_saved_session() {
             Ok(Some((c, u))) => (c, Some(u)),
             _ => (Client::new().expect("http client"), None),
@@ -184,7 +215,7 @@ impl App {
             marquee_start: Instant::now(),
             theme,
             truecolor,
-            opts: Options { expiry: expiry_idx, anonymize: false, users_only: cfg.tvfs_users_only, row: 0, files: Vec::new() },
+            opts: Options { expiry: expiry_idx, anonymize: false, users_only: cfg.tvfs_users_only, voice_note: false, row: 0, files: Vec::new(), from: Screen::Picker },
             cfg,
             cli,
             client,
@@ -205,6 +236,9 @@ impl App {
             result: ResultState::default(),
             recent: RecentState::default(),
             settings_row: 0,
+            theme_override,
+            back_focus: None,
+            dialog_open: false,
             next_status: None,
             pending_paths: Vec::new(),
             clipboard: None,
@@ -359,6 +393,21 @@ impl App {
                 }
                 self.dirty = true;
             }
+            Msg::PickedDirect(paths) => {
+                self.dialog_open = false;
+                if self.screen == Screen::SystemPick {
+                    self.picker.selected = paths.into_iter().collect();
+                    self.start_options();
+                    if self.screen == Screen::Options {
+                        self.opts.from = Screen::SystemPick;
+                    }
+                }
+                self.dirty = true;
+            }
+            Msg::PickCancelled => {
+                self.dialog_open = false;
+                self.dirty = true;
+            }
             Msg::Finished(fin, elapsed) => self.on_finished(*fin, elapsed),
             Msg::Styled(id, link) => self.on_styled(&id, link),
         }
@@ -400,6 +449,61 @@ impl App {
             }
             return;
         }
+        let before = self.screen;
+        self.dispatch_key(k);
+        if self.screen != before {
+            // a new screen starts its scrolling notes from the beginning and never keeps the Back row focused
+            self.marquee_start = Instant::now();
+            self.back_focus = None;
+        }
+    }
+
+    /// The "‹ Back" row: Up from the first item reaches it; Enter, Left, Backspace and Esc go back from there.
+    fn back_row_key(&mut self, k: KeyEvent) -> bool {
+        if !self.screen.has_back() || self.recent.pending_delete.is_some() {
+            return false;
+        }
+        if self.back_focus == Some(self.screen) {
+            match k.code {
+                KeyCode::Enter | KeyCode::Left | KeyCode::Backspace | KeyCode::Esc => self.go_back(),
+                KeyCode::Down | KeyCode::Tab => self.back_focus = None,
+                _ => {}
+            }
+            return true;
+        }
+        if k.code == KeyCode::Up && self.at_top() {
+            self.back_focus = Some(self.screen);
+            return true;
+        }
+        false
+    }
+
+    fn at_top(&self) -> bool {
+        match self.screen {
+            Screen::Picker => self.picker.cursor == 0,
+            Screen::Options => self.opts.row == 0,
+            Screen::Result => self.result.cursor == 0,
+            Screen::Recent => self.recent.cursor == 0,
+            Screen::Settings => self.settings_row == 0,
+            Screen::SystemPick => true,
+            _ => false,
+        }
+    }
+
+    /// One step back (what Esc does on the screen).
+    pub fn go_back(&mut self) {
+        self.back_focus = None;
+        self.screen = match self.screen {
+            Screen::Options => self.opts.from,
+            Screen::Picker | Screen::Result | Screen::Recent | Screen::Settings | Screen::SystemPick => Screen::Menu,
+            other => other,
+        };
+    }
+
+    fn dispatch_key(&mut self, k: KeyEvent) {
+        if self.back_row_key(k) {
+            return;
+        }
         match self.screen {
             Screen::Login => self.key_login(k),
             Screen::Menu => self.key_menu(k),
@@ -409,6 +513,7 @@ impl App {
             Screen::Result => self.key_result(k),
             Screen::Recent => self.key_recent(k),
             Screen::Settings => self.key_settings(k),
+            Screen::SystemPick => self.key_system_pick(k),
         }
     }
 
@@ -478,8 +583,13 @@ impl App {
     fn menu_action(&mut self, i: usize) {
         match i {
             0 => {
-                self.picker.reload();
-                self.screen = Screen::Picker;
+                if self.cli.picker == PickerMode::System {
+                    self.screen = Screen::SystemPick;
+                    self.open_dialog(false);
+                } else {
+                    self.picker.reload();
+                    self.screen = Screen::Picker;
+                }
             }
             1 => {
                 self.screen = Screen::Recent;
@@ -487,12 +597,14 @@ impl App {
             }
             2 => self.screen = Screen::Settings,
             3 => {
+                // the saved login is shared with the naTiVeFS app, so this signs the app out too
+                if let Err(e) = session::clear() {
+                    self.toast(format!("Could not remove the saved login: {e}"), true);
+                    return;
+                }
                 let client = self.client.clone();
-                self.rt.spawn(async move {
-                    let _ = client.logout().await;
-                });
-                let _ = session::clear();
-                self.sign_out_local("");
+                let _ = self.rt.block_on(async { tokio::time::timeout(Duration::from_secs(3), client.logout()).await });
+                self.sign_out_local("Logged out (the login is shared, so naTiVeFS is signed out too).");
             }
             _ => self.quit = true,
         }
@@ -516,14 +628,18 @@ impl App {
             KeyCode::PageDown => p.move_by(10),
             KeyCode::Home => p.jump(false),
             KeyCode::End => p.jump(true),
-            KeyCode::Left => p.up(),
+            KeyCode::Left => {
+                if p.can_up() { p.up() } else { self.go_back() }
+            }
             KeyCode::Right => {
                 if p.current().is_some_and(|e| matches!(e.kind, Kind::Dir | Kind::Drive)) {
                     p.activate();
                 }
             }
             KeyCode::Enter => p.activate(),
-            KeyCode::Backspace => p.backspace(),
+            KeyCode::Backspace => {
+                if p.filter.is_empty() && !p.can_up() { self.go_back() } else { p.backspace() }
+            }
             KeyCode::Tab => self.start_options(),
             KeyCode::Char('a') if ctrl => p.select_all_files(),
             KeyCode::Char('d') if ctrl => p.selected.clear(),
@@ -534,6 +650,45 @@ impl App {
             KeyCode::Char('o') if ctrl => self.system_dialog(),
             KeyCode::Char(' ') if p.filter.is_empty() => p.toggle_current(true),
             KeyCode::Char(c) if !ctrl && !k.modifiers.contains(KeyModifiers::ALT) => p.type_char(c),
+            _ => {}
+        }
+    }
+
+    /// Open the system dialog for the Upload entry (files, or a folder); the answer arrives as a message.
+    fn open_dialog(&mut self, folder: bool) {
+        if self.dialog_open {
+            self.toast("The dialog is already open (it may be behind this window).", false);
+            return;
+        }
+        self.dialog_open = true;
+        if cfg!(test) {
+            return; // tests never open a real dialog
+        }
+        let tx = self.tx.clone();
+        let dir = self.picker.dir.clone();
+        std::thread::spawn(move || {
+            let mut d = rfd::FileDialog::new();
+            if let Some(dir) = dir {
+                d = d.set_directory(dir);
+            }
+            let picked = if folder { d.set_title("Choose a folder to upload").pick_folder().map(|p| vec![p]) } else { d.set_title("Choose files to upload").pick_files() };
+            let _ = tx.send(match picked {
+                Some(p) if !p.is_empty() => Msg::PickedDirect(p),
+                _ => Msg::PickCancelled,
+            });
+        });
+        self.toast("System file dialog opened (it may be behind this window).", false);
+    }
+
+    fn key_system_pick(&mut self, k: KeyEvent) {
+        match k.code {
+            KeyCode::Esc | KeyCode::Left | KeyCode::Backspace => self.go_back(),
+            KeyCode::Enter | KeyCode::Char('o') | KeyCode::Char('O') => self.open_dialog(false),
+            KeyCode::Char('f') | KeyCode::Char('F') => self.open_dialog(true),
+            KeyCode::Char('t') | KeyCode::Char('T') => {
+                self.picker.reload();
+                self.screen = Screen::Picker;
+            }
             _ => {}
         }
     }
@@ -582,6 +737,8 @@ impl App {
         }
         self.opts.files = files;
         self.opts.row = 0;
+        self.opts.voice_note = false;
+        self.opts.from = Screen::Picker;
         self.opts.users_only = self.cfg.tvfs_users_only;
         self.screen = Screen::Options;
     }
@@ -589,14 +746,15 @@ impl App {
     fn key_options(&mut self, k: KeyEvent) {
         let o = &mut self.opts;
         match k.code {
-            KeyCode::Esc => self.screen = Screen::Picker,
+            KeyCode::Esc | KeyCode::Backspace => self.go_back(),
             KeyCode::Up => o.row = o.row.saturating_sub(1),
-            KeyCode::Down | KeyCode::Tab => o.row = (o.row + 1).min(2),
+            KeyCode::Down | KeyCode::Tab => o.row = (o.row + 1).min(o.rows() - 1),
             KeyCode::Left if o.row == 0 => o.expiry = o.expiry.saturating_sub(1),
-            KeyCode::Right if o.row == 0 => o.expiry = (o.expiry + 1).min(11),
+            KeyCode::Right if o.row == 0 => o.expiry = (o.expiry + 1).min(expiry::LABELS.len() - 1),
             KeyCode::Char(' ') | KeyCode::Left | KeyCode::Right => match o.row {
                 1 => o.anonymize = !o.anonymize,
                 2 => o.users_only = !o.users_only,
+                3 => o.voice_note = !o.voice_note,
                 _ => {}
             },
             KeyCode::Enter => self.start_upload(),
@@ -605,12 +763,18 @@ impl App {
     }
 
     fn start_upload(&mut self) {
+        if self.opts.users_only && self.opts.files.len() > PROTECTED_MAX_FILES {
+            self.toast(protected_limit_message(self.opts.files.len()), true);
+            return;
+        }
         let mut files = std::mem::take(&mut self.opts.files);
         if files.is_empty() {
             return;
         }
         for f in &mut files {
             f.set_anonymized(self.opts.anonymize);
+            // voice notes are public uploads only (a Users Only share has no voice note page)
+            f.voice_note = self.opts.voice_note && !self.opts.users_only && is_audio(f);
         }
         let minutes = tvfs_core::EXPIRATION_OPTIONS_MIN[self.opts.expiry];
         self.cli.expiry_min = Some(minutes);
@@ -786,7 +950,7 @@ impl App {
                 self.picker.reload();
                 self.screen = Screen::Picker;
             }
-            KeyCode::Esc | KeyCode::Char('m') => self.screen = Screen::Menu,
+            KeyCode::Esc | KeyCode::Char('m') | KeyCode::Left | KeyCode::Backspace => self.screen = Screen::Menu,
             KeyCode::Char('q') => self.quit = true,
             _ => {}
         }
@@ -804,6 +968,11 @@ impl App {
     }
 
     pub fn open(&mut self, url: &str) {
+        // only web links: a value from the server must never reach the system's protocol handlers
+        if !(url.starts_with("https://") || url.starts_with("http://")) {
+            self.toast("Only http(s) links can be opened.", true);
+            return;
+        }
         let ok = self.cfg.open_in_browser(url).is_ok() || open_default(url);
         if !ok {
             self.toast("Could not open a browser.", true);
@@ -842,7 +1011,7 @@ impl App {
         let n = self.recent.entries.len();
         let c = &mut self.recent.cursor;
         match k.code {
-            KeyCode::Esc | KeyCode::Char('m') => self.screen = Screen::Menu,
+            KeyCode::Esc | KeyCode::Char('m') | KeyCode::Left | KeyCode::Backspace => self.screen = Screen::Menu,
             KeyCode::Up | KeyCode::Char('k') => *c = c.saturating_sub(1),
             KeyCode::Down | KeyCode::Char('j') => *c = (*c + 1).min(n.saturating_sub(1)),
             KeyCode::PageUp => *c = c.saturating_sub(10),
@@ -878,7 +1047,7 @@ impl App {
 
     fn key_settings(&mut self, k: KeyEvent) {
         match k.code {
-            KeyCode::Esc | KeyCode::Char('m') => self.screen = Screen::Menu,
+            KeyCode::Esc | KeyCode::Char('m') | KeyCode::Backspace => self.screen = Screen::Menu,
             KeyCode::Up | KeyCode::Char('k') => self.settings_row = self.settings_row.saturating_sub(1),
             KeyCode::Down | KeyCode::Char('j') => self.settings_row = (self.settings_row + 1).min(SETTINGS_ROWS - 1),
             KeyCode::Enter | KeyCode::Right | KeyCode::Char(' ') => self.change_setting(true),
@@ -892,18 +1061,24 @@ impl App {
         let mut shared = Config::load();
         match self.settings_row {
             0 => {
-                self.cli.theme = self.cli.theme.next();
+                // changing the theme here replaces a one-off --theme
+                self.cli.theme = self.theme_override.take().unwrap_or(self.cli.theme).next();
                 self.cli.save();
                 self.theme = Theme::new(self.cli.theme.is_light(&shared), self.truecolor);
                 return;
             }
             1 => {
+                self.cli.picker = self.cli.picker.toggled();
+                self.cli.save();
+                return;
+            }
+            2 => {
                 let all = [AutoCopy::Off, AutoCopy::Normal, AutoCopy::Styled];
                 let i = all.iter().position(|a| *a == shared.auto_copy).unwrap_or(2);
                 shared.auto_copy = all[if forward { (i + 1) % 3 } else { (i + 2) % 3 }];
             }
-            2 => shared.auto_copy_prefer_tool = !shared.auto_copy_prefer_tool,
-            3 => shared.auto_copy_image_styled = !shared.auto_copy_image_styled,
+            3 => shared.auto_copy_prefer_tool = !shared.auto_copy_prefer_tool,
+            4 => shared.auto_copy_image_styled = !shared.auto_copy_image_styled,
             _ => shared.tvfs_users_only = !shared.tvfs_users_only,
         }
         if let Err(e) = shared.save() {
@@ -946,6 +1121,7 @@ impl App {
     fn click(&mut self, h: Hit) {
         let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
         match h {
+            Hit::Back => self.go_back(),
             Hit::Menu(i) => {
                 self.menu = i;
                 self.menu_action(i);
@@ -982,6 +1158,8 @@ impl App {
                     self.opts.anonymize = !self.opts.anonymize;
                 } else if i == 2 {
                     self.opts.users_only = !self.opts.users_only;
+                } else if i == 3 {
+                    self.opts.voice_note = !self.opts.voice_note;
                 }
             }
         }

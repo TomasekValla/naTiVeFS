@@ -1,6 +1,8 @@
 //! The full-screen interface: terminal setup, the event loop, and a text-dump helper for tests.
 
 mod app;
+#[cfg(test)]
+mod nav_tests;
 mod picker;
 mod theme;
 mod ui;
@@ -123,7 +125,7 @@ pub fn run(theme: Option<ThemeMode>, paths: Vec<std::path::PathBuf>) -> i32 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -143,8 +145,11 @@ mod tests {
         let r = UploadCompleteResponse { link: "https://files.example/files/text/notes.md".into(), size: 5, styled_link: Some("[notes.md](https://files.example/files/text/notes.md)".into()), ..Default::default() };
         app.result.fin = Finished { files: vec![FileOut { name: "notes.md".into(), result: Ok(r) }, FileOut { name: "bad.bin".into(), result: Err("Server busy".into()) }], ..Default::default() };
         app.recent.entries = vec![tvfs_core::models::SyncEntry { id: "1".into(), name: "photo.png".into(), link: "https://x/p.png".into(), category: "image".into(), size: 1234567, uploaded_at: None, expires_at: Some(crate::common::now_ms() + 86_400_000), thumbnail: None, voice_note: false }];
+        let one = tvfs_core::upload::inspect(&app.picker.entries.iter().find(|e| e.name == "clip.mp4").unwrap().path, None).unwrap();
+        app.opts.files = vec![one; 12];
+        app.opts.files[0].mime = "audio/ogg".into();
         app.toast("a toast message that is longer than a narrow terminal", false);
-        for screen in [app::Screen::Login, app::Screen::Menu, app::Screen::Picker, app::Screen::Options, app::Screen::Uploading, app::Screen::Result, app::Screen::Recent, app::Screen::Settings] {
+        for screen in [app::Screen::Login, app::Screen::Menu, app::Screen::Picker, app::Screen::Options, app::Screen::Uploading, app::Screen::Result, app::Screen::Recent, app::Screen::Settings, app::Screen::SystemPick] {
             app.screen = screen;
             for w in (16..=130u16).step_by(3) {
                 for h in [8u16, 12, 20, 30, 45] {
@@ -154,7 +159,7 @@ mod tests {
         }
     }
 
-    fn dump(app: &mut App, w: u16, h: u16) -> String {
+    pub(in crate::tui) fn dump(app: &mut App, w: u16, h: u16) -> String {
         let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
         t.draw(|f| ui::draw(app, f)).unwrap();
         let buf = t.backend().buffer().clone();
@@ -167,7 +172,7 @@ mod tests {
         s
     }
 
-    fn test_app() -> (App, tokio::runtime::Runtime) {
+    pub(in crate::tui) fn test_app() -> (App, tokio::runtime::Runtime) {
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let (tx, _rx) = channel();
         let dir = tempfile::tempdir().unwrap();
