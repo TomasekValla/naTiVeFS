@@ -39,6 +39,13 @@ use crate::Client;
 const PIECE: u64 = 256 * 1024;
 /// "TVFS Users Only": shares above this total go chunked, in pieces of this size.
 const PROTECTED_CHUNK: u64 = 25 * 1024 * 1024;
+/// The server takes at most this many files per "TVFS Users Only" share (more fails with an HTML 413 page).
+pub const PROTECTED_MAX_FILES: usize = 200;
+
+/// The message shown when a Users Only share would exceed `PROTECTED_MAX_FILES`.
+pub fn protected_limit_message(count: usize) -> String {
+    format!("TVFS Users Only takes at most {PROTECTED_MAX_FILES} files per share (this has {count}). Turn Users Only off or upload in parts.")
+}
 
 /// What to upload and how.
 #[derive(Debug, Clone)]
@@ -452,7 +459,7 @@ async fn send_multipart<T: serde::de::DeserializeOwned>(
         req = req.timeout(t);
     }
     let _guard = RequestGuard::new(&ctx.run);
-    let fallback = |status: u16| format!("{what} failed ({status})");
+    let fallback = |status: u16| format!("{what} failed (HTTP {status})");
     let result = tokio::select! {
         r = async { read_json::<T>(req.send().await.map_err(from_reqwest)?, fallback).await } => r,
         _ = ctx.run.control.token().cancelled() => Err(SendErr::Killed),
@@ -479,7 +486,7 @@ async fn send_json<T: serde::de::DeserializeOwned>(
     .timeout(timeout);
     let _guard = RequestGuard::new(&ctx.run);
     tokio::select! {
-        r = async { read_json::<T>(req.send().await.map_err(from_reqwest)?, |s| format!("{what} failed ({s})")).await } => r,
+        r = async { read_json::<T>(req.send().await.map_err(from_reqwest)?, |s| format!("{what} failed (HTTP {s})")).await } => r,
         _ = ctx.run.control.token().cancelled() => Err(SendErr::Killed),
     }
 }
@@ -910,7 +917,7 @@ async fn upload_chunked(ctx: Arc<Ctx>, idx: usize, file: UploadFile, slot_state:
 fn init_error(e: crate::Error) -> String {
     match e {
         crate::Error::Server { message, .. } if !message.is_empty() => message,
-        crate::Error::Server { .. } => "Init failed".into(),
+        crate::Error::Server { status, .. } => format!("Init failed (HTTP {status})"),
         other => other.to_string(),
     }
 }
@@ -931,7 +938,7 @@ async fn complete(ctx: &Ctx, cf: &ChunkedFile) -> Result<UploadCompleteResponse,
             Err(e) => return Err(FileError::Failed(e.to_string())),
         };
         let res = match req.send().await {
-            Ok(r) => read_json::<UploadCompleteResponse>(r, |_| "Assembly failed".into()).await,
+            Ok(r) => read_json::<UploadCompleteResponse>(r, |s| format!("Assembly failed (HTTP {s})")).await,
             Err(e) => Err(from_reqwest(e)),
         };
         match res {
@@ -948,7 +955,7 @@ async fn complete(ctx: &Ctx, cf: &ChunkedFile) -> Result<UploadCompleteResponse,
             Err(e) => return Err(FileError::Failed(e.describe("assembly"))),
         }
     }
-    Err(FileError::Failed("Assembly failed".into()))
+    Err(FileError::Failed("Assembly failed (no valid answer from the server)".into()))
 }
 
 /// Look for the finished file in `/api/user/sync` for up to 3 minutes.
@@ -1257,6 +1264,9 @@ impl Uploader {
         if req.files.is_empty() {
             return Outcome::Failed("Select files first".into());
         }
+        if req.files.len() > PROTECTED_MAX_FILES {
+            return Outcome::Failed(protected_limit_message(req.files.len()));
+        }
         for i in 0..req.files.len() {
             run.file_started(i);
         }
@@ -1288,7 +1298,7 @@ impl Uploader {
         let init = tokio::select! {
             r = async {
                 let resp = self.client.http().post(url).form(&form).timeout(Duration::from_secs(60)).send().await.map_err(from_reqwest)?;
-                read_json::<ProtectedInitResponse>(resp, |_| "Failed to start upload".into()).await
+                read_json::<ProtectedInitResponse>(resp, |s| format!("Failed to start upload (HTTP {s})")).await
             } => r,
             _ = run.control.token().cancelled() => return Err(FileError::Killed),
         }
@@ -1389,7 +1399,7 @@ impl Uploader {
             .send()
             .await
             .map_err(|e| FileError::Failed(from_reqwest(e).describe("finalizing")))?;
-        let r = read_json::<ProtectedShareResponse>(resp, |_| "Failed to finalize upload".into()).await;
+        let r = read_json::<ProtectedShareResponse>(resp, |s| format!("Failed to finalize upload (HTTP {s})")).await;
         run.set_status(RunStatus::Uploading);
         r.map_err(|e| FileError::Failed(e.describe("finalizing")))
     }
@@ -1435,7 +1445,7 @@ async fn protected_direct(ctx: &Arc<Ctx>, files: &[UploadFile], total: u64) -> R
 fn init_error_batch(e: crate::Error) -> String {
     match e {
         crate::Error::Server { message, .. } if !message.is_empty() => message,
-        crate::Error::Server { .. } => "Batch init failed".into(),
+        crate::Error::Server { status, .. } => format!("Batch init failed (HTTP {status})"),
         other => other.to_string(),
     }
 }

@@ -9,7 +9,7 @@ pub mod resume;
 pub mod run;
 pub mod stats;
 
-pub use engine::{Event, FileResult, Outcome, RunReport, UploadRequest, Uploader};
+pub use engine::{protected_limit_message, Event, FileResult, Outcome, RunReport, UploadRequest, Uploader, PROTECTED_MAX_FILES};
 pub use file::{inspect, walk_folder, Rejected, UploadFile};
 pub use plan::{ChunkMode, ChunkPlan};
 pub use resume::{ResumeRecord, ResumeStore};

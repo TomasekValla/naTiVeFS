@@ -32,13 +32,36 @@ fn test_file() -> Option<PathBuf> {
         return None;
     }
     let cfg = PathBuf::from(std::env::var_os("NATIVEFS_CONFIG")?);
+    // a relative value must not drop the token into the current directory (often a git checkout)
+    let cfg = std::path::absolute(&cfg).unwrap_or(cfg);
     Some(cfg.parent().map(PathBuf::from).unwrap_or_default().join("session.json"))
+}
+
+/// Write the test-mode token file readable by the owner only where the OS has such a mode (Unix: 0600). On Windows the
+/// file keeps the folder's inherited ACL, which in a user profile is already limited to the user.
+fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // an older file keeps its old mode otherwise
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    f.write_all(text.as_bytes())
 }
 
 pub fn save(session: &StoredSession) -> Result<()> {
     let json = serde_json::to_string(session).map_err(|e| Error::Keyring(e.to_string()))?;
     if let Some(p) = test_file() {
-        return Ok(std::fs::write(p, json)?);
+        return Ok(write_private(&p, &json)?);
     }
     entry()?.set_password(&json).map_err(|e| Error::Keyring(e.to_string()))
 }
@@ -62,5 +85,22 @@ pub fn clear() -> Result<()> {
     match entry()?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(e) => Err(Error::Keyring(e.to_string())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn private_file_is_written_and_replaced() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("session.json");
+        super::write_private(&p, "first, longer text").unwrap();
+        super::write_private(&p, "second").unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "second");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
+        }
     }
 }
