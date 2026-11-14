@@ -2,12 +2,14 @@
 //!
 //! Step 1 (no `--confirm`): prints a summary, the public-upload notice and a one-time code, uploads nothing.
 //! Step 2 (`--confirm <CODE>`): checks the code and uploads.
+//! `--delete <file_id>` follows the same two steps for removing one of the user's own uploads.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::json;
 use tvfs_core::config::Config;
+use tvfs_core::models::RecentFiles;
 use tvfs_core::fmt::{fmt_bytes, fmt_speed_mbs, fmt_time};
 use tvfs_core::upload::{Control, Run, UploadRequest};
 
@@ -54,16 +56,39 @@ pub fn run(a: AgentArgs) -> i32 {
     rt.block_on(run_async(a))
 }
 
+/// Text for the error when files are rejected; points at `--skip-unsupported` when that would help.
+pub fn problems_message(problems: &[String]) -> String {
+    let mut m = problems.join("\n");
+    if problems.iter().any(|p| p.contains("has no extension") || p.contains("exceeds")) {
+        m.push_str("\nNothing was uploaded. To leave out files TVFS cannot take (listed as \"skipped\") instead of failing, add --skip-unsupported.");
+    }
+    m
+}
+
 async fn run_async(a: AgentArgs) -> i32 {
-    let (files, problems) = collect_files(&a.paths);
+    if let Some(id) = a.delete.clone() {
+        return delete_flow(&a, &id).await;
+    }
+    let (files, mut skipped, mut problems) = collect_files_skipping(&a.paths);
+    if !a.skip_unsupported {
+        // strict (default): a named file or a too large file the server cannot take fails the command; files without an
+        // extension inside a folder are still left out like in the app, but listed as skipped instead of vanishing
+        let (keep, refuse): (Vec<_>, Vec<_>) = skipped.into_iter().partition(|s| s.in_folder_no_ext);
+        problems.extend(refuse.into_iter().map(|s| format!("{}: {}", s.path, s.reason)));
+        skipped = keep;
+    }
     if !problems.is_empty() {
-        return fail(a.json, EXIT_USAGE, "invalid_files", &problems.join("\n"));
+        return fail(a.json, EXIT_USAGE, "invalid_files", &problems_message(&problems));
     }
     if files.is_empty() {
-        return fail(a.json, EXIT_USAGE, "invalid_files", "No files to upload (the folders are empty or hold only files without an extension).");
+        let mut msg = String::from("No files to upload (the folders are empty or hold only files without an extension).");
+        for s in &skipped {
+            msg.push_str(&format!("\nSkipped: {} - {}", s.path, s.reason));
+        }
+        return fail(a.json, EXIT_USAGE, "invalid_files", &msg);
     }
     let cfg = Config::load();
-    let protected = cfg.tvfs_users_only;
+    let protected = a.users_only.unwrap_or(cfg.tvfs_users_only);
 
     let (client, _user) = match client_with_saved_session() {
         Ok(Some(c)) => c,
@@ -77,22 +102,28 @@ async fn run_async(a: AgentArgs) -> i32 {
     };
 
     let total: u64 = files.iter().map(|f| f.size).sum();
-    let binding = confirm::binding(&files, a.expire_min, protected);
+    let binding = confirm::binding(&files, a.expire_min, protected, a.anonymize);
     let dir = match Config::data_dir() {
         Ok(d) => d,
         Err(e) => return fail(a.json, EXIT_FAILED, "error", &e.to_string()),
     };
 
     let Some(code) = a.confirm.as_deref() else {
-        return step_one(&a, &files, total, &binding, &dir, protected);
+        return step_one(&a, &files, &skipped, total, &binding, &dir, protected);
     };
     if let Err(e) = confirm::consume(&dir, code, &binding, now_ms()) {
         return fail(a.json, EXIT_BAD_CODE, "bad_confirmation", &e.to_string());
     }
-    upload(&a, files, client, &cfg, status.tier == 2, protected).await
+    let mut files = files;
+    if a.anonymize {
+        for f in &mut files {
+            f.set_anonymized(true);
+        }
+    }
+    upload(&a, files, &skipped, client, &cfg, status.tier == 2, protected).await
 }
 
-fn step_one(a: &AgentArgs, files: &[tvfs_core::upload::UploadFile], total: u64, binding: &str, dir: &std::path::Path, protected: bool) -> i32 {
+fn step_one(a: &AgentArgs, files: &[tvfs_core::upload::UploadFile], skipped: &[Skipped], total: u64, binding: &str, dir: &std::path::Path, protected: bool) -> i32 {
     let code = match confirm::issue(dir, binding, now_ms()) {
         Ok(c) => c,
         Err(e) => return fail(a.json, EXIT_FAILED, "error", &format!("Could not store the confirmation code: {e}")),
@@ -112,7 +143,9 @@ fn step_one(a: &AgentArgs, files: &[tvfs_core::upload::UploadFile], total: u64, 
                 "total_size_text": size,
                 "expires_in": expiry_label,
                 "users_only": protected,
+                "anonymize": a.anonymize,
                 "files": list,
+                "skipped": skipped_json(skipped),
                 "notice": note,
                 "confirm_code": code,
                 "code_valid_minutes": 10,
@@ -127,13 +160,17 @@ fn step_one(a: &AgentArgs, files: &[tvfs_core::upload::UploadFile], total: u64, 
         if files.len() > 50 {
             println!("  ... and {} more", files.len() - 50);
         }
+        if a.anonymize {
+            println!("File names will be replaced by random names (extensions kept).");
+        }
+        print!("{}", skipped_text(skipped));
         println!("\n{note}\n");
         println!("Confirmation code (single use, valid 10 minutes): {code}");
     }
     EXIT_OK
 }
 
-async fn upload(a: &AgentArgs, files: Vec<tvfs_core::upload::UploadFile>, client: tvfs_core::Client, cfg: &Config, tier2: bool, protected: bool) -> i32 {
+async fn upload(a: &AgentArgs, files: Vec<tvfs_core::upload::UploadFile>, skipped: &[Skipped], client: tvfs_core::Client, cfg: &Config, tier2: bool, protected: bool) -> i32 {
     let names: Vec<(String, u64)> = files.iter().map(|f| (f.upload_name(), f.size)).collect();
     let total: u64 = names.iter().map(|n| n.1).sum();
     let uploader = new_uploader(&client);
@@ -161,9 +198,9 @@ async fn upload(a: &AgentArgs, files: Vec<tvfs_core::upload::UploadFile>, client
     let avg = if elapsed > 0.0 { sent as f64 / 1_048_576.0 / elapsed } else { 0.0 };
     let prefs = Prefs::from_config(cfg);
     if a.json {
-        println!("{}", render_json(&fin, prefs, elapsed, avg));
+        println!("{}", render_json(&fin, prefs, elapsed, avg, skipped));
     } else {
-        print!("{}", render_text(&fin, prefs, elapsed, avg));
+        print!("{}", render_text(&fin, prefs, elapsed, avg, skipped));
     }
     if fin.any_failed() {
         EXIT_FAILED
@@ -172,7 +209,94 @@ async fn upload(a: &AgentArgs, files: Vec<tvfs_core::upload::UploadFile>, client
     }
 }
 
-pub fn render_text(fin: &Finished, prefs: Prefs, elapsed: f64, avg: f64) -> String {
+/// Name of one of the user's recent uploads, if the sync list knows the id (a failed lookup is not an error).
+async fn recent_name(client: &tvfs_core::Client, id: &str) -> Option<String> {
+    let resp = client.sync(None).await.ok()?;
+    let mut rf = RecentFiles::default();
+    rf.apply(resp);
+    rf.files.into_iter().find(|f| f.id == id).map(|f| f.name)
+}
+
+pub fn delete_notice(id: &str, name: Option<&str>) -> String {
+    let what = match name {
+        Some(n) => format!("the uploaded file \"{n}\" (id {id})"),
+        None => format!("the uploaded file with id {id} (name unknown: it is not in the recent uploads)"),
+    };
+    format!(
+        "You are about to PERMANENTLY DELETE {what} from TVFS. Its links stop working and this cannot be undone. Only delete what the user asked you to delete. By running the command again with `--confirm <CODE>` you, the AI agent, confirm that you understand this and that the user wants this deletion."
+    )
+}
+
+async fn delete_flow(a: &AgentArgs, id: &str) -> i32 {
+    let (client, _user) = match client_with_saved_session() {
+        Ok(Some(c)) => c,
+        Ok(None) => return fail(a.json, EXIT_NOT_LOGGED_IN, "not_logged_in", NOT_LOGGED_IN),
+        Err(e) => return fail(a.json, EXIT_FAILED, "error", &format!("Could not read the saved login: {e}")),
+    };
+    if let Err(e) = client.status().await {
+        return if e.is_auth() {
+            fail(a.json, EXIT_NOT_LOGGED_IN, "not_logged_in", NOT_LOGGED_IN)
+        } else {
+            fail(a.json, EXIT_FAILED, "error", &format!("Cannot reach TVFS: {e}"))
+        };
+    }
+    let dir = match Config::data_dir() {
+        Ok(d) => d,
+        Err(e) => return fail(a.json, EXIT_FAILED, "error", &e.to_string()),
+    };
+    let binding = confirm::delete_binding(id);
+    let name = recent_name(&client, id).await;
+    let Some(code) = a.confirm.as_deref() else {
+        let code = match confirm::issue(&dir, &binding, now_ms()) {
+            Ok(c) => c,
+            Err(e) => return fail(a.json, EXIT_FAILED, "error", &format!("Could not store the confirmation code: {e}")),
+        };
+        let note = delete_notice(id, name.as_deref());
+        if a.json {
+            println!(
+                "{}",
+                json!({ "status": "confirmation_required", "deleted": false, "file_id": id, "name": name, "notice": note, "confirm_code": code, "code_valid_minutes": 10 })
+            );
+        } else {
+            println!("NOTHING DELETED YET - confirmation required.\n");
+            println!("{note}\n");
+            println!("Confirmation code (single use, valid 10 minutes): {code}");
+        }
+        return EXIT_OK;
+    };
+    if let Err(e) = confirm::consume(&dir, code, &binding, now_ms()) {
+        return fail(a.json, EXIT_BAD_CODE, "bad_confirmation", &e.to_string());
+    }
+    match client.delete_file(id).await {
+        Ok(()) => {
+            if a.json {
+                println!("{}", json!({ "status": "deleted", "deleted": true, "file_id": id, "name": name }));
+            } else {
+                println!("Deleted {} (id {id}).", name.as_deref().map(|n| format!("\"{n}\"")).unwrap_or_else(|| "the file".into()));
+            }
+            EXIT_OK
+        }
+        Err(e) if e.is_auth() => fail(a.json, EXIT_NOT_LOGGED_IN, "not_logged_in", NOT_LOGGED_IN),
+        Err(e) => fail(a.json, EXIT_FAILED, "failed", &format!("The server did not delete the file: {e}")),
+    }
+}
+
+pub fn skipped_json(skipped: &[Skipped]) -> serde_json::Value {
+    skipped.iter().map(|s| json!({ "path": s.path, "reason": s.reason })).collect::<Vec<_>>().into()
+}
+
+pub fn skipped_text(skipped: &[Skipped]) -> String {
+    if skipped.is_empty() {
+        return String::new();
+    }
+    let mut out = format!("\nSkipped ({}, not uploaded):\n", skipped.len());
+    for s in skipped {
+        out.push_str(&format!("  {} - {}\n", s.path, s.reason));
+    }
+    out
+}
+
+pub fn render_text(fin: &Finished, prefs: Prefs, elapsed: f64, avg: f64, skipped: &[Skipped]) -> String {
     let mut out = String::new();
     if let Some(e) = &fin.failed {
         out.push_str(&format!("Upload failed: {e}\n"));
@@ -181,6 +305,9 @@ pub fn render_text(fin: &Finished, prefs: Prefs, elapsed: f64, avg: f64) -> Stri
         match &f.result {
             Ok(r) => {
                 out.push_str(&format!("{} ({})\n", f.name, fmt_bytes(r.size)));
+                if !r.file_id.is_empty() {
+                    out.push_str(&format!("  id: {}\n", r.file_id));
+                }
                 for l in links::collect(r, prefs) {
                     out.push_str(&format!("  {}: {}{}\n", l.label, l.url, if l.default { " (default)" } else { "" }));
                 }
@@ -197,11 +324,12 @@ pub fn render_text(fin: &Finished, prefs: Prefs, elapsed: f64, avg: f64) -> Stri
     if let Some(s) = &fin.share_link {
         out.push_str(&format!("Share link (TVFS users only): {s}\n"));
     }
+    out.push_str(&skipped_text(skipped));
     out.push_str(&format!("Total time {}, average speed {}\n", fmt_time(elapsed), fmt_speed_mbs(avg)));
     out
 }
 
-pub fn render_json(fin: &Finished, prefs: Prefs, elapsed: f64, avg: f64) -> serde_json::Value {
+pub fn render_json(fin: &Finished, prefs: Prefs, elapsed: f64, avg: f64, skipped: &[Skipped]) -> serde_json::Value {
     let files: Vec<_> = fin
         .files
         .iter()
@@ -209,7 +337,8 @@ pub fn render_json(fin: &Finished, prefs: Prefs, elapsed: f64, avg: f64) -> serd
             Ok(r) => {
                 let items = links::collect(r, prefs);
                 let def = items.iter().find(|i| i.default).map(|i| i.url.clone());
-                json!({ "name": f.name, "size": r.size, "ok": true, "links": items, "default_link": def })
+                let file_id = (!r.file_id.is_empty()).then(|| r.file_id.clone());
+                json!({ "name": f.name, "file_id": file_id, "size": r.size, "ok": true, "links": items, "default_link": def })
             }
             Err(e) => json!({ "name": f.name, "ok": false, "error": e }),
         })
@@ -218,6 +347,7 @@ pub fn render_json(fin: &Finished, prefs: Prefs, elapsed: f64, avg: f64) -> serd
         "status": if fin.any_failed() { "failed" } else { "uploaded" },
         "uploaded": fin.any_ok(),
         "files": files,
+        "skipped": skipped_json(skipped),
         "batch_link": fin.batch_link,
         "batch_styled_link": fin.batch_styled,
         "share_link": fin.share_link,
@@ -257,7 +387,7 @@ mod tests {
     #[test]
     fn json_output_marks_default_and_errors() {
         let p = Prefs { auto: AutoCopy::Styled, prefer_tool: true, image_styled: false };
-        let v = render_json(&fin(), p, 2.0, 1.0);
+        let v = render_json(&fin(), p, 2.0, 1.0, &[]);
         assert_eq!(v["status"], "failed");
         assert_eq!(v["files"][0]["default_link"], "[a](https://x/f/a.png)");
         assert_eq!(v["files"][0]["links"][1]["default"], true);
@@ -265,9 +395,41 @@ mod tests {
     }
 
     #[test]
+    fn json_has_file_id_and_skipped() {
+        let mut f = fin();
+        if let Ok(r) = &mut f.files[0].result {
+            r.file_id = "id42".into();
+        }
+        let p = Prefs { auto: AutoCopy::Normal, prefer_tool: true, image_styled: false };
+        let sk = [Skipped { path: "/x/LICENSE".into(), reason: "no extension".into(), in_folder_no_ext: true }];
+        let v = render_json(&f, p, 1.0, 1.0, &sk);
+        assert_eq!(v["files"][0]["file_id"], "id42");
+        assert_eq!(v["skipped"][0]["path"], "/x/LICENSE");
+        assert_eq!(v["skipped"][0]["reason"], "no extension");
+        let t = render_text(&f, p, 1.0, 1.0, &sk);
+        assert!(t.contains("  id: id42\n") && t.contains("Skipped (1, not uploaded):") && t.contains("/x/LICENSE - no extension"), "{t}");
+        // no skipped files: an empty list, no extra text
+        assert_eq!(render_json(&f, p, 1.0, 1.0, &[])["skipped"], serde_json::json!([]));
+        assert!(!render_text(&f, p, 1.0, 1.0, &[]).contains("Skipped"));
+    }
+
+    #[test]
+    fn strict_error_mentions_the_skip_flag() {
+        let m = problems_message(&["File \"LICENSE\" has no extension and its type (unknown) could not be detected.".into()]);
+        assert!(m.contains("--skip-unsupported"), "{m}");
+        assert!(!problems_message(&["File \"a\" could not be read: x".into()]).contains("--skip-unsupported"));
+    }
+
+    #[test]
+    fn delete_notice_names_the_file_when_known() {
+        assert!(delete_notice("abc", Some("a.png")).contains("\"a.png\" (id abc)"));
+        assert!(delete_notice("abc", None).contains("id abc (name unknown"));
+    }
+
+    #[test]
     fn text_output_marks_default() {
         let p = Prefs { auto: AutoCopy::Normal, prefer_tool: true, image_styled: false };
-        let t = render_text(&fin(), p, 2.0, 1.0);
+        let t = render_text(&fin(), p, 2.0, 1.0, &[]);
         assert!(t.contains("Direct link: https://x/f/a.png (default)"));
         assert!(t.contains("b.txt FAILED: boom"));
         assert!(t.contains("Total time 2s, average speed 1.0 MB/s"));

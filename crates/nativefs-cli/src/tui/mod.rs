@@ -37,7 +37,7 @@ impl Drop for Guard {
     }
 }
 
-pub fn run(theme: Option<ThemeMode>) -> i32 {
+pub fn run(theme: Option<ThemeMode>, paths: Vec<std::path::PathBuf>) -> i32 {
     // scripts and AI agents run without a terminal: point them at the mode made for them instead of failing obscurely
     use std::io::IsTerminal;
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
@@ -86,6 +86,7 @@ pub fn run(theme: Option<ThemeMode>) -> i32 {
         });
     }
     let mut app = App::new(rt.handle().clone(), tx, theme);
+    app.open_paths(paths);
     let result = (|| -> std::io::Result<()> {
         loop {
             if app.dirty {
@@ -188,6 +189,58 @@ mod tests {
         if let Some(p) = std::env::var_os("CLI_DUMP") {
             std::fs::write(p, &all).unwrap();
         }
+    }
+
+    #[test]
+    fn recent_delete_prompt() {
+        let (mut app, _rt) = test_app();
+        app.user = Some("demo".into());
+        let entry = |id: &str, name: &str| tvfs_core::models::SyncEntry { id: id.into(), name: name.into(), link: "https://x/p".into(), category: "image".into(), size: 10, uploaded_at: None, expires_at: None, thumbnail: None, voice_note: false };
+        app.recent.entries = vec![entry("1", "first.png"), entry("2", "second.png")];
+        app.screen = app::Screen::Recent;
+        assert!(dump(&mut app, 100, 30).contains("d delete"));
+        app.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.on_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        assert_eq!(app.recent.pending_delete, Some(("2".into(), "second.png".into())));
+        let d = dump(&mut app, 100, 30);
+        assert!(d.contains("Delete second.png? y yes   n no"), "{d}");
+        // n cancels, the Delete key asks again
+        app.on_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        assert!(app.recent.pending_delete.is_none());
+        assert!(!dump(&mut app, 100, 30).contains("Delete second.png?"));
+        app.on_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+        assert!(app.recent.pending_delete.is_some());
+        // any other key also cancels, nothing else happens (no screen change)
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.recent.pending_delete.is_none());
+        assert_eq!(app.screen, app::Screen::Recent);
+        // y starts the delete (without a server it can only fail, which shows up as a message)
+        app.on_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        app.on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        assert!(app.recent.pending_delete.is_none());
+        app.update(Msg::Deleted("second.png".into(), Err("boom".into())));
+        assert!(dump(&mut app, 100, 30).contains("Could not delete second.png: boom"));
+    }
+
+    #[test]
+    fn command_line_paths_open_the_options() {
+        let (mut app, _rt) = test_app();
+        app.user = Some("demo".into());
+        app.screen = app::Screen::Menu;
+        let d = tempfile::tempdir().unwrap();
+        let ok = d.path().join("a.txt");
+        std::fs::write(&ok, "x").unwrap();
+        app.open_paths(vec![ok.clone()]);
+        assert_eq!(app.screen, app::Screen::Options);
+        assert_eq!(app.opts.files.len(), 1);
+        assert!(dump(&mut app, 100, 30).contains("Upload options"));
+        // an invalid file only gives the toast and stays where it was
+        app.screen = app::Screen::Menu;
+        app.picker.selected.clear();
+        app.open_paths(vec![d.path().join("missing.txt")]);
+        assert_eq!(app.screen, app::Screen::Menu);
+        assert!(app.toast.as_ref().is_some_and(|t| t.2));
+        assert!(app.picker.selected.is_empty());
     }
 
     #[test]

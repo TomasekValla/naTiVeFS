@@ -26,7 +26,7 @@ fn main() {
             0
         }
         Ok(Command::Agent(a)) => agent::run(a),
-        Ok(Command::Tui { theme }) => tui::run(theme),
+        Ok(Command::Tui { theme, paths }) => tui::run(theme, paths),
         Err(e) => {
             eprintln!("naTiVeFS-cli: {e}");
             agent::EXIT_USAGE

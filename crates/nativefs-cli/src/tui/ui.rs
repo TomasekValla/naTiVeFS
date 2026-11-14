@@ -195,10 +195,22 @@ fn draw_footer(app: &App, f: &mut Frame, r: Rect) {
         Screen::Options => &[("←→", "change"), ("↑↓", "row"), ("Enter", "start upload"), ("Esc", "back")],
         Screen::Uploading => &[("p", "pause"), ("c", "cancel")],
         Screen::Result => &[("↑↓", "move"), ("Enter", "copy"), ("o", "open"), ("n", "new upload"), ("m", "menu")],
-        Screen::Recent => &[("↑↓", "move"), ("Enter", "copy"), ("l/s", "plain/styled"), ("o", "open"), ("r", "refresh"), ("Esc", "back")],
+        Screen::Recent => &[("↑↓", "move"), ("Enter", "copy"), ("l/s", "plain/styled"), ("o", "open"), ("r", "refresh"), ("d", "delete"), ("Esc", "back")],
         Screen::Settings => &[("↑↓", "move"), ("Enter/←→", "change"), ("Esc", "back")],
     };
     let t = &app.theme;
+    if let (Screen::Recent, Some((_, name))) = (app.screen, &app.recent.pending_delete) {
+        let q = format!(" Delete {}? ", fit(name, (r.width as usize).saturating_sub(14)));
+        let spans = vec![
+            Span::styled(q, Style::new().fg(t.bad).add_modifier(Modifier::BOLD)),
+            Span::styled("y", Style::new().fg(t.accent).add_modifier(Modifier::BOLD)),
+            Span::styled(" yes   ", Style::new().fg(t.dim)),
+            Span::styled("n", Style::new().fg(t.accent).add_modifier(Modifier::BOLD)),
+            Span::styled(" no", Style::new().fg(t.dim)),
+        ];
+        f.render_widget(Paragraph::new(Line::from(spans)), r);
+        return;
+    }
     let mut spans = vec![Span::raw(" ")];
     for (k, d) in hints {
         spans.push(Span::styled(*k, Style::new().fg(t.accent).add_modifier(Modifier::BOLD)));

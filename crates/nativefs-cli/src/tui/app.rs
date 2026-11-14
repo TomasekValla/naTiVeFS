@@ -26,6 +26,8 @@ pub enum Msg {
     LoggedIn(Result<String, String>),
     Status(Result<(u32, Status), String>),
     Recent(Result<Vec<SyncEntry>, String>),
+    /// Name of the deleted upload and the outcome.
+    Deleted(String, Result<(), String>),
     Picked(Vec<PathBuf>),
     Finished(Box<Finished>, f64),
     Styled(String, Option<String>),
@@ -116,6 +118,8 @@ pub struct RecentState {
     pub scroll: usize,
     pub loading: bool,
     pub error: Option<String>,
+    /// Waiting for y / n: (file id, name) of the upload asked about.
+    pub pending_delete: Option<(String, String)>,
 }
 
 /// One character of marquee scrolling per step.
@@ -150,6 +154,8 @@ pub struct App {
     pub recent: RecentState,
     pub settings_row: usize,
     pub next_status: Option<Instant>,
+    /// Files given on the command line, opened once the user is logged in.
+    pending_paths: Vec<PathBuf>,
     clipboard: Option<arboard::Clipboard>,
 }
 
@@ -200,12 +206,32 @@ impl App {
             recent: RecentState::default(),
             settings_row: 0,
             next_status: None,
+            pending_paths: Vec::new(),
             clipboard: None,
         };
         if app.user.is_some() {
             app.refresh_status();
         }
         app
+    }
+
+    /// Open the upload options for files given on the command line (after the login when there is none yet).
+    pub fn open_paths(&mut self, paths: Vec<PathBuf>) {
+        if paths.is_empty() {
+            return;
+        }
+        if self.user.is_none() {
+            self.pending_paths = paths;
+            return;
+        }
+        for p in paths {
+            self.picker.selected.insert(std::path::absolute(&p).unwrap_or(p));
+        }
+        self.start_options();
+        if self.screen != Screen::Options {
+            self.picker.selected.clear();
+        }
+        self.dirty = true;
     }
 
     // ── timing ────────────────────────────────────────────────────────────
@@ -278,6 +304,8 @@ impl App {
                         self.login = LoginState::default();
                         self.screen = Screen::Menu;
                         self.refresh_status();
+                        let pending = std::mem::take(&mut self.pending_paths);
+                        self.open_paths(pending);
                     }
                     Err(e) => self.login.error = Some(e),
                 }
@@ -312,6 +340,16 @@ impl App {
                         self.recent.cursor = self.recent.cursor.min(self.recent.entries.len().saturating_sub(1));
                     }
                     Err(e) => self.recent.error = Some(e),
+                }
+                self.dirty = true;
+            }
+            Msg::Deleted(name, r) => {
+                match r {
+                    Ok(()) => {
+                        self.toast(format!("Deleted {name}"), false);
+                        self.load_recent();
+                    }
+                    Err(e) => self.toast(format!("Could not delete {name}: {e}"), true),
                 }
                 self.dirty = true;
             }
@@ -785,7 +823,22 @@ impl App {
         });
     }
 
+    fn delete_upload(&mut self, id: String, name: String) {
+        let (client, tx) = (self.client.clone(), self.tx.clone());
+        self.rt.spawn(async move {
+            let r = client.delete_file(&id).await.map_err(|e| e.to_string());
+            let _ = tx.send(Msg::Deleted(name, r));
+        });
+    }
+
     fn key_recent(&mut self, k: KeyEvent) {
+        // a pending "Delete <name>? y/n" takes every key until answered
+        if let Some((id, name)) = self.recent.pending_delete.take() {
+            if matches!(k.code, KeyCode::Char('y') | KeyCode::Char('Y')) {
+                self.delete_upload(id, name);
+            }
+            return;
+        }
         let n = self.recent.entries.len();
         let c = &mut self.recent.cursor;
         match k.code {
@@ -797,6 +850,11 @@ impl App {
             KeyCode::Home => *c = 0,
             KeyCode::End => *c = n.saturating_sub(1),
             KeyCode::Char('r') => self.load_recent(),
+            KeyCode::Char('d') | KeyCode::Delete => {
+                if let Some(e) = self.recent.entries.get(self.recent.cursor) {
+                    self.recent.pending_delete = Some((e.id.clone(), e.name.clone()));
+                }
+            }
             KeyCode::Enter | KeyCode::Char('c') | KeyCode::Char('l') | KeyCode::Char('s') => {
                 let Some(e) = self.recent.entries.get(self.recent.cursor).cloned() else { return };
                 let styled = match k.code {

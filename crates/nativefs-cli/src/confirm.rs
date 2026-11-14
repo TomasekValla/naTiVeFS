@@ -1,7 +1,7 @@
 //! One-time confirmation codes for the AI agent mode.
 //!
 //! Step 1 of an agent upload issues a code bound to a hash of the exact file list (paths, sizes,
-//! modification times) and the options. Step 2 must present that code: it is single use, valid for
+//! modification times) and the options (expiry, Users Only, anonymize); a delete code is bound to the file id. Step 2 must present that code: it is single use, valid for
 //! 10 minutes, and refused when anything it was bound to changed. Codes live in the app's data dir.
 
 use std::path::{Path, PathBuf};
@@ -32,9 +32,9 @@ pub enum ConfirmError {
 impl std::fmt::Display for ConfirmError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Unknown => write!(f, "Confirmation code not recognised (wrong, or already used). Nothing was uploaded. Run step 1 again to get a new code."),
-            Self::Expired => write!(f, "Confirmation code expired (codes are valid for 10 minutes). Nothing was uploaded. Run step 1 again to get a new code."),
-            Self::Mismatch => write!(f, "The files or options changed since this code was issued. Nothing was uploaded. Run step 1 again to get a new code."),
+            Self::Unknown => write!(f, "Confirmation code not recognised (wrong, or already used). Nothing was uploaded or deleted. Run step 1 again to get a new code."),
+            Self::Expired => write!(f, "Confirmation code expired (codes are valid for 10 minutes). Nothing was uploaded or deleted. Run step 1 again to get a new code."),
+            Self::Mismatch => write!(f, "The files, file id or options changed since this code was issued. Nothing was uploaded or deleted. Run step 1 again to get a new code."),
         }
     }
 }
@@ -53,13 +53,18 @@ fn save(dir: &Path, entries: &[Entry]) -> std::io::Result<()> {
 }
 
 /// Hash of the exact file list and options a code is bound to.
-pub fn binding(files: &[UploadFile], expire_min: u32, protected: bool) -> String {
+pub fn binding(files: &[UploadFile], expire_min: u32, protected: bool, anonymize: bool) -> String {
     let mut data = String::new();
     for f in files {
         data.push_str(&format!("{}\u{1}{}\u{1}{}\u{1}{}\n", f.path.display(), f.size, f.modified_ms, f.upload_name()));
     }
-    data.push_str(&format!("expire={expire_min};protected={protected}"));
+    data.push_str(&format!("expire={expire_min};protected={protected};anonymize={anonymize}"));
     sha256_hex(data.as_bytes())
+}
+
+/// Hash a delete code is bound to: the file id only (it can never match an upload binding).
+pub fn delete_binding(file_id: &str) -> String {
+    sha256_hex(format!("delete\u{1}{file_id}").as_bytes())
 }
 
 fn normalize(code: &str) -> String {
@@ -170,10 +175,10 @@ mod tests {
     #[test]
     fn code_is_single_use_and_bound() {
         let dir = tempfile::tempdir().unwrap();
-        let b = binding(&[file("a.txt", 5, 1)], 1440, false);
+        let b = binding(&[file("a.txt", 5, 1)], 1440, false, false);
         let code = issue(dir.path(), &b, 1000).unwrap();
         assert_eq!(code.len(), 9);
-        let other = binding(&[file("a.txt", 6, 1)], 1440, false);
+        let other = binding(&[file("a.txt", 6, 1)], 1440, false, false);
         assert_eq!(consume(dir.path(), &code, &other, 2000), Err(ConfirmError::Mismatch));
         // the lowercase / dash-less form works, and only once
         assert_eq!(consume(dir.path(), &code.to_lowercase().replace('-', ""), &b, 2000), Ok(()));
@@ -183,7 +188,7 @@ mod tests {
     #[test]
     fn codes_expire_after_ten_minutes() {
         let dir = tempfile::tempdir().unwrap();
-        let b = binding(&[file("a.txt", 5, 1)], 60, false);
+        let b = binding(&[file("a.txt", 5, 1)], 60, false, false);
         let code = issue(dir.path(), &b, 0).unwrap();
         assert_eq!(consume(dir.path(), &code, &b, VALID_MS + 1), Err(ConfirmError::Expired));
         assert_eq!(consume(dir.path(), &code, &b, 1), Err(ConfirmError::Unknown));
@@ -193,12 +198,34 @@ mod tests {
 
     #[test]
     fn binding_covers_files_mtime_and_options() {
-        let a = binding(&[file("a.txt", 5, 1)], 60, false);
-        assert_ne!(a, binding(&[file("a.txt", 5, 2)], 60, false));
-        assert_ne!(a, binding(&[file("a.txt", 5, 1)], 120, false));
-        assert_ne!(a, binding(&[file("a.txt", 5, 1)], 60, true));
-        assert_ne!(a, binding(&[file("b.txt", 5, 1)], 60, false));
-        assert_eq!(a, binding(&[file("a.txt", 5, 1)], 60, false));
+        let a = binding(&[file("a.txt", 5, 1)], 60, false, false);
+        assert_ne!(a, binding(&[file("a.txt", 5, 2)], 60, false, false));
+        assert_ne!(a, binding(&[file("a.txt", 5, 1)], 120, false, false));
+        assert_ne!(a, binding(&[file("a.txt", 5, 1)], 60, true, false));
+        assert_ne!(a, binding(&[file("a.txt", 5, 1)], 60, false, true));
+        assert_ne!(a, binding(&[file("b.txt", 5, 1)], 60, false, false));
+        assert_eq!(a, binding(&[file("a.txt", 5, 1)], 60, false, false));
+    }
+
+    #[test]
+    fn anonymize_and_users_only_changes_refuse_the_code() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = [file("a.txt", 5, 1)];
+        let code = issue(dir.path(), &binding(&f, 60, false, false), 0).unwrap();
+        assert_eq!(consume(dir.path(), &code, &binding(&f, 60, false, true), 1), Err(ConfirmError::Mismatch));
+        assert_eq!(consume(dir.path(), &code, &binding(&f, 60, true, false), 1), Err(ConfirmError::Mismatch));
+        assert_eq!(consume(dir.path(), &code, &binding(&f, 60, false, false), 1), Ok(()));
+    }
+
+    #[test]
+    fn delete_code_is_bound_to_the_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let code = issue(dir.path(), &delete_binding("abc"), 0).unwrap();
+        assert_eq!(consume(dir.path(), &code, &delete_binding("abd"), 1), Err(ConfirmError::Mismatch));
+        // an upload binding never matches a delete code
+        assert_eq!(consume(dir.path(), &code, &binding(&[file("a.txt", 5, 1)], 60, false, false), 1), Err(ConfirmError::Mismatch));
+        assert_eq!(consume(dir.path(), &code, &delete_binding("abc"), 1), Ok(()));
+        assert_eq!(consume(dir.path(), &code, &delete_binding("abc"), 1), Err(ConfirmError::Unknown));
     }
 
     #[test]

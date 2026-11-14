@@ -15,36 +15,61 @@ personal data unless the user explicitly asked for exactly this file.
 
 1. Preview (uploads nothing):
 
-   naTiVeFS-cli --direct-no-cli-ui --choose-file-directly <path> [<path>...] [--expire 7d] [--json]
+   naTiVeFS-cli --direct-no-cli-ui --choose-file-directly <path> [<path>...] [options] [--json]
 
    It prints a summary (files, total size, expiry), a notice, and a one-time confirmation code.
 
 2. Upload: run the SAME command again and add `--confirm <CODE>`:
 
-   naTiVeFS-cli --direct-no-cli-ui --choose-file-directly <path> [<path>...] [--expire 7d] [--json] --confirm <CODE>
+   naTiVeFS-cli --direct-no-cli-ui --choose-file-directly <path> [<path>...] [options] [--json] --confirm <CODE>
 
 The code is valid for 10 minutes, works once, and is bound to the exact files (paths, sizes, modification
 times) and options. If any of them changes, ask for a new code by running step 1 again. By passing the code you
 confirm that you understand the files become public and that the user wants this upload.
 
-## Options
+stdin is not supported (on purpose: the code binds to file size and modification time). To upload generated
+content, write it to a temporary file first and upload that.
+
+## Options (upload)
 
 - `--expire <5m|30m|1h|6h|12h|1d|2d|3d|5d|7d|10d|14d>`: how long the link stays alive (default 7d).
+- `--anonymize`: random file names, extension kept.
+- `--users-only` / `--public`: per upload, only logged-in TVFS users can open the link / anyone can. Mutually
+  exclusive; without either, the user's "TVFS Users Only" setting decides (the step 1 output shows which).
+- `--skip-unsupported`: leave out files TVFS cannot take (no detectable extension such as `LICENSE`, over 10 GB)
+  and list them as `skipped` (with the reason) in both steps. Without it any such file fails the command
+  (exit 2, nothing uploaded). The code covers only the files that will be uploaded.
 - `--json`: machine-readable output in both steps.
 - Folders are allowed; every file inside is uploaded.
 
+The options are part of what the code is bound to: step 2 must repeat exactly the options of step 1.
+
 ## Output
 
-Per file: name, size and every link the server returned (direct, styled, reader/player pages and their styled
-variants). The link the user prefers (their "Auto copy" setting) is marked `(default)`: give that one to the
-user unless they asked for another. After the files: total time and average speed.
+Per file: name, `file_id` (`id:` line in text output), size and every link the server returned (direct, styled,
+reader/player pages and their styled variants). The link the user prefers (their "Auto copy" setting) is marked
+`(default)`: give that one to the user unless they asked for another. Then `skipped` files, total time and
+average speed. Keep the `file_id` if the upload may have to be deleted later. (A "Users Only" share has no
+`file_id` per file.)
 
-Exit codes: 0 ok (step 1 also returns 0 with the code), 1 upload failed (some or all files), 2 bad
-arguments or files, 3 not logged in (tell the user to open naTiVeFS or run naTiVeFS-cli once), 4 confirmation
-code wrong, expired or used (nothing was uploaded).
+## Deleting your own upload = two commands
+
+   naTiVeFS-cli --direct-no-cli-ui --delete <file_id> [--json]
+   naTiVeFS-cli --direct-no-cli-ui --delete <file_id> [--json] --confirm <CODE>
+
+Same rules as for uploads: step 1 deletes nothing and prints what would be deleted (the name, if the file is
+among the recent uploads) plus a one-time code bound to the id; step 2 deletes for good. Delete only what the
+user asked you to delete. `--delete` cannot be combined with `--choose-file-directly` or the upload options.
+
+## Exit codes
+
+0 ok (step 1 also returns 0 with the code), 1 upload or delete failed (some or all files; the server refused),
+2 bad arguments or files, 3 not logged in (tell the user to open naTiVeFS or run naTiVeFS-cli once), 4
+confirmation code wrong, expired or used (nothing was uploaded or deleted).
 With `--json`, errors are JSON on stdout too (with a `status` field); always check the exit code, and read stdout
-also when it is not 0. Running `naTiVeFS-cli` without arguments opens a full-screen interface for people: you always
-use `--direct-no-cli-ui` (without a terminal it exits with code 2 and this hint).
+also when it is not 0. Running `naTiVeFS-cli` without arguments opens a full-screen interface for people (with
+plain paths, `naTiVeFS-cli <path>...`, it opens on the upload options): you always use `--direct-no-cli-ui`
+(without a terminal the interface exits with code 2 and this hint).
 
 ## Setup for you (do this once)
 
