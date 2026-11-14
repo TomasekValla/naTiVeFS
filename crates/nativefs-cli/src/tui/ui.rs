@@ -109,7 +109,7 @@ pub fn draw(app: &mut App, f: &mut Frame) {
         let r = Rect::new(area.x + (area.width - w) / 2, foot.y.saturating_sub(2), w, 1);
         f.render_widget(Clear, r);
         let color = if *bad { app.theme.bad } else { app.theme.good };
-        f.render_widget(Paragraph::new(format!(" {} ", fit(text, w as usize - 2))).alignment(Alignment::Center).style(Style::new().fg(app.theme.bg).bg(color).add_modifier(Modifier::BOLD)), r);
+        f.render_widget(Paragraph::new(format!(" {} ", fit(text, (w as usize).saturating_sub(2)))).alignment(Alignment::Center).style(Style::new().fg(app.theme.bg).bg(color).add_modifier(Modifier::BOLD)), r);
     }
 }
 
@@ -268,12 +268,12 @@ fn draw_menu(app: &mut App, f: &mut Frame, body: Rect) {
         if y >= r.y + r.height - 1 {
             break;
         }
-        let row = Rect::new(r.x + 2, y, r.width - 4, 1);
+        let row = Rect::new(r.x + 2, y, r.width.saturating_sub(4), 1);
         let sel = app.menu == i;
         let style = if sel { Style::new().bg(app.theme.sel_bg).fg(app.theme.text).add_modifier(Modifier::BOLD) } else { Style::new().fg(app.theme.text) };
         let line = Line::from(vec![
             Span::styled(if sel { " ▸ " } else { "   " }, Style::new().fg(app.theme.accent2)),
-            Span::styled(pad_right(label, row.width as usize - 6), style),
+            Span::styled(pad_right(label, (row.width as usize).saturating_sub(6)), style),
             Span::styled(format!("{key} "), Style::new().fg(app.theme.dim)),
         ]);
         f.render_widget(Paragraph::new(line).style(if sel { Style::new().bg(app.theme.sel_bg) } else { Style::new() }), row);
@@ -344,7 +344,7 @@ fn draw_options(app: &mut App, f: &mut Frame, body: Rect) {
         Span::styled(format!("{} file(s), {}", app.opts.files.len(), fmt_bytes(total)), Style::new().fg(t.text).add_modifier(Modifier::BOLD)),
     ])];
     for fl in app.opts.files.iter().take(5) {
-        lines.push(Line::styled(format!("  {}", fit(&fl.share_path(), inner.width as usize - 4)), Style::new().fg(t.dim)));
+        lines.push(Line::styled(format!("  {}", fit(&fl.share_path(), (inner.width as usize).saturating_sub(4))), Style::new().fg(t.dim)));
     }
     if app.opts.files.len() > 5 {
         lines.push(Line::styled(format!("  … and {} more", app.opts.files.len() - 5), Style::new().fg(t.dim)));
@@ -448,7 +448,7 @@ fn draw_uploading(app: &mut App, f: &mut Frame, body: Rect) {
         let _ = i;
         lines.push(Line::from(vec![
             Span::styled(format!("{icon} "), Style::new().fg(color)),
-            Span::styled(pad_right(&fit(name, inner.width as usize - 24), inner.width as usize - 24), Style::new().fg(t.text)),
+            Span::styled(pad_right(&fit(name, (inner.width as usize).saturating_sub(24)), (inner.width as usize).saturating_sub(24)), Style::new().fg(t.text)),
             Span::styled(format!("{:>10} / {}", fmt_bytes(*bytes), fmt_bytes(*size)), Style::new().fg(t.dim)),
         ]));
     }
@@ -600,7 +600,7 @@ fn draw_settings(app: &mut App, f: &mut Frame, body: Rect) {
         ("TVFS Users Only uploads", if c.tvfs_users_only { "on" } else { "off" }.to_owned(), "shared with the app"),
     ];
     for (i, (label, value, note)) in rows.iter().enumerate() {
-        let rect = Rect::new(r.x + 2, r.y + 2 + i as u16 * 2, r.width - 4, 1);
+        let rect = Rect::new(r.x + 2, r.y + 2 + i as u16 * 2, r.width.saturating_sub(4), 1);
         if rect.y >= r.y + r.height - 1 {
             break;
         }

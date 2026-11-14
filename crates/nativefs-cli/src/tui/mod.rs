@@ -128,6 +128,32 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+    /// Every screen at every terminal size from the smallest the interface accepts up: nothing may panic (an
+    /// unsigned width going below zero used to kill the CLI mid-upload in a narrow pane).
+    #[test]
+    fn every_screen_survives_any_terminal_size() {
+        use crate::links::{FileOut, Finished};
+        use tvfs_core::models::UploadCompleteResponse;
+        let (mut app, _rt) = test_app();
+        app.user = Some("demo".into());
+        app.status = app::StatusInfo { checked: true, online: true, latency_ms: Some(31), used: "4.20 GB".into(), tier: 1 };
+        app.picker.selected.insert(app.picker.entries.iter().find(|e| e.name == "clip.mp4").unwrap().path.clone());
+        let run = tvfs_core::upload::Run::new([("a-rather-long-file-name-for-a-narrow-pane.mp4".to_string(), 5_000_000u64), ("notes.md".to_string(), 5u64)], Default::default());
+        app.up = Some(app::UploadState { run, control: Default::default(), confirm_cancel: false });
+        let r = UploadCompleteResponse { link: "https://files.example/files/text/notes.md".into(), size: 5, styled_link: Some("[notes.md](https://files.example/files/text/notes.md)".into()), ..Default::default() };
+        app.result.fin = Finished { files: vec![FileOut { name: "notes.md".into(), result: Ok(r) }, FileOut { name: "bad.bin".into(), result: Err("Server busy".into()) }], ..Default::default() };
+        app.recent.entries = vec![tvfs_core::models::SyncEntry { id: "1".into(), name: "photo.png".into(), link: "https://x/p.png".into(), category: "image".into(), size: 1234567, uploaded_at: None, expires_at: Some(crate::common::now_ms() + 86_400_000), thumbnail: None, voice_note: false }];
+        app.toast("a toast message that is longer than a narrow terminal", false);
+        for screen in [app::Screen::Login, app::Screen::Menu, app::Screen::Picker, app::Screen::Options, app::Screen::Uploading, app::Screen::Result, app::Screen::Recent, app::Screen::Settings] {
+            app.screen = screen;
+            for w in (16..=130u16).step_by(3) {
+                for h in [8u16, 12, 20, 30, 45] {
+                    let _ = dump(&mut app, w, h);
+                }
+            }
+        }
+    }
+
     fn dump(app: &mut App, w: u16, h: u16) -> String {
         let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
         t.draw(|f| ui::draw(app, f)).unwrap();
