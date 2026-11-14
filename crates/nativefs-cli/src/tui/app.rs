@@ -118,7 +118,14 @@ pub struct RecentState {
     pub error: Option<String>,
 }
 
+/// One character of marquee scrolling per step.
+pub const MARQUEE_STEP_MS: u64 = 160;
+
 pub struct App {
+    /// Set while drawing when a text did not fit and scrolls (marquee); the loop then ticks to move it.
+    pub marquee_active: bool,
+    /// When the marquee texts started moving (they wait a moment, then scroll).
+    pub marquee_start: Instant,
     pub theme: Theme,
     pub truecolor: bool,
     pub cfg: Config,
@@ -167,6 +174,8 @@ impl App {
         let start_dir = cli.last_dir.as_deref().map(PathBuf::from).filter(|p| p.is_dir()).unwrap_or_else(home_dir);
         let expiry_idx = expiry::index(cli.expiry_min.unwrap_or(tvfs_core::DEFAULT_EXPIRATION_MIN));
         let mut app = Self {
+            marquee_active: false,
+            marquee_start: Instant::now(),
             theme,
             truecolor,
             opts: Options { expiry: expiry_idx, anonymize: false, users_only: cfg.tvfs_users_only, row: 0, files: Vec::new() },
@@ -208,6 +217,9 @@ impl App {
         if self.screen == Screen::Uploading || self.login.busy || self.recent.loading {
             want(Duration::from_millis(100));
         }
+        if self.marquee_active {
+            want(Duration::from_millis(MARQUEE_STEP_MS));
+        }
         if let Some((_, at, _)) = &self.toast {
             want((*at + Duration::from_secs(3)).saturating_duration_since(Instant::now()).max(Duration::from_millis(20)));
         }
@@ -219,7 +231,7 @@ impl App {
 
     pub fn on_tick(&mut self) {
         self.frame += 1;
-        if self.screen == Screen::Uploading || self.login.busy || self.recent.loading {
+        if self.screen == Screen::Uploading || self.login.busy || self.recent.loading || self.marquee_active {
             self.dirty = true;
         }
         if self.toast.as_ref().is_some_and(|(_, at, _)| at.elapsed() >= Duration::from_secs(3)) {

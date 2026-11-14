@@ -76,6 +76,7 @@ fn centered(area: Rect, w: u16, h: u16) -> Rect {
 
 pub fn draw(app: &mut App, f: &mut Frame) {
     app.hits.clear();
+    app.marquee_active = false;
     let area = f.area();
     f.render_widget(Block::new().style(Style::new().bg(app.theme.bg).fg(app.theme.text)), area);
     // below this nothing useful fits; anything larger just lays out at whatever size the terminal has
@@ -551,9 +552,27 @@ fn draw_recent(app: &mut App, f: &mut Frame, body: Rect) {
     }
 }
 
+/// `text` cut to `w` columns; when it does not fit it scrolls in a loop after a short pause, and the app keeps ticking
+/// while any such text is on screen (nothing ticks when everything fits).
+fn marquee(app: &mut App, text: &str, w: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= w || w == 0 {
+        return text.to_owned();
+    }
+    app.marquee_active = true;
+    const GAP: &str = "     ·     ";
+    let cycle: Vec<char> = chars.iter().copied().chain(GAP.chars()).collect();
+    let pause = 8; // steps standing still at the start of every round
+    let step = (app.marquee_start.elapsed().as_millis() / crate::tui::app::MARQUEE_STEP_MS as u128) as usize;
+    let pos = step % (cycle.len() + pause);
+    let off = pos.saturating_sub(pause);
+    (0..w).map(|i| cycle[(off + i) % cycle.len()]).collect()
+}
+
 fn draw_settings(app: &mut App, f: &mut Frame, body: Rect) {
     let t = app.theme.clone();
-    let r = centered(body, 84, body.height.min(14));
+    // wide enough for the notes on a normal terminal; on narrower ones a note that does not fit scrolls (marquee)
+    let r = centered(body, 112, body.height.min(14));
     f.render_widget(panel(app, "Settings"), r);
     let c = &app.cfg;
     let copy = match c.auto_copy {
@@ -578,7 +597,7 @@ fn draw_settings(app: &mut App, f: &mut Frame, body: Rect) {
             Span::styled(if sel { "▸ " } else { "  " }, Style::new().fg(t.accent2)),
             Span::styled(pad_right(label, 38), Style::new().fg(t.text)),
             Span::styled(pad_right(&format!("‹ {value} ›"), 26), Style::new().fg(t.accent).add_modifier(Modifier::BOLD)),
-            Span::styled((*note).to_owned(), Style::new().fg(t.dim)),
+            Span::styled(marquee(app, note, (rect.width as usize).saturating_sub(2 + 38 + 26)), Style::new().fg(t.dim)),
         ]);
         f.render_widget(Paragraph::new(line).style(if sel { Style::new().bg(t.sel_bg) } else { Style::new() }), rect);
         app.hits.push((rect, Hit::Setting(i)));
