@@ -921,7 +921,9 @@ export component CheckStreamCard inherits Rectangle {
 export component ProbeBtn inherits Rectangle {
     in property <bool> busy;
     callback clicked();
-    width: row.preferred-width + 48px;
+    // its own width (the File Check card stretches it to full width in wide windows)
+    out property <length> natural-w: row.preferred-width + 48px;
+    width: root.natural-w;
     height: 52px;
     border-radius: 16px;
     background: Palette.brand;

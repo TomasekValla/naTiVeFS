@@ -595,6 +595,14 @@ fn show_window(ui: &MainWindow, shared: &Arc<Shared>) {
     if first {
         // a window first shown later (started in the tray) may already exist at winit's default 800 x 600
         ui.window().set_size(slint::LogicalSize::new(ui.get_preferred_w(), ui.get_preferred_h()));
+        // debug builds: `NATIVEFS_WINDOW_SIZE=<w>x<h>` (logical px) opens a wider window (tests of the desktop layout)
+        #[cfg(debug_assertions)]
+        if let Some((w, h)) = std::env::var("NATIVEFS_WINDOW_SIZE").ok().and_then(|v| {
+            let (w, h) = v.split_once('x')?;
+            Some((w.trim().parse::<f32>().ok()?, h.trim().parse::<f32>().ok()?))
+        }) {
+            ui.window().set_size(slint::LogicalSize::new(w, h));
+        }
     }
     let _ = ui.show();
     windows::raise(ui.window());
@@ -1173,8 +1181,8 @@ fn backdrop_tick(weak: &Weak<MainWindow>, shared: &Arc<Shared>) {
             let fps = if a.motion == Motion::Off { 0.0 } else { a.frames as f64 / window.as_secs_f64() };
             a.frames = 0;
             a.frames_since = now;
-            // only while the settings page shows it: no extra redraws elsewhere
-            if ui.get_page() == 1 {
+            // only while Settings is on screen (its page, or the left column of a wide window): no extra redraws elsewhere
+            if ui.get_settings_shown() {
                 ui.set_bg_fps(fps.round() as i32);
             }
         }
@@ -1401,7 +1409,7 @@ fn on_window_event(ui: &MainWindow, shared: &Arc<Shared>, w: &slint::Window, ev:
                 shared.wake.notify_one();
             }
             // back from the system settings (Windows' "Set default"): show the router's new state
-            if ui.get_page() == 1 {
+            if ui.get_settings_shown() {
                 refresh_router(ui, shared);
             }
             EventResult::Propagate
@@ -1519,8 +1527,10 @@ fn apply_demo(ui: &MainWindow) {
         ui.set_recent(ModelRc::new(VecModel::from(items)));
         ui.set_logged_in(true);
     }
-    if std::env::var("NATIVEFS_PAGE").as_deref() == Ok("settings") {
-        ui.set_page(1);
+    match std::env::var("NATIVEFS_PAGE").as_deref() {
+        Ok("settings") => ui.set_page(1),
+        Ok("check") => ui.set_page(2),
+        _ => {}
     }
     // `NATIVEFS_SCROLL=<px>` scrolls the page (screenshots of its lower parts without touching the mouse)
     if let Some(y) = std::env::var("NATIVEFS_SCROLL").ok().and_then(|v| v.parse::<f32>().ok()) {
