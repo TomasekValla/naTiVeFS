@@ -61,6 +61,52 @@ component BrowserChoice inherits Rectangle {
     ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
 }
 
+// The place of one main window card (the card itself is its child). It shows only on its page / layout; while the
+// layout switches a card fades in or out (pages switch at once), and `pulse` rings it briefly (the web's `panelPulse`).
+component Slot inherits Rectangle {
+    in property <bool> shown;
+    in property <duration> glide;
+    in property <bool> pulse;
+    opacity: root.shown ? 1 : 0;
+    animate opacity { duration: root.glide > 0ms ? 380ms : 0ms; easing: ease-out; }
+    visible: self.opacity > 0;
+    @children
+    Rectangle {
+        x: -3px;
+        y: -3px;
+        width: parent.width + 6px;
+        height: parent.height + 6px;
+        border-radius: 35px;
+        border-width: 3px;
+        border-color: Palette.good;
+        opacity: root.pulse ? 1 : 0;
+        visible: self.opacity > 0;
+        animate opacity { duration: root.pulse ? 300ms : 600ms; easing: ease-out; }
+    }
+}
+
+// The three links (web `.info-cards-row`): two side by side and "Check files" under them in the notices card,
+// a vertical list of full-width rows in the links card of wide windows.
+component LinkCards inherits VerticalLayout {
+    in property <bool> stacked;
+    // the width inside the card (two cards side by side split it)
+    in property <length> inner-w;
+    callback open-link(string);
+    callback check();
+    spacing: 10px;
+    if !root.stacked : HorizontalLayout {
+        spacing: 10px;
+        InfoCard { width: (root.inner-w - 10px) / 2; icon: @image-url("../../../assets/img/github.png"); title: "View source on GitHub"; sub: "Don't trust, verify"; clicked => { root.open-link("https://github.com/TomasekValla/TVFS"); } }
+        InfoCard { width: (root.inner-w - 10px) / 2; icon: @image-url("../../../assets/img/paper.png"); title: "View official whitepaper"; sub: ""; clicked => { root.open-link("https://files.tomasekvalla.cz/whitepaper.pdf"); } }
+    }
+    if root.stacked : VerticalLayout {
+        spacing: 10px;
+        InfoCard { height: 54px; icon: @image-url("../../../assets/img/github.png"); title: "View source on GitHub"; sub: "Don't trust, verify"; clicked => { root.open-link("https://github.com/TomasekValla/TVFS"); } }
+        InfoCard { height: 54px; icon: @image-url("../../../assets/img/paper.png"); title: "View official whitepaper"; sub: ""; clicked => { root.open-link("https://files.tomasekvalla.cz/whitepaper.pdf"); } }
+    }
+    InfoCard { height: 54px; icon: @image-url("../../../assets/img/tvfs-logo.png"); title: "Check files"; sub: ""; clicked => { root.check(); } }
+}
+
 export component MainWindow inherits Window {
     in property <string> title-text: "naTiVeFS";
     // short message at the bottom ("There is no TVFS link on the clipboard.")
@@ -403,13 +449,54 @@ export component MainWindow inherits Window {
     in-out property <string> password;
     property <[string]> pills-a: ["5m", "30m", "1h", "6h", "12h", "1d"];
     property <[string]> pills-b: ["2d", "3d", "5d", "7d", "10d", "14d"];
+    // ── desktop layout (the web's "Desktop layout"): below 900 px one column as on a phone; 900+ the upload card
+    // with the notices in the middle and Recently uploaded, File Check and the links on the right; 1200+ also
+    // Settings on the left. Column widths follow the web's grid tracks (the middle one stays 440-480 px, the phone
+    // column's width, at every width); the gap is the web's clamp(24px, 9vw - 84px, 128px).
+    // 0 = one column, 1 = two columns, 2 = three columns (set in `relayout`, so a switch can glide)
+    property <int> lay: 0;
+    property <bool> big: false;
     property <length> col-w: min(440px, root.width - 40px);
-    property <length> inner-w: root.col-w - 82px;
+    property <length> mins: root.lay == 2 ? (root.big ? 1120px : 1080px) : 760px;
+    // web: clamp(24px, 9vw - 84px, 128px) (24 px at 1200, ~60 at 1600, 128 from 2350 on)
+    property <length> gap: max(18px, min(clamp(root.width * 0.09 - 84px, 24px, 128px), (root.width - 40px - root.mins) / (root.lay == 2 ? 2 : 1)));
+    // room left after the gaps and the columns' minimum widths, shared out like CSS grid minmax() tracks
+    // (equal shares, a track stops at its maximum: the middle one first, then the left, then the right)
+    property <length> free: max(0px, root.width - 40px - root.mins - root.gap * (root.lay == 2 ? 2 : 1));
+    property <length> e-mid: min(40px, root.free / (root.lay == 2 ? 3 : 2));
+    property <length> e-left: min(root.big ? 90px : 60px, (root.free - root.e-mid) / 2);
+    property <length> e-side: min(root.lay == 2 ? (root.big ? 110px : 80px) : 80px, root.free - root.e-mid - (root.lay == 2 ? root.e-left : 0px));
+    property <length> left-w: (root.big ? 340px : 320px) + root.e-left;
+    property <length> mid-w: root.lay == 0 ? root.col-w : 440px + root.e-mid;
+    property <length> side-w: (root.lay == 2 && root.big ? 340px : 320px) + root.e-side;
+    property <length> group-w: root.mid-w + root.side-w + root.gap + (root.lay == 2 ? root.left-w + root.gap : 0px);
+    property <length> left-x: (root.width - root.group-w) / 2;
+    property <length> mid-x: root.lay == 0 ? (root.width - root.col-w) / 2 : root.left-x + (root.lay == 2 ? root.left-w + root.gap : 0px);
+    property <length> side-x: root.mid-x + root.mid-w + root.gap;
+    // the settings card: a page of its own below 1200 px (560 px wide like the web's settings view at 900+)
+    property <length> set-w: root.lay == 2 ? root.left-w : (root.lay == 1 ? min(560px, root.width - 40px) : root.col-w);
+    property <length> set-x: root.lay == 2 ? root.left-x : (root.width - root.set-w) / 2;
+    // side cards use the web's `.side-panel` padding (32 px 28 px) + the 1 px border
+    property <length> side-pad-v: root.lay == 0 ? 41px : 33px;
+    property <length> side-pad-h: root.lay == 0 ? 41px : 29px;
+    property <length> inner-w: root.mid-w - 82px;
+    property <length> set-inner-w: root.set-w - (root.lay == 2 ? 58px : 82px);
+    // Settings is shown (Rust: background fps readout, link router refresh)
+    out property <bool> settings-shown: root.page == 1 || root.lay == 2;
+    // cards glide while this is non-zero (a layout switch); a resize within one layout moves them at once
+    property <duration> glide: 0ms;
+    // the gear / "Check files" briefly ring a card that is always shown (the web's `panelPulse`)
+    property <bool> pulse-set;
+    property <bool> pulse-chk;
     property <color> latency-color: root.latency-level == 0 ? Palette.dot-good : (root.latency-level == 1 ? Palette.warn : Palette.bad);
     property <bool> can-submit: root.logged-in || (!root.busy && root.username != "" && root.password != "");
 
     // ── scrolling: wheel input comes from Rust (winit), animated here ─────
-    property <length> content-h: page-col.preferred-height;
+    property <length> content-h: 80px + (
+        root.lay == 0 ? (root.page == 1 ? card-set.height : root.page == 2 ? card-chk.height : card-main.height + 18px + card-recent.height + 18px + card-info.height)
+        : root.lay == 1 && root.page == 1 ? card-set.height
+        : max(root.lay == 2 ? card-set.height : 0px, card-main.height + 18px + card-info.height,
+              card-recent.height + 18px + card-chk.height + 18px + card-links.height));
     property <length> max-scroll: max(0px, root.content-h - root.height);
     // Rust only starts middle-button autoscroll on the page when there is something to scroll
     out property <bool> can-scroll: root.max-scroll > 0px && root.confirm-kind == 0;
@@ -438,13 +525,49 @@ export component MainWindow inherits Window {
         root.scroll-anim = 0ms;
         root.scroll-target = p == 0 ? root.main-scroll : 0px;
     }
+    // the gear: Settings is a page below 1200 px and always shown above
+    function open-settings() {
+        if (root.lay == 2) { root.pulse-set = true; } else { root.go-page(1); }
+    }
+    // "Check files": a page below 900 px, an always open card above
+    function open-check() {
+        if (root.lay == 0) { root.go-page(2); } else { root.pulse-chk = true; url-in.focus(); }
+    }
+    // pick the layout for the current width; a switch makes the cards glide to their new places
+    function relayout() {
+        if (root.width <= 0px) { return; }
+        if ((root.width >= 1200px ? 2 : root.width >= 900px ? 1 : 0) != root.lay || (root.width >= 1800px) != root.big) {
+            root.glide = Anim.panel;
+            root.lay = root.width >= 1200px ? 2 : root.width >= 900px ? 1 : 0;
+            root.big = root.width >= 1800px;
+            // a page whose card is now always shown goes back to the main view
+            if ((root.page == 2 && root.lay >= 1) || (root.page == 1 && root.lay == 2)) { root.go-page(0); }
+            if (root.lay == 2) { root.settings-opened(); }
+        }
+    }
 
     init => {
         Look.win-w = root.width;
         Look.win-h = root.height;
         keys.focus();
+        root.relayout();
     }
-    changed width => { Look.win-w = self.width; }
+    changed width => { Look.win-w = self.width; root.relayout(); }
+    // Rust opens pages too (tray > Settings): an always shown card is highlighted instead
+    changed page => {
+        if (root.page == 1 && root.lay == 2) { root.page = 0; root.pulse-set = true; }
+        if (root.page == 2 && root.lay >= 1) { root.page = 0; root.pulse-chk = true; }
+    }
+    Timer {
+        interval: Anim.panel + 150ms;
+        running: root.glide > 0ms;
+        triggered => { root.glide = 0ms; }
+    }
+    Timer {
+        interval: 320ms;
+        running: root.pulse-set || root.pulse-chk;
+        triggered => { root.pulse-set = false; root.pulse-chk = false; }
+    }
     changed height => { Look.win-h = self.height; }
 
     // ── page background ────────────────────────────────────────────────
@@ -538,19 +661,21 @@ export component MainWindow inherits Window {
 
         Rectangle {
             clip: true;
-            page-col := VerticalLayout {
-                x: (root.width - self.width) / 2;
+            // the cards, placed by column (see "desktop layout" above); 40 px above and below, 18 px between
+            Rectangle {
                 y: -root.scroll-pos;
-                width: root.col-w;
-                height: self.preferred-height;
-                padding-top: 40px;
-                padding-bottom: 40px;
-                spacing: 18px;
+                height: root.content-h;
 
-                if root.page == 0 : VerticalLayout {
-                    spacing: 18px;
                     // ── main card ─────────────────────────────────────────────────
-                    GlassCard {
+                    Slot {
+                        x: root.mid-x;
+                        y: 40px;
+                        width: root.mid-w;
+                        height: card-main.height;
+                        shown: root.page == 0;
+                        glide: root.glide;
+                        animate x, y, width { duration: self.opacity > 0.01 ? root.glide : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+                    card-main := GlassCard {
                         height: lay1.preferred-height;
                         lay1 := VerticalLayout {
                             padding: 41px;
@@ -611,7 +736,7 @@ export component MainWindow inherits Window {
                                                 src: @image-url("../../../assets/img/icon-gear.svg");
                                                 size: 18px;
                                                 tint: Palette.dim;
-                                                clicked => { root.go-page(1); }
+                                                clicked => { root.open-settings(); }
                                             }
                                             IconBtn {
                                                 src: Palette.light ? @image-url("../../../assets/img/emoji-sun.png") : @image-url("../../../assets/img/emoji-moon.png");
@@ -1412,11 +1537,23 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
+                    }
                     // ── recently uploaded ─────────────────────────────────────────
-                    GlassCard {
+                    Slot {
+                        x: root.lay == 0 ? root.mid-x : root.side-x;
+                        y: root.lay == 0 ? 40px + card-main.height + 18px : 40px;
+                        width: root.lay == 0 ? root.mid-w : root.side-w;
+                        height: card-recent.height;
+                        shown: root.page == 0;
+                        glide: root.glide;
+                        animate x, y, width { duration: self.opacity > 0.01 ? root.glide : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+                    card-recent := GlassCard {
                         height: lay2.preferred-height;
                         lay2 := VerticalLayout {
-                            padding: 41px;
+                            padding-top: root.side-pad-v;
+                            padding-bottom: root.side-pad-v;
+                            padding-left: root.side-pad-h;
+                            padding-right: root.side-pad-h;
                             spacing: 0px;
                             Text { text: "Recently uploaded"; height: 34px; font-size: 16px; font-weight: 800; letter-spacing: -0.16px; color: Palette.text; vertical-alignment: top; }
                             if root.recent.length == 0 : Text {
@@ -1477,21 +1614,27 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
+                    }
                     // ── settings / info ───────────────────────────────────────────
-                    GlassCard {
+                    Slot {
+                        x: root.mid-x;
+                        y: 40px + card-main.height + 18px + (root.lay == 0 ? card-recent.height + 18px : 0px);
+                        width: root.mid-w;
+                        height: card-info.height;
+                        shown: root.page == 0;
+                        glide: root.glide;
+                        animate x, y, width { duration: self.opacity > 0.01 ? root.glide : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+                    card-info := GlassCard {
                         height: lay3.preferred-height;
                         lay3 := VerticalLayout {
                             padding: 41px;
                             spacing: 24px;
 
-                            VerticalLayout {
-                                spacing: 10px;
-                                HorizontalLayout {
-                                    spacing: 10px;
-                                    InfoCard { width: (root.inner-w - 10px) / 2; icon: @image-url("../../../assets/img/github.png"); title: "View source on GitHub"; sub: "Don't trust, verify"; clicked => { root.open-link("https://github.com/TomasekValla/TVFS"); } }
-                                    InfoCard { width: (root.inner-w - 10px) / 2; icon: @image-url("../../../assets/img/paper.png"); title: "View official whitepaper"; sub: ""; clicked => { root.open-link("https://files.tomasekvalla.cz/whitepaper.pdf"); } }
-                                }
-                                InfoCard { height: 54px; icon: @image-url("../../../assets/img/tvfs-logo.png"); title: "Check files"; sub: ""; clicked => { root.go-page(2); } }
+                            // the links (in their own card on the right in wider windows)
+                            if root.lay == 0 : LinkCards {
+                                inner-w: root.inner-w;
+                                open-link(url) => { root.open-link(url); }
+                                check => { root.open-check(); }
                             }
 
                             // first-run offer (owner, 2026-11-03): the link router, default off; answered once
@@ -1602,19 +1745,54 @@ export component MainWindow inherits Window {
                     }
                 }
 
+                // ── links (900+: their own card on the right, a vertical list like the web's #linksCard) ──
+                Slot {
+                    x: root.side-x;
+                    y: 40px + card-recent.height + 18px + card-chk.height + 18px;
+                    width: root.side-w;
+                    height: card-links.height;
+                    shown: root.page == 0 && root.lay >= 1;
+                    glide: root.glide;
+                    animate x, y, width { duration: self.opacity > 0.01 ? root.glide : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+                    card-links := GlassCard {
+                        height: lay-lnk.preferred-height;
+                        lay-lnk := VerticalLayout {
+                            padding-top: 25px;
+                            padding-bottom: 25px;
+                            padding-left: 29px;
+                            padding-right: 29px;
+                            LinkCards {
+                                stacked: true;
+                                open-link(url) => { root.open-link(url); }
+                                check => { root.open-check(); }
+                            }
+                        }
+                    }
+                }
+
                 // ── naTiVeFS app settings (not part of the web UI) ────────
-                // (wrapped in a layout: an `if` element placed directly in a layout gets
-                // a wrong `absolute-position` in Slint 1.16, which the glass relies on)
-                if root.page == 1 : VerticalLayout {
-                    GlassCard {
+                // a page below 1200 px, the left column above
+                Slot {
+                    x: root.set-x;
+                    y: 40px;
+                    width: root.set-w;
+                    height: card-set.height;
+                    shown: root.page == 1 || root.lay == 2;
+                    glide: root.glide;
+                    pulse: root.pulse-set;
+                    animate x, y, width { duration: self.opacity > 0.01 ? root.glide : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+                    card-set := GlassCard {
                         height: lay-app.preferred-height;
                         lay-app := VerticalLayout {
-                            padding: 41px;
+                            padding-top: root.lay == 2 ? 33px : 41px;
+                            padding-bottom: root.lay == 2 ? 33px : 41px;
+                            padding-left: root.lay == 2 ? 29px : 41px;
+                            padding-right: root.lay == 2 ? 29px : 41px;
                             spacing: 24px;
 
                             HorizontalLayout {
                                 spacing: 12px;
-                                VerticalLayout {
+                                if root.lay != 2 : VerticalLayout {
                                     alignment: center;
                                     IconBtn {
                                         src: @image-url("../../../assets/img/icon-back.svg");
@@ -2111,8 +2289,8 @@ export component MainWindow inherits Window {
                                 Eyebrow { text: "ABOUT"; }
                                 HorizontalLayout {
                                     spacing: 10px;
-                                    InfoCard { width: (root.inner-w - 10px) / 2; icon: @image-url("../../../assets/img/github.png"); title: "naTiVeFS source"; sub: "This app"; clicked => { root.open-link("https://github.com/TomasekValla/naTiVeFS"); } }
-                                    InfoCard { width: (root.inner-w - 10px) / 2; icon: @image-url("../../../assets/img/github.png"); title: "TVFS source"; sub: "Web + server"; clicked => { root.open-link("https://github.com/TomasekValla/TVFS"); } }
+                                    InfoCard { width: (root.set-inner-w - 10px) / 2; icon: @image-url("../../../assets/img/github.png"); title: "naTiVeFS source"; sub: "This app"; clicked => { root.open-link("https://github.com/TomasekValla/naTiVeFS"); } }
+                                    InfoCard { width: (root.set-inner-w - 10px) / 2; icon: @image-url("../../../assets/img/github.png"); title: "TVFS source"; sub: "Web + server"; clicked => { root.open-link("https://github.com/TomasekValla/TVFS"); } }
                                 }
                                 InfoCard { icon: @image-url("../../../assets/img/paper.png"); title: "License: GPL-3.0-or-later"; sub: "Free software: use, study, share, change"; clicked => { root.open-link("https://www.gnu.org/licenses/gpl-3.0.html"); } }
                             }
@@ -2139,18 +2317,30 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                if root.page == 2 : VerticalLayout {
-                    GlassCard {
+                // ── File Check (the web's check view): a page below 900 px, always open on the right above ──
+                Slot {
+                    x: root.lay == 0 ? root.mid-x : root.side-x;
+                    y: root.lay == 0 ? 40px : 40px + card-recent.height + 18px;
+                    width: root.lay == 0 ? root.mid-w : root.side-w;
+                    height: card-chk.height;
+                    shown: root.lay == 0 ? root.page == 2 : root.page == 0;
+                    glide: root.glide;
+                    pulse: root.pulse-chk;
+                    animate x, y, width { duration: self.opacity > 0.01 ? root.glide : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+                    card-chk := GlassCard {
                         height: lay-chk.preferred-height;
                         lay-chk := VerticalLayout {
-                            padding: 41px;
+                            padding-top: root.side-pad-v;
+                            padding-bottom: root.side-pad-v;
+                            padding-left: root.side-pad-h;
+                            padding-right: root.side-pad-h;
                             spacing: 24px;
 
                             VerticalLayout {
                                 spacing: 12px;
                                 HorizontalLayout {
                                     spacing: 12px;
-                                    VerticalLayout {
+                                    if root.lay == 0 : VerticalLayout {
                                         alignment: center;
                                         IconBtn {
                                             src: @image-url("../../../assets/img/icon-back.svg");
@@ -2183,11 +2373,14 @@ export component MainWindow inherits Window {
                                 }
                             }
 
-                            // `.input-row`
-                            HorizontalLayout {
-                                spacing: 10px;
+                            // `.input-row` (900+: the button under the field, like the web's column)
+                            Rectangle {
+                                property <bool> stacked: root.lay != 0;
+                                height: self.stacked ? 114px : 52px;
                                 Rectangle {
-                                    horizontal-stretch: 1;
+                                    x: 0px;
+                                    y: 0px;
+                                    width: parent.stacked ? parent.width : parent.width - probe.width - 10px;
                                     height: 52px;
                                     border-radius: 16px;
                                     background: Palette.glass;
@@ -2217,7 +2410,10 @@ export component MainWindow inherits Window {
                                         overflow: elide;
                                     }
                                 }
-                                ProbeBtn {
+                                probe := ProbeBtn {
+                                    x: parent.stacked ? 0px : parent.width - self.width;
+                                    y: parent.stacked ? 62px : 0px;
+                                    width: parent.stacked ? parent.width : self.natural-w;
                                     busy: root.check-busy;
                                     clicked => { root.check-probe(root.check-url); }
                                 }
