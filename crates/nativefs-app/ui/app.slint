@@ -431,6 +431,8 @@ export component MainWindow inherits Window {
     callback delete-file(string);
     callback pick-expiry(int);
     callback save-settings(bool, string);
+    // copies the onboarding text for AI agents (how to upload with naTiVeFS-cli)
+    callback copy-ai-help();
     callback startup-changed(bool, bool);
     callback router-toggle(bool);
     callback file-menus-changed(bool);
@@ -2217,6 +2219,27 @@ export component MainWindow inherits Window {
                                         TextField { placeholder: "Browser command (e.g. brave)"; value <=> root.browser-cmd; accepted => { root.save-settings(root.close-to-tray, root.browser-cmd); } }
                                         HorizontalLayout { alignment: start; SmallBtn { label: "Save"; clicked => { root.save-settings(root.close-to-tray, root.browser-cmd); } } }
                                         ClampExplain { text: root.browser-examples; }
+                                    }
+                                }
+                            }
+
+                            VerticalLayout {
+                                spacing: 12px;
+                                Eyebrow { text: "AI AGENTS"; }
+                                SettingCard {
+                                    height: lay-ai.preferred-height;
+                                    lay-ai := VerticalLayout {
+                                        padding-top: 16px;
+                                        padding-bottom: 16px;
+                                        padding-left: 18px;
+                                        padding-right: 18px;
+                                        spacing: 10px;
+                                        HorizontalLayout {
+                                            spacing: 10px;
+                                            Text { text: "Onboard your AI agent"; font-size: 13.12px; font-weight: 700; color: Palette.text; vertical-alignment: center; wrap: word-wrap; }
+                                            SmallBtn { label: "Copy"; clicked => { root.copy-ai-help(); } }
+                                        }
+                                        ClampExplain { text: "Copies instructions for an AI coding agent (Claude Code, Codex and similar): how to upload files with naTiVeFS-cli, the two-step confirmation, and that uploads are public. Paste it into the agent's chat; it saves the text into its own instructions file and allows the command in its settings."; }
                                     }
                                 }
                             }

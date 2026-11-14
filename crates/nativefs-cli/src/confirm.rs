@@ -157,6 +157,7 @@ mod tests {
             modified_ms: mtime,
             folder: String::new(),
             anon_name: None,
+            voice_note: false,
         }
     }
 

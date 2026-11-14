@@ -2179,6 +2179,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
     {
+        let weak = ui.as_weak();
+        ui.on_copy_ai_help(move || {
+            copy_to_clipboard(tvfs_core::ai_help::AI_AGENT_HELP);
+            if let Some(ui) = weak.upgrade() {
+                show_toast(&ui, "Copied: paste it into your AI agent");
+            }
+        });
+    }
+    {
         let (shared, weak) = (shared.clone(), weak.clone());
         ui.on_save_settings(move |close_to_tray, browser| {
             let mut cfg = shared.config.lock().unwrap();

@@ -1,4 +1,4 @@
-// Voice note player: a voice note opens as a chat message (round TVFS avatar, a bubble with play / pause, a waveform
+// Voice note player: a voice note opens as a chat message (no avatar: anyone can send one; a bubble with play / pause, a waveform
 // and the time) instead of the full audio player. Only speed and volume are offered; loudness is always normalized.
 
 import { Palette } from "common.slint";
@@ -77,28 +77,9 @@ export component VoicePlayerWindow inherits Window {
             Rectangle {
                 width: root.col-w;
                 height: 96px;
-                // avatar: round, TVFS logo, never a person
-                Rectangle {
-                    x: 0px;
-                    y: 52px;
-                    width: 44px;
-                    height: 44px;
-                    border-radius: 22px;
-                    background: #0d1117;
-                    border-width: 1px;
-                    border-color: #ffffff1f;
-                    // the real TVFS logo (transparent), same as the web voice page
-                    Image {
-                        x: 7px;
-                        y: 7px;
-                        width: 30px;
-                        height: 30px;
-                        source: @image-url("../../../assets/img/tvfs-mark.png");
-                        image-rendering: smooth;
-                    }
-                }
+                // no avatar: anyone can send a voice note, so no logo / person stands for the sender
                 Text {
-                    x: 54px;
+                    x: 0px;
                     y: 0px;
                     text: "Voice note";
                     font-size: 12px;
@@ -107,9 +88,9 @@ export component VoicePlayerWindow inherits Window {
                 }
                 // the bubble
                 Rectangle {
-                    x: 54px;
+                    x: 0px;
                     y: 18px;
-                    width: parent.width - 54px;
+                    width: parent.width;
                     height: 78px;
                     border-radius: 18px;
                     background: #1c202a;

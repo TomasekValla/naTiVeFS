@@ -72,7 +72,6 @@ pub struct StatusInfo {
     pub online: bool,
     pub latency_ms: Option<u32>,
     pub used: String,
-    pub total_gb: f64,
     pub tier: u8,
 }
 
@@ -279,7 +278,6 @@ impl App {
                         self.status.online = true;
                         self.status.latency_ms = Some(ms);
                         self.status.used = s.used_gb;
-                        self.status.total_gb = s.total_gb;
                         self.status.tier = s.tier;
                     }
                     Err(e) if e == "auth" => {

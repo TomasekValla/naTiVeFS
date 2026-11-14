@@ -399,6 +399,10 @@ pub fn place(window: &slint::Window) {
 /// Bring a window to the front: new viewers, the same file opened again, the main window. Windows only allows it
 /// when the process that handed the link / file over passed on its foreground right (`nativefs_ipc::allow_foreground`).
 pub fn raise(window: &slint::Window) {
+    // debug builds: `NATIVEFS_NO_FOCUS=1` never takes the keyboard focus (test windows on a second monitor)
+    if cfg!(debug_assertions) && std::env::var_os("NATIVEFS_NO_FOCUS").is_some() {
+        return;
+    }
     window.set_minimized(false);
     window.with_winit_window(|w| w.focus_window());
 }

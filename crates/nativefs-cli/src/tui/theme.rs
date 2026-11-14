@@ -6,7 +6,6 @@ type Rgb = (u8, u8, u8);
 
 #[derive(Debug, Clone)]
 pub struct Theme {
-    #[allow(dead_code)]
     pub light: bool,
     truecolor: bool,
     pub bg: Color,
@@ -98,9 +97,18 @@ impl Theme {
 
     /// Point of the TVFS gradient, `t` in 0..=1.
     pub fn grad(&self, t: f32) -> Color {
+        self.grad_shade(t, 1.0)
+    }
+
+    /// The gradient at `t`, mixed towards the background by `1 - k` (k = 1: full colour). Used for the logo's shadow.
+    pub fn grad_shade(&self, t: f32, k: f32) -> Color {
         let t = t.clamp(0.0, 1.0);
+        let k = k.clamp(0.0, 1.0);
+        let bg: Rgb = if self.light { (0xee, 0xf6, 0xf5) } else { (0x03, 0x07, 0x0a) };
         let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t).round() as u8;
         let rgb = (mix(self.grad.0 .0, self.grad.1 .0), mix(self.grad.0 .1, self.grad.1 .1), mix(self.grad.0 .2, self.grad.1 .2));
+        let toward = |c: u8, b: u8| (b as f32 + (c as f32 - b as f32) * k).round() as u8;
+        let rgb = (toward(rgb.0, bg.0), toward(rgb.1, bg.1), toward(rgb.2, bg.2));
         if self.truecolor {
             Color::Rgb(rgb.0, rgb.1, rgb.2)
         } else {

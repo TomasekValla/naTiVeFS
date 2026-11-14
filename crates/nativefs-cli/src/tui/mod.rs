@@ -155,7 +155,7 @@ mod tests {
         use tvfs_core::models::UploadCompleteResponse;
         let (mut app, _rt) = test_app();
         app.user = Some("demo".into());
-        app.status = app::StatusInfo { checked: true, online: true, latency_ms: Some(31), used: "4.20 GB".into(), total_gb: 100.0, tier: 1 };
+        app.status = app::StatusInfo { checked: true, online: true, latency_ms: Some(31), used: "4.20 GB".into(), tier: 1 };
         app.picker.selected.insert(app.picker.entries.iter().find(|e| e.name == "clip.mp4").unwrap().path.clone());
         app.screen = app::Screen::Picker;
         app.on_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
@@ -172,7 +172,7 @@ mod tests {
         app.screen = app::Screen::Result;
         all.push_str(&dump(&mut app, 100, 30));
         assert!(all.contains("(default)") && all.contains("FAILED") && all.contains("Link expires after") && all.contains("Uploading"), "{all}");
-        app.recent.entries = vec![tvfs_core::models::SyncEntry { id: "1".into(), name: "photo.png".into(), link: "https://x/p.png".into(), category: "image".into(), size: 1234567, uploaded_at: None, expires_at: Some(crate::common::now_ms() + 86_400_000), thumbnail: None }];
+        app.recent.entries = vec![tvfs_core::models::SyncEntry { id: "1".into(), name: "photo.png".into(), link: "https://x/p.png".into(), category: "image".into(), size: 1234567, uploaded_at: None, expires_at: Some(crate::common::now_ms() + 86_400_000), thumbnail: None, voice_note: false }];
         app.screen = app::Screen::Recent;
         all.push_str(&dump(&mut app, 100, 30));
         app.cli.theme = ThemeMode::Light;

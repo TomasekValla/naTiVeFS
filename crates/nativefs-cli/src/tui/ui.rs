@@ -13,7 +13,34 @@ use super::picker::Kind;
 use crate::expiry;
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const WORDMARK: [&str; 3] = ["▀█▀ █ █ █▀▀ █▀▀", " █  █ █ █▀  ▀▀█", " █  ▀▄▀ █   ▀▀▀"];
+/// Block letters for the big shadowed logo: solid blocks get the TVFS gradient, the box-drawing edges are the drop
+/// shadow. Lower case letters start one row lower, so "naTiVeFS" keeps its casing. Every glyph is 7 rows of equal width.
+fn glyph(c: char) -> [&'static str; 7] {
+    match c {
+        'n' => ["        ", "██████╗ ", "██╔══██╗", "██║  ██║", "██║  ██║", "██║  ██║", "╚═╝  ╚═╝"],
+        'a' => ["        ", "██████╗ ", "╚════██╗", " ██████║", "██╔══██║", "╚██████║", " ╚═════╝"],
+        'T' => ["████████╗", "╚══██╔══╝", "   ██║   ", "   ██║   ", "   ██║   ", "   ██║   ", "   ╚═╝   "],
+        'i' => ["██╗", "╚═╝", "██╗", "██║", "██║", "██║", "╚═╝"],
+        'V' => ["██╗   ██╗", "██║   ██║", "██║   ██║", "██║   ██║", "╚██╗ ██╔╝", " ╚████╔╝ ", "  ╚═══╝  "],
+        'e' => ["        ", " █████╗ ", "██╔══██╗", "███████║", "██╔════╝", "╚██████╗", " ╚═════╝"],
+        'F' => ["███████╗", "██╔════╝", "█████╗  ", "██╔══╝  ", "██║     ", "██║     ", "╚═╝     "],
+        'S' => ["███████╗", "██╔════╝", "███████╗", "╚════██║", "     ██║", "███████║", "╚══════╝"],
+        '-' => ["      ", "      ", "      ", "█████╗", "╚════╝", "      ", "      "],
+        'C' => [" ██████╗", "██╔════╝", "██║     ", "██║     ", "██║     ", "╚██████╗", " ╚═════╝"],
+        'L' => ["██╗     ", "██║     ", "██║     ", "██║     ", "██║     ", "███████╗", "╚══════╝"],
+        'I' => ["██╗", "██║", "██║", "██║", "██║", "██║", "╚═╝"],
+        _ => [" "; 7],
+    }
+}
+
+/// The seven rows of `word` in block letters.
+fn big_rows(word: &str) -> [String; 7] {
+    std::array::from_fn(|r| word.chars().map(|c| glyph(c)[r]).collect())
+}
+
+/// The big logo shrinks with the terminal: the full name, then "naTiVeFS", then "TVFS"; narrower than that, one line.
+const BIG_WORDS: [&str; 3] = ["naTiVeFS-CLI", "naTiVeFS", "TVFS"];
+const BIG_MIN_WIDTH: u16 = 4 + 34; // indent + "TVFS"
 
 /// Cut a string to a display width, with an ellipsis.
 pub fn fit(s: &str, w: usize) -> String {
@@ -51,13 +78,15 @@ pub fn draw(app: &mut App, f: &mut Frame) {
     app.hits.clear();
     let area = f.area();
     f.render_widget(Block::new().style(Style::new().bg(app.theme.bg).fg(app.theme.text)), area);
-    if area.width < 40 || area.height < 12 {
+    // below this nothing useful fits; anything larger just lays out at whatever size the terminal has
+    if area.width < 16 || area.height < 8 {
         let p = Paragraph::new("Window too small.\nMake the terminal bigger.").alignment(Alignment::Center);
         f.render_widget(p, centered(area, area.width, 2));
         return;
     }
     let tall = area.height >= 26;
-    let head_h = if tall { 3 } else { 1 };
+    // the big shadowed logo when there is room for it (and the screens below it), else one line
+    let head_h = if tall && area.width >= BIG_MIN_WIDTH { 8 } else { 1 };
     let [head, status, body, foot] = Layout::vertical([Constraint::Length(head_h), Constraint::Length(1), Constraint::Min(5), Constraint::Length(1)]).areas(area);
     draw_header(app, f, head);
     draw_status(app, f, status);
@@ -85,28 +114,49 @@ pub fn draw(app: &mut App, f: &mut Frame) {
 
 fn draw_header(app: &App, f: &mut Frame, r: Rect) {
     let t = &app.theme;
-    if r.height >= 3 {
-        let total = WORDMARK[0].chars().count().max(1) as f32;
-        let lines: Vec<Line> = WORDMARK
+    let version = Line::styled(format!("v{}  ·  TVFS", env!("CARGO_PKG_VERSION")), Style::new().fg(t.dim));
+    if r.height >= 8 {
+        // one empty row above, so the logo never touches the terminal's top edge
+        let r = Rect::new(r.x, r.y + 1, r.width, r.height - 1);
+        let fits = |w: &str| big_rows(w)[0].chars().count() as u16 + 4 <= r.width;
+        let word = BIG_WORDS.iter().copied().find(|w| fits(w)).unwrap_or("TVFS");
+        let rows = big_rows(word);
+        let logo_w = rows[0].chars().count();
+        let total = logo_w.max(1) as f32;
+        let lines: Vec<Line> = rows
             .iter()
             .map(|row| {
-                let spans: Vec<Span> = row.chars().enumerate().map(|(i, c)| Span::styled(c.to_string(), Style::new().fg(t.grad(i as f32 / total)).add_modifier(Modifier::BOLD))).collect();
                 let mut v = vec![Span::raw("  ")];
-                v.extend(spans);
+                v.extend(row.chars().enumerate().map(|(i, c)| {
+                    let x = i as f32 / total;
+                    let style = if c == '█' {
+                        Style::new().fg(t.grad(x)).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::new().fg(t.grad_shade(x, if t.light { 0.45 } else { 0.38 }))
+                    };
+                    Span::styled(c.to_string(), style)
+                }));
                 Line::from(v)
             })
             .collect();
         f.render_widget(Paragraph::new(lines), r);
-        let tag = Paragraph::new(vec![Line::raw(""), Line::styled("naTiVeFS-cli", Style::new().fg(t.dim)), Line::styled(format!("v{}", env!("CARGO_PKG_VERSION")), Style::new().fg(t.dim))]).alignment(Alignment::Right);
-        f.render_widget(tag, Rect::new(r.x, r.y, r.width.saturating_sub(2), r.height));
+        let mut tag = vec![Line::raw(""); 6];
+        // the version sits right of the logo's bottom row, only when it does not touch it
+        if (r.width as usize) >= 2 + logo_w + 3 + version.width() + 2 {
+            tag.push(version);
+        }
+        f.render_widget(Paragraph::new(tag).alignment(Alignment::Right), Rect::new(r.x, r.y, r.width.saturating_sub(2), r.height));
     } else {
-        let total = 4.0;
-        let mut spans = vec![Span::raw(" ")];
-        for (i, c) in "TVFS".chars().enumerate() {
+        let name = "naTiVeFS-CLI";
+        let total = name.chars().count() as f32;
+        let mut spans = vec![Span::raw("  ")];
+        for (i, c) in name.chars().enumerate() {
             spans.push(Span::styled(c.to_string(), Style::new().fg(t.grad(i as f32 / total)).add_modifier(Modifier::BOLD)));
         }
-        spans.push(Span::styled("  naTiVeFS-cli", Style::new().fg(t.dim)));
         f.render_widget(Paragraph::new(Line::from(spans)), r);
+        if (r.width as usize) >= 2 + name.chars().count() + 3 + version.width() + 2 {
+            f.render_widget(Paragraph::new(version).alignment(Alignment::Right), Rect::new(r.x, r.y, r.width.saturating_sub(2), 1));
+        }
     }
 }
 
@@ -124,7 +174,8 @@ fn draw_status(app: &App, f: &mut Frame, r: Rect) {
             spans.push(Span::styled(format!("  {ms} ms"), Style::new().fg(t.dim)));
         }
         if !s.used.is_empty() {
-            spans.push(Span::styled(format!("  ·  used {}{}", s.used, if s.total_gb > 0.0 { format!(" of {} GB", s.total_gb) } else { String::new() }), Style::new().fg(t.dim)));
+            // only the used space, like the app and the web: the storage has no fixed size to show "of N GB" against
+            spans.push(Span::styled(format!("  ·  used {}", s.used), Style::new().fg(t.dim)));
         }
     } else {
         spans.push(Span::styled("● offline", Style::new().fg(t.bad)));

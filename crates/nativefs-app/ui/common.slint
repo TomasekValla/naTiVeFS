@@ -131,6 +131,7 @@ export global Palette {
     // text on the teal→violet gradient is white in both themes
     out property <color> on-brand: #ffffff;
     out property <color> shadow: light ? #7c4dff38 : #000000b3;
+    out property <color> shadow-soft: light ? #7c4dff24 : #00000066;
     out property <color> scrim: light ? #12121a66 : #000000a6;
     out property <color> dialog: light ? #f6f8fc : #14111f;
     out property <brush> brand: @linear-gradient(135deg, #00e6bd 0%, #8455ff 100%);
@@ -182,9 +183,22 @@ export component GlassCard inherits Rectangle {
     property <bool> frosted: Look.glass && Look.has-backdrop;
     background: root.frosted ? transparent : Palette.glass;
     border-radius: 32px;
-    drop-shadow-color: Palette.shadow;
-    drop-shadow-blur: 48px;
-    drop-shadow-offset-y: 24px;
+    // The web's shadow is "0 30px 70px -15px": pushed down and shrunk by 15 px, so it shows under the card and hardly at
+    // its sides. Slint has no shadow spread, so with glass on a 15 px smaller shape casts it (the opaque frosted layer
+    // above hides the part under the card). Without glass the card is see-through: a plain, softer shadow on the card.
+    drop-shadow-color: root.frosted ? transparent : Palette.shadow-soft;
+    drop-shadow-blur: 40px;
+    drop-shadow-offset-y: 20px;
+    if root.frosted : Rectangle {
+        x: 15px;
+        y: 15px;
+        width: parent.width - 30px;
+        height: parent.height - 30px;
+        border-radius: root.border-radius;
+        drop-shadow-color: Palette.shadow;
+        drop-shadow-blur: 70px;
+        drop-shadow-offset-y: 30px;
+    }
     if root.frosted : Rectangle {
         border-radius: root.border-radius;
         clip: true;
