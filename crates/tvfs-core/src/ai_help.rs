@@ -42,6 +42,9 @@ user unless they asked for another. After the files: total time and average spee
 Exit codes: 0 ok (step 1 also returns 0 with the code), 1 upload failed (some or all files), 2 bad
 arguments or files, 3 not logged in (tell the user to open naTiVeFS or run naTiVeFS-cli once), 4 confirmation
 code wrong, expired or used (nothing was uploaded).
+With `--json`, errors are JSON on stdout too (with a `status` field); always check the exit code, and read stdout
+also when it is not 0. Running `naTiVeFS-cli` without arguments opens a full-screen interface for people: you always
+use `--direct-no-cli-ui` (without a terminal it exits with code 2 and this hint).
 
 ## Setup for you (do this once)
 

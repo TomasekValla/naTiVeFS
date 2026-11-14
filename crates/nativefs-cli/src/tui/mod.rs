@@ -38,6 +38,13 @@ impl Drop for Guard {
 }
 
 pub fn run(theme: Option<ThemeMode>) -> i32 {
+    // scripts and AI agents run without a terminal: point them at the mode made for them instead of failing obscurely
+    use std::io::IsTerminal;
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        eprintln!("naTiVeFS-cli: no interactive terminal here, so the full-screen interface cannot start.");
+        eprintln!("For scripts and AI agents: naTiVeFS-cli --direct-no-cli-ui --choose-file-directly <file> (details: naTiVeFS-cli --ai-help)");
+        return 2;
+    }
     let rt = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(rt) => rt,
         Err(e) => {
