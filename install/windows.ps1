@@ -1,7 +1,8 @@
 # Installs naTiVeFS on Windows for the current user, no administrator rights needed:
 #   irm https://raw.githubusercontent.com/TomasekValla/naTiVeFS/main/install/windows.ps1 | iex
 # The download is checked against the release's minisign signature before it runs. A file that does not match is
-# never started. If the check itself is impossible here, a red warning says so and the install goes on.
+# never started, and neither is one without a signature. Only when no checking tool works here does a red warning say so and
+# the install go on.
 $ErrorActionPreference = "Stop"
 $repo = "TomasekValla/naTiVeFS"
 $publicKey = "RWSQa45JZ1TSMKJ+gVjv+fsOf40z6FcRFMCMz2CplMxl40yszLg0URRu"
@@ -152,7 +153,15 @@ public static class NativefsMinisign {
 
     // minisign: public key "Ed" + key id (8) + key (32); signature line "ED"/"Ed" + key id + signature (64);
     // the trusted comment is covered by the global signature over signature + comment.
+    // Anything malformed (not base64, too short, wrong algorithm) is a failed check, never an error.
     public static bool Verify(string file, string sigFile, string publicKeyB64) {
+        try { return VerifyStrict(file, sigFile, publicKeyB64); }
+        catch (FormatException) { return false; }
+        catch (ArgumentException) { return false; }
+        catch (IndexOutOfRangeException) { return false; }
+    }
+
+    static bool VerifyStrict(string file, string sigFile, string publicKeyB64) {
         var pk = Convert.FromBase64String(publicKeyB64);
         var lines = File.ReadAllLines(sigFile);
         if (pk.Length != 42 || lines.Length < 4) return false;
@@ -177,11 +186,18 @@ public static class NativefsMinisign {
 }
 '@
 
-# "verified", "mismatch" or the reason it could not be checked
-function Test-NativefsSignature([string]$file, [string]$sigFile) {
+# The signed ("trusted") comment must name exactly this file, so no other signed file can be passed off as it
+function Test-NativefsSignedName([string]$sigFile, [string]$name) {
+    $lines = @(Get-Content -LiteralPath $sigFile -ErrorAction SilentlyContinue)
+    if ($lines.Count -lt 3 -or -not $lines[2].StartsWith("trusted comment: ")) { return $false }
+    return ("`t" + $lines[2].Substring(17) + "`t").Contains("`tfile:$name`t")
+}
+
+# "verified", "mismatch" or the reason it could not be checked (only a missing tool counts as "could not check")
+function Test-NativefsSignature([string]$file, [string]$sigFile, [string]$name) {
     if (Get-Command minisign -ErrorAction SilentlyContinue) {
         minisign -Vm $file -x $sigFile -P $publicKey | Out-Null
-        if ($LASTEXITCODE) { return "mismatch" } else { return "verified" }
+        if ($LASTEXITCODE -or -not (Test-NativefsSignedName $sigFile $name)) { return "mismatch" } else { return "verified" }
     }
     try {
         if (-not ("NativefsMinisign" -as [type])) {
@@ -189,17 +205,18 @@ function Test-NativefsSignature([string]$file, [string]$sigFile) {
             if ($PSVersionTable.PSEdition -eq "Core") { Add-Type -TypeDefinition $verifier }
             else { Add-Type -TypeDefinition $verifier -ReferencedAssemblies System.Numerics }
         }
-        if ([NativefsMinisign]::Verify($file, $sigFile, $publicKey)) { return "verified" } else { return "mismatch" }
     } catch {
-        return "the built-in check could not run here ($($_.Exception.Message))"
+        return "the built-in check could not be compiled here ($($_.Exception.Message))"
     }
+    try { $ok = [NativefsMinisign]::Verify($file, $sigFile, $publicKey) } catch { $ok = $false }
+    if ($ok -and (Test-NativefsSignedName $sigFile $name)) { return "verified" } else { return "mismatch" }
 }
 
 function Show-UnverifiedWarning([string]$why) {
     $line = "!" * 72
     Write-Host ""
     Write-Host $line -ForegroundColor Red
-    Write-Host " WARNING: this copy of naTiVeFS could NOT be verified." -ForegroundColor Red
+    Write-Host " WARNING: this copy of naTiVeFS could NOT be verified (no tool to check signatures here)." -ForegroundColor Red
     Write-Host " Reason: $why" -ForegroundColor Red
     Write-Host " It was downloaded and installed anyway. You are using an unverified copy at your own risk." -ForegroundColor Red
     Write-Host " To check it next time, install minisign (winget install jedisct1.minisign) and run this again," -ForegroundColor Red
@@ -209,8 +226,8 @@ function Show-UnverifiedWarning([string]$why) {
 }
 
 $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" }
-# the newest release, pre-releases included
-$release = (Invoke-RestMethod "https://api.github.com/repos/$repo/releases?per_page=1")[0]
+# the newest stable release (pre-releases are for testers, like in the app's updater)
+$release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest"
 $name = "naTiVeFS-windows-$arch-setup.exe"
 $asset = $release.assets | Where-Object name -eq $name
 if (-not $asset) { throw "No $name in $($release.tag_name)" }
@@ -221,10 +238,15 @@ try {
     $setup = Join-Path $dir $name
     Write-Host "Downloading naTiVeFS $($release.tag_name)"
     Invoke-WebRequest $asset.browser_download_url -OutFile $setup -UseBasicParsing
-    $result = try {
+    # every release is signed: a missing signature is suspicious, not a missing tool, so it stops the install
+    try {
         Invoke-WebRequest "$($asset.browser_download_url).minisig" -OutFile "$setup.minisig" -UseBasicParsing
-        Test-NativefsSignature $setup "$setup.minisig"
-    } catch { "the signature file could not be downloaded ($($_.Exception.Message))" }
+    } catch {
+        Write-Host "The signature file could not be downloaded, so this download cannot be trusted. Nothing was installed." -ForegroundColor Red
+        Write-Host "Try again later, or get it from https://github.com/$repo/releases and verify the .minisig yourself." -ForegroundColor Red
+        throw "No signature, nothing was installed."
+    }
+    $result = Test-NativefsSignature $setup "$setup.minisig" $name
     if ($result -eq "mismatch") {
         Write-Host "The signature does NOT match: this file is not the published naTiVeFS. Nothing was installed." -ForegroundColor Red
         throw "Signature mismatch, nothing was installed."

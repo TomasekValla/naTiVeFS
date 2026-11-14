@@ -16,10 +16,17 @@ need() { command -v "$1" >/dev/null 2>&1 || die "this needs $1"; }
 
 # Signature check of a release file against its .minisig (prints "verified", "mismatch", or why it could not run).
 # minisign when installed, else OpenSSL 3 (Ed25519 on raw data + BLAKE2b-512); LibreSSL (macOS) has neither.
-b64d() { base64 -d 2>/dev/null || base64 -D; }
+# Every step may fail on a malformed signature file: that is a "mismatch", never an abort or a "could not check".
+b64d() { base64 -d 2>/dev/null || base64 -D 2>/dev/null || :; }
+# the signed ("trusted") comment must name exactly this file ($2), so no other signed file can be passed off as it
+signed_name_ok() {
+    t=$(printf '\t')
+    c=$(sed -n 3p "$1" | tr -d '\r' | sed 's/^trusted comment: //') || return 1
+    case "$t$c$t" in *"${t}file:$2$t"*) return 0 ;; *) return 1 ;; esac
+}
 check_signature() {
     if command -v minisign >/dev/null 2>&1; then
-        if minisign -Vm "$1" -x "$2" -P "$KEY" >/dev/null 2>&1; then echo verified; else echo mismatch; fi
+        if minisign -Vm "$1" -x "$2" -P "$KEY" >/dev/null 2>&1 && signed_name_ok "$2" "$3"; then echo verified; else echo mismatch; fi
         return 0
     fi
     ossl=""
@@ -33,8 +40,8 @@ check_signature() {
     done
     [ -n "$ossl" ] || { echo "neither minisign nor OpenSSL 3 is installed"; return 0; }
     v=$(mktemp -d) || { echo "no temporary folder"; return 0; }
-    printf '%s' "$KEY" | b64d > "$v/pk" 2>/dev/null
-    sed -n 2p "$2" | tr -d '\r' | b64d > "$v/sg" 2>/dev/null
+    printf '%s' "$KEY" | b64d > "$v/pk" || :
+    sed -n 2p "$2" | tr -d '\r' | b64d > "$v/sg" || :
     if [ "$(wc -c < "$v/pk")" -ne 42 ] || [ "$(wc -c < "$v/sg")" -ne 74 ]; then rm -rf "$v"; echo mismatch; return 0; fi
     # the signature must come from our key (same key id)
     if [ "$(od -An -tx1 -j2 -N8 "$v/pk")" != "$(od -An -tx1 -j2 -N8 "$v/sg")" ]; then rm -rf "$v"; echo mismatch; return 0; fi
@@ -49,10 +56,11 @@ check_signature() {
     esac
     # the trusted comment (file name, time) is covered by the global signature over signature + comment
     sed -n 3p "$2" | tr -d '\r\n' | sed 's/^trusted comment: //' > "$v/comment"
-    sed -n 4p "$2" | tr -d '\r' | b64d > "$v/global" 2>/dev/null
+    sed -n 4p "$2" | tr -d '\r' | b64d > "$v/global" || :
     cat "$v/sig" "$v/comment" > "$v/both"
     if "$ossl" pkeyutl -verify -pubin -inkey "$v/pk.pem" -rawin -in "$v/msg" -sigfile "$v/sig" >/dev/null 2>&1 \
-        && "$ossl" pkeyutl -verify -pubin -inkey "$v/pk.pem" -rawin -in "$v/both" -sigfile "$v/global" >/dev/null 2>&1; then
+        && "$ossl" pkeyutl -verify -pubin -inkey "$v/pk.pem" -rawin -in "$v/both" -sigfile "$v/global" >/dev/null 2>&1 \
+        && signed_name_ok "$2" "$3"; then
         echo verified
     else
         echo mismatch
@@ -67,7 +75,7 @@ warn_unverified() {
     {
         echo
         echo "${r}!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!${n}"
-        echo "${r} WARNING: this copy of naTiVeFS could NOT be verified.${n}"
+        echo "${r} WARNING: this copy of naTiVeFS could NOT be verified (no tool to check signatures here).${n}"
         echo "${r} Reason: $1${n}"
         echo "${r} It was downloaded and installed anyway. You use an unverified copy at your own risk.${n}"
         echo "${r} To check it next time, install minisign or OpenSSL 3 ($2) and run this again,${n}"
@@ -96,8 +104,8 @@ if [ "$portable" = 0 ] && [ -r /etc/os-release ]; then
     esac
 fi
 
-# the newest release, pre-releases included
-tag=$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=1" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1)
+# the newest stable release (pre-releases are for testers, like in the app's updater)
+tag=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1)
 [ -n "$tag" ] || die "could not find the newest release"
 
 case "$family" in
@@ -112,11 +120,10 @@ trap 'rm -rf "$tmp"' EXIT
 say "Downloading naTiVeFS $tag ($file)"
 url="https://github.com/$REPO/releases/download/$tag/$file"
 curl -fL --progress-bar -o "$tmp/$file" "$url"
-if curl -fsSL -o "$tmp/$file.minisig" "$url.minisig"; then
-    result=$(check_signature "$tmp/$file" "$tmp/$file.minisig")
-else
-    result="the signature file could not be downloaded"
-fi
+# every release is signed: a missing signature is suspicious, not a missing tool, so it stops the install
+curl -fsSL -o "$tmp/$file.minisig" "$url.minisig" \
+    || die "the signature file could not be downloaded, so this download cannot be trusted. Nothing was installed."
+result=$(check_signature "$tmp/$file" "$tmp/$file.minisig" "$file") || result=mismatch
 case "$result" in
     verified) say "Signature verified." ;;
     mismatch) die "the signature does NOT match: this file is not the published naTiVeFS. Nothing was installed." ;;
