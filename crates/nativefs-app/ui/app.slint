@@ -85,10 +85,12 @@ component Slot inherits Rectangle {
     }
 }
 
-// The three links (web `.info-cards-row`): two side by side and "Check files" under them in the notices card,
-// a vertical list of full-width rows in the links card of wide windows.
+// The links (web `.info-cards-row`): two side by side and "Check files" under them in the notices card, a vertical
+// list of full-width rows in the links card of wide windows (there without "Check files": the File Check card is
+// always shown right above it).
 component LinkCards inherits VerticalLayout {
     in property <bool> stacked;
+    in property <bool> show-check: true;
     // the width inside the card (two cards side by side split it)
     in property <length> inner-w;
     callback open-link(string);
@@ -104,7 +106,9 @@ component LinkCards inherits VerticalLayout {
         InfoCard { height: 54px; icon: @image-url("../../../assets/img/github.png"); title: "View source on GitHub"; sub: "Don't trust, verify"; clicked => { root.open-link("https://github.com/TomasekValla/TVFS"); } }
         InfoCard { height: 54px; icon: @image-url("../../../assets/img/paper.png"); title: "View official whitepaper"; sub: ""; clicked => { root.open-link("https://files.tomasekvalla.cz/whitepaper.pdf"); } }
     }
-    InfoCard { height: 54px; icon: @image-url("../../../assets/img/tvfs-logo.png"); title: "Check files"; sub: ""; clicked => { root.check(); } }
+    if root.show-check : VerticalLayout {
+        InfoCard { height: 54px; icon: @image-url("../../../assets/img/tvfs-logo.png"); title: "Check files"; sub: ""; clicked => { root.check(); } }
+    }
 }
 
 export component MainWindow inherits Window {
@@ -1759,6 +1763,7 @@ export component MainWindow inherits Window {
                             padding-right: 29px;
                             LinkCards {
                                 stacked: true;
+                                show-check: false;
                                 open-link(url) => { root.open-link(url); }
                                 check => { root.open-check(); }
                             }
