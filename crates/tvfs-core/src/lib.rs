@@ -2,6 +2,7 @@
 //! decides what a link means. It has no UI code.
 
 pub mod client;
+pub mod ai_help;
 pub mod config;
 pub mod content;
 pub mod error;

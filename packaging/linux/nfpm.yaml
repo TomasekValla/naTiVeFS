@@ -15,6 +15,16 @@ contents:
   - src: pkg/nativefs-link
     dst: /usr/bin/nativefs-link
     file_info: { mode: 0755 }
+  - src: pkg/nativefs-cli
+    dst: /usr/bin/nativefs-cli
+    file_info: { mode: 0755 }
+  # short aliases (nfpm symlink: src is the target)
+  - src: /usr/bin/nativefs-cli
+    dst: /usr/bin/nativefscli
+    type: symlink
+  - src: /usr/bin/nativefs-cli
+    dst: /usr/bin/nativecli
+    type: symlink
   - src: packaging/linux/nativefs.desktop
     dst: /usr/share/applications/nativefs.desktop
   - src: assets/app-256.png

@@ -52,6 +52,13 @@ Not a clean sweep: on that Linux laptop the app's video still uses a little more
 
 naTiVeFS is still young, and more optimisation is coming in later versions.
 
+## Command line (naTiVeFS-cli)
+
+`naTiVeFS-cli` (Linux/macOS: `nativefs-cli`; short aliases `nativefscli` and `nativecli`) is a terminal client that shares the app's login and settings.
+
+- Run it without arguments for a full-screen interface: log in, pick files, upload, copy links, recent uploads, settings. `--theme dark|light|auto` picks the colours.
+- AI agents use a non-interactive, two-step mode that needs an existing login and never asks for credentials: `naTiVeFS-cli --direct-no-cli-ui --choose-file-directly <file>... [--expire 7d] [--json]` prints a summary, a public-upload notice and a one-time code; running it again with `--confirm <CODE>` uploads. `naTiVeFS-cli --ai-help` prints instructions to give to an agent.
+
 ## Platforms
 
 | | Windows | Linux | macOS |

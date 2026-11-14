@@ -1,6 +1,7 @@
 ; naTiVeFS installer. makensis -DVERSION=0.9.0 -DSRC=<folder with the exes> -DOUT=<setup.exe> nativefs.nsi
 ; Starts without admin rights; "For all users" restarts it elevated. Silent: /S, /ALLUSERS for Program Files,
 ; /UPDATE waits for the running app and starts the new version; /HIDDEN starts it in the tray.
+; The install folder is put on PATH (user, or system for all users), so naTiVeFS-cli, nativefscli and nativecli work in a terminal.
 Unicode true
 SetCompressor /SOLID lzma
 RequestExecutionLevel user
@@ -27,6 +28,19 @@ Var Update
 Var Hidden
 Var ModeUser
 Var ModeAll
+
+; Put the install folder on PATH ("add") or take it off ("remove"): per user, or machine-wide for "all users".
+; The registry value is edited directly so %VARIABLES% already in it stay unexpanded.
+!macro PathEdit OP
+  ${If} $AllUsers == 1
+    StrCpy $R8 "Machine"
+  ${Else}
+    StrCpy $R8 "User"
+  ${EndIf}
+  nsExec::Exec `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$d='$INSTDIR'.TrimEnd('\'); $$k=if('$R8' -eq 'Machine'){[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SYSTEM\CurrentControlSet\Control\Session Manager\Environment',$$true)}else{[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment',$$true)}; $$p=[string]$$k.GetValue('Path','','DoNotExpandEnvironmentNames'); $$l=@($$p -split ';' | Where-Object { $$_ -and $$_.TrimEnd('\') -ne $$d }); if('${OP}' -eq 'add'){ $$l += $$d }; $$k.SetValue('Path',($$l -join ';'),'ExpandString'); $$k.Close()"`
+  Pop $R9
+  System::Call 'user32::SendMessageTimeoutW(i 0xffff, i 0x1A, i 0, w "Environment", i 2, i 5000, *i .R7)'
+!macroend
 
 !define MUI_ICON "..\..\assets\app.ico"
 !define MUI_UNICON "..\..\assets\app.ico"
@@ -134,6 +148,8 @@ Section "${APP}" SecApp
   WriteRegStr SHCTX "${UNINST}" "UninstallString" "$0"
   WriteRegDWORD SHCTX "${UNINST}" "NoModify" 1
   WriteRegDWORD SHCTX "${UNINST}" "NoRepair" 1
+  !insertmacro PathEdit remove
+  !insertmacro PathEdit add
   ${GetSize} "$INSTDIR" "/S=0K" $1 $2 $3
   IntFmt $1 "0x%08X" $1
   WriteRegDWORD SHCTX "${UNINST}" "EstimatedSize" $1
@@ -168,11 +184,15 @@ Function un.onInit
 FunctionEnd
 
 Section "Uninstall"
+  !insertmacro PathEdit remove
   ; quits a running copy and removes this user's autostart, browser registration and file manager menus
   ExecWait '"$INSTDIR\naTiVeFS.exe" --cleanup'
   Sleep 800
   Delete "$INSTDIR\naTiVeFS.exe"
   Delete "$INSTDIR\naTiVeFS-link.exe"
+  Delete "$INSTDIR\naTiVeFS-cli.exe"
+  Delete "$INSTDIR\nativefscli.cmd"
+  Delete "$INSTDIR\nativecli.cmd"
   Delete "$INSTDIR\libmpv-2.dll"
   Delete "$INSTDIR\LICENSE"
   Delete "$INSTDIR\THIRD-PARTY.txt"

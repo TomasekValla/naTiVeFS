@@ -50,7 +50,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - run: cargo build --release --locked -p nativefs-app -p nativefs-link
+      - run: cargo build --release --locked -p nativefs-app -p nativefs-link -p nativefs-cli
 
       - name: Version
         shell: bash
@@ -58,11 +58,12 @@ jobs:
 
       - name: Package (unix)
         if: matrix.ext == 'tar.gz'
-        # Linux/macOS executables are lowercase: nativefs, nativefs-link
+        # Linux/macOS executables are lowercase: nativefs, nativefs-link, nativefs-cli
         run: |
           mkdir -p pkg out
           cp target/release/naTiVeFS pkg/nativefs
           cp target/release/naTiVeFS-link pkg/nativefs-link
+          cp target/release/naTiVeFS-cli pkg/nativefs-cli
           cp LICENSE packaging/THIRD-PARTY.txt pkg/
           if [ "$RUNNER_OS" = Linux ]; then
             cp packaging/linux/nativefs.desktop pkg/
@@ -78,7 +79,7 @@ jobs:
           chmod +x appimagetool
           mkdir -p AppDir/usr/bin AppDir/usr/share/licenses/nativefs AppDir/usr/share/metainfo
           cp packaging/linux/nativefs.metainfo.xml AppDir/usr/share/metainfo/nativefs.appdata.xml
-          cp pkg/nativefs pkg/nativefs-link AppDir/usr/bin/
+          cp pkg/nativefs pkg/nativefs-link pkg/nativefs-cli AppDir/usr/bin/
           cp LICENSE packaging/THIRD-PARTY.txt AppDir/usr/share/licenses/nativefs/
           cp packaging/linux/AppRun AppDir/AppRun
           chmod +x AppDir/AppRun
@@ -91,7 +92,7 @@ jobs:
         run: |
           app=dmg/naTiVeFS.app/Contents
           mkdir -p "$app/MacOS" "$app/Resources"
-          cp pkg/nativefs pkg/nativefs-link "$app/MacOS/"
+          cp pkg/nativefs pkg/nativefs-link pkg/nativefs-cli "$app/MacOS/"
           cp assets/app.icns LICENSE packaging/THIRD-PARTY.txt "$app/Resources/"
           sed "s/__VERSION__/$VERSION/g" packaging/macos/Info.plist > "$app/Info.plist"
           ln -s /Applications dmg/Applications
@@ -103,7 +104,9 @@ jobs:
         # libmpv-2.dll: the video player (vendor/libmpv/README.md)
         run: |
           New-Item -ItemType Directory -Force stage, out | Out-Null
-          Copy-Item target/release/naTiVeFS.exe, target/release/naTiVeFS-link.exe, target/release/libmpv-2.dll, LICENSE, packaging/THIRD-PARTY.txt stage/
+          Copy-Item target/release/naTiVeFS.exe, target/release/naTiVeFS-link.exe, target/release/naTiVeFS-cli.exe, target/release/libmpv-2.dll, LICENSE, packaging/THIRD-PARTY.txt stage/
+          # short names for the CLI: work from cmd and PowerShell once the install folder is on PATH
+          foreach ($alias in "nativefscli", "nativecli") { Set-Content -Path "stage/$alias.cmd" -Value '@"%~dp0naTiVeFS-cli.exe" %*' -Encoding ascii }
           Compress-Archive -Path stage/* -DestinationPath out/naTiVeFS-${{ matrix.name }}-portable.zip
           # the Chocolatey feed sometimes answers 504: try again before giving up
           foreach ($try in 1..3) {
@@ -123,9 +126,10 @@ jobs:
           $setup = (Resolve-Path "out/naTiVeFS-${{ matrix.name }}-setup.exe").Path
           $dir = "$env:LOCALAPPDATA\Programs\naTiVeFS"
           Start-Process $setup -ArgumentList "/S" -Wait
-          foreach ($f in "naTiVeFS.exe", "naTiVeFS-link.exe", "libmpv-2.dll", "LICENSE", "THIRD-PARTY.txt", "uninstall.exe") {
+          foreach ($f in "naTiVeFS.exe", "naTiVeFS-link.exe", "naTiVeFS-cli.exe", "nativefscli.cmd", "nativecli.cmd", "libmpv-2.dll", "LICENSE", "THIRD-PARTY.txt", "uninstall.exe") {
             if (-not (Test-Path "$dir\$f")) { throw "missing after install: $f" }
           }
+          if (-not ([Environment]::GetEnvironmentVariable("Path", "User") -split ";" -contains $dir)) { throw "install folder is not on the user PATH" }
           $key = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\naTiVeFS"
           if ((Get-ItemProperty $key).DisplayVersion -ne $env:VERSION) { throw "wrong version in the uninstall key" }
           # a silent update from the tray restarts the app hidden. The runner has no real desktop, so the app may exit
@@ -144,6 +148,7 @@ jobs:
           $left = Get-ChildItem $dir | Where-Object Name -ne "uninstall.exe"
           if ($left) { throw "left after uninstall: $($left.Name -join ', ')" }
           if (Test-Path $key) { throw "uninstall key left behind" }
+          if ([Environment]::GetEnvironmentVariable("Path", "User") -split ";" -contains $dir) { throw "install folder left on the user PATH" }
 
       - uses: actions/upload-artifact@v7
         with:

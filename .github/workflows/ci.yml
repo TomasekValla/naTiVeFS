@@ -50,6 +50,7 @@ jobs:
           path: |
             target/release/naTiVeFS
             target/release/naTiVeFS-link
+            target/release/naTiVeFS-cli
           retention-days: 14
       - name: Upload binaries (windows)
         if: runner.os == 'Windows'
@@ -59,5 +60,6 @@ jobs:
           path: |
             target/release/naTiVeFS.exe
             target/release/naTiVeFS-link.exe
+            target/release/naTiVeFS-cli.exe
             target/release/libmpv-2.dll
           retention-days: 14

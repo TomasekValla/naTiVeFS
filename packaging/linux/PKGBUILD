@@ -18,6 +18,9 @@ sha256sums_aarch64=('SKIP')
 package() {
     install -Dm755 nativefs "$pkgdir/usr/bin/nativefs"
     install -Dm755 nativefs-link "$pkgdir/usr/bin/nativefs-link"
+    install -Dm755 nativefs-cli "$pkgdir/usr/bin/nativefs-cli"
+    ln -s nativefs-cli "$pkgdir/usr/bin/nativefscli"
+    ln -s nativefs-cli "$pkgdir/usr/bin/nativecli"
     install -Dm644 nativefs.desktop "$pkgdir/usr/share/applications/nativefs.desktop"
     install -Dm644 nativefs.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/nativefs.png"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/nativefs/LICENSE"

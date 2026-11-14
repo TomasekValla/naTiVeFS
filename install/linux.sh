@@ -67,8 +67,10 @@ case "$family" in
     suse) $root zypper --non-interactive install --allow-unsigned-rpm "$tmp/$file" ;;
     *)
         mkdir -p "$HOME/.local/bin"
-        tar -xzf "$tmp/$file" -C "$tmp" ./nativefs ./nativefs-link
-        install -m 755 "$tmp/nativefs" "$tmp/nativefs-link" "$HOME/.local/bin/"
+        tar -xzf "$tmp/$file" -C "$tmp" ./nativefs ./nativefs-link ./nativefs-cli
+        install -m 755 "$tmp/nativefs" "$tmp/nativefs-link" "$tmp/nativefs-cli" "$HOME/.local/bin/"
+        ln -sf nativefs-cli "$HOME/.local/bin/nativefscli"
+        ln -sf nativefs-cli "$HOME/.local/bin/nativecli"
         case ":$PATH:" in
             *":$HOME/.local/bin:"*) ;;
             *) say "Add ~/.local/bin to your PATH to start it by name." ;;
