@@ -495,16 +495,20 @@ pub fn encode_opus(rec: &Recording) -> Result<Vec<u8>, String> {
         const FRAME: usize = 960;
         let mut packet = vec![0u8; 4000];
         let mut frame = vec![0i16; FRAME * ch];
-        let mut done = 0usize;
-        while done < total {
-            let n = (total - done).min(FRAME);
+        // the encoder delays everything by the pre-skip: encode that much silence after the end too, so the decoder
+        // gets the whole recording; the last granule position (pre-skip + length) then trims exactly to it
+        let end = pre_skip + total as u64;
+        let mut fed = 0usize;
+        while (fed as u64) < end {
+            let n = total.saturating_sub(fed).min(FRAME);
             frame.fill(0);
-            frame[..n * ch].copy_from_slice(&pcm[done * ch..(done + n) * ch]);
+            frame[..n * ch].copy_from_slice(&pcm[fed * ch..(fed + n) * ch]);
             let len = enc.encode(&frame, &mut packet).map_err(err)?;
-            done += n;
-            let last = done >= total;
+            fed += FRAME;
+            let last = fed as u64 >= end;
             let info = if last { ogg::PacketWriteEndInfo::EndStream } else { ogg::PacketWriteEndInfo::NormalPacket };
-            w.write_packet(packet[..len].to_vec(), serial, info, pre_skip + done as u64).map_err(|e| e.to_string())?;
+            // granule = samples decoded so far (pre-skip included), the end trimmed on the last page
+            w.write_packet(packet[..len].to_vec(), serial, info, (fed as u64).min(end)).map_err(|e| e.to_string())?;
         }
     }
     Ok(out)

@@ -10,14 +10,14 @@ component SpeedChip inherits Rectangle {
     height: 28px;
     width: t.preferred-width + 22px;
     border-radius: 14px;
-    background: root.on ? #8455ff52 : (ta.has-hover ? #ffffff1f : #ffffff0f);
+    background: root.on ? #8455ff52 : (ta.has-hover ? Palette.border : Palette.glass);
     border-width: 1px;
-    border-color: root.on ? #b083ff : #ffffff24;
+    border-color: root.on ? Palette.accent : Palette.border;
     t := Text {
         text: root.label;
         font-size: 12px;
         font-weight: 600;
-        color: root.on ? #ffffff : Palette.dim;
+        color: root.on ? Palette.text : Palette.dim;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -26,6 +26,8 @@ component SpeedChip inherits Rectangle {
 
 export component VoicePlayerWindow inherits Window {
     default-font-family: "Inter";
+    // the app's theme (every viewer follows it)
+    in-out property <bool> light <=> Palette.light;
     in property <[float]> bars;
     in property <float> progress;
     in property <bool> ready;
@@ -47,7 +49,7 @@ export component VoicePlayerWindow inherits Window {
 
     title: "Voice note - naTiVeFS";
     icon: @image-url("../../../assets/app-64.png");
-    background: #03070a;
+    background: Palette.bg;
     min-width: 340px;
     min-height: 250px;
     preferred-width: 440px;
@@ -63,6 +65,8 @@ export component VoicePlayerWindow inherits Window {
     }
 
     property <length> col-w: min(420px, max(200px, root.width - 32px));
+    // `Palette.warn` is a light yellow made for dark backgrounds
+    property <color> warn: Palette.light ? #a86b00 : Palette.warn;
     Rectangle {
       x: 0px;
       y: 0px;
@@ -93,9 +97,9 @@ export component VoicePlayerWindow inherits Window {
                     width: parent.width;
                     height: 78px;
                     border-radius: 18px;
-                    background: #1c202a;
+                    background: Palette.light ? #ffffff : #1c202a;
                     border-width: 1px;
-                    border-color: #ffffff24;
+                    border-color: Palette.border;
                     Rectangle {
                         x: 12px;
                         y: 14px;
@@ -153,7 +157,7 @@ export component VoicePlayerWindow inherits Window {
                             height: max(3px, 36px * (0.1 + 0.9 * b));
                             y: (wave.height - self.height) / 2;
                             border-radius: self.width / 2;
-                            background: (i + 0.5) / root.bars.length <= wave.shown ? #2fffc4 : #ffffff40;
+                            background: (i + 0.5) / root.bars.length <= wave.shown ? Palette.good : (Palette.light ? #12121a38 : #ffffff40);
                         }
                         wave-ta := TouchArea {
                             enabled: root.ready;
@@ -202,12 +206,12 @@ export component VoicePlayerWindow inherits Window {
                     width: 54px;
                     height: 28px;
                     border-radius: 14px;
-                    background: mute-ta.has-hover ? #ffffff1f : #ffffff0f;
+                    background: mute-ta.has-hover ? Palette.border : Palette.glass;
                     Text {
                         text: root.muted ? "Muted" : "Volume";
                         font-size: 11px;
                         font-weight: 600;
-                        color: root.muted ? Palette.warn : Palette.dim;
+                        color: root.muted ? root.warn : Palette.dim;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
@@ -223,7 +227,7 @@ export component VoicePlayerWindow inherits Window {
                         y: (parent.height - 6px) / 2;
                         height: 6px;
                         border-radius: 3px;
-                        background: #ffffff1f;
+                        background: Palette.border;
                         clip: true;
                         Rectangle {
                             x: 0px;
@@ -238,6 +242,8 @@ export component VoicePlayerWindow inherits Window {
                         height: 14px;
                         border-radius: 7px;
                         background: #ffffff;
+                        border-width: Palette.light ? 1px : 0px;
+                        border-color: Palette.border;
                     }
                     vol-ta := TouchArea {
                         mouse-cursor: MouseCursor.pointer;
@@ -258,7 +264,7 @@ export component VoicePlayerWindow inherits Window {
                     text: round(vol.shown * 200) + " %";
                     font-size: 12px;
                     font-weight: 600;
-                    color: vol.shown > 0.5 ? Palette.warn : Palette.dim;
+                    color: vol.shown > 0.5 ? root.warn : Palette.dim;
                     horizontal-alignment: right;
                     vertical-alignment: center;
                 }

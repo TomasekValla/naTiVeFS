@@ -4151,6 +4151,7 @@ version = "1.0.0"
 dependencies = [
  "arboard",
  "avif-decode",
+ "bytes",
  "chrono",
  "directories",
  "flacenc",
