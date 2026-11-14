@@ -12,6 +12,7 @@ mod check_ui;
 mod desktop_entry;
 mod files_ui;
 mod image_ui;
+mod layout;
 mod open;
 #[cfg(target_os = "macos")]
 mod macos_reopen;
@@ -258,13 +259,21 @@ fn apply_zoom(ui: &MainWindow, shared: &Arc<Shared>) {
     // Slint sizes the new window and its minimum before the zoom is known and recomputes the minimum only when the
     // layout changes: keep the page at its 480 logical px here (zooming in widens the window instead of squeezing the
     // page). Runs on every resize; it only acts when the window is too small.
+    // Only when it changes: on Windows winit's `set_min_inner_size` re-applies the window size (a `SetWindowPos`),
+    // which on every resize step added a second size round trip.
     let min = winit::dpi::PhysicalSize::new((MIN_WINDOW_W * sf).ceil() as u32, (MIN_WINDOW_H * system).ceil() as u32);
-    ui.window().with_winit_window(|w| w.set_min_inner_size(Some(min)));
+    thread_local! {
+        static MIN_SIZE: std::cell::Cell<Option<winit::dpi::PhysicalSize<u32>>> = const { std::cell::Cell::new(None) };
+    }
+    if MIN_SIZE.with(|m| m.replace(Some(min))) != Some(min) {
+        ui.window().with_winit_window(|w| w.set_min_inner_size(Some(min)));
+    }
     let now = ui.window().size();
     if now.width > 0 && (now.width < min.width || now.height < min.height) {
         ui.window().set_size(slint::PhysicalSize::new(now.width.max(min.width), now.height.max(min.height)));
     }
     shared.thumb_px.store((THUMB_BOX * sf).ceil() as u32, Ordering::Relaxed);
+    layout::apply(ui, logical_size(ui).0);
     ui.window().request_redraw();
 }
 
@@ -1425,6 +1434,8 @@ fn on_window_event(ui: &MainWindow, shared: &Arc<Shared>, w: &slint::Window, ev:
         // Windows reports minimizing as a 0x0 resize rather than `Occluded`
         E::Resized(size) => {
             set_visible(ui, shared, size.width > 0 && size.height > 0 && shared.main_shown.load(Ordering::Relaxed));
+            // the cards' places for the new width, before Slint lays out and draws the first frame at that size
+            layout::apply(ui, size.width as f32 / ui.window().scale_factor());
             // the first resize comes right after winit created the window (before that there is no system scale
             // to multiply); afterwards this is a no-op while the scale factor already matches
             apply_zoom(ui, shared);
@@ -1693,6 +1704,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let ui = MainWindow::new()?;
+    layout::apply(&ui, ui.get_preferred_w());
     MAIN_UI.with(|m| *m.borrow_mut() = Some(ui.as_weak()));
     let weak = ui.as_weak();
     ui.global::<Palette>().set_light(config.light_theme);

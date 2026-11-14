@@ -68,7 +68,7 @@ component Slot inherits Rectangle {
     in property <duration> glide;
     in property <bool> pulse;
     opacity: root.shown ? 1 : 0;
-    animate opacity { duration: root.glide > 0ms ? 380ms : 0ms; easing: ease-out; }
+    animate opacity { duration: root.glide > 0ms ? Anim.fade : 0ms; easing: ease-out; }
     visible: self.opacity > 0;
     @children
     Rectangle {
@@ -76,7 +76,7 @@ component Slot inherits Rectangle {
         y: -3px;
         width: parent.width + 6px;
         height: parent.height + 6px;
-        border-radius: 35px;
+        border-radius: Look.card-radius + 3px;
         border-width: 3px;
         border-color: Palette.good;
         opacity: root.pulse ? 1 : 0;
@@ -451,33 +451,20 @@ export component MainWindow inherits Window {
     in-out property <string> password;
     property <[string]> pills-a: ["5m", "30m", "1h", "6h", "12h", "1d"];
     property <[string]> pills-b: ["2d", "3d", "5d", "7d", "10d", "14d"];
-    // ── desktop layout (the web's "Desktop layout"): below 900 px one column as on a phone; 900+ the upload card
-    // with the notices in the middle and Recently uploaded, File Check and the links on the right; 1200+ also
-    // Settings on the left. Column widths follow the web's grid tracks (the middle one stays 440-480 px, the phone
-    // column's width, at every width); the gap is the web's clamp(24px, 9vw - 84px, 128px).
-    // 0 = one column, 1 = two columns, 2 = three columns (set in `relayout`, so a switch can glide)
+    // ── desktop layout (the web's "Desktop layout"): computed in Rust (`layout.rs`) on every resize and set here as
+    // plain values, so a resize that does not change a card's width re-wraps none of its text.
+    // 0 = one column, 1 = two columns, 2 = three columns (set in `set-layout`, so a switch can glide)
     property <int> lay: 0;
     property <bool> big: false;
-    property <length> col-w: min(440px, root.width - 40px);
-    property <length> mins: root.lay == 2 ? (root.big ? 1120px : 1080px) : 760px;
-    // web: clamp(24px, 9vw - 84px, 128px) (24 px at 1200, ~60 at 1600, 128 from 2350 on)
-    property <length> gap: max(18px, min(clamp(root.width * 0.09 - 84px, 24px, 128px), (root.width - 40px - root.mins) / (root.lay == 2 ? 2 : 1)));
-    // room left after the gaps and the columns' minimum widths, shared out like CSS grid minmax() tracks
-    // (equal shares, a track stops at its maximum: the middle one first, then the left, then the right)
-    property <length> free: max(0px, root.width - 40px - root.mins - root.gap * (root.lay == 2 ? 2 : 1));
-    property <length> e-mid: min(40px, root.free / (root.lay == 2 ? 3 : 2));
-    property <length> e-left: min(root.big ? 90px : 60px, (root.free - root.e-mid) / 2);
-    property <length> e-side: min(root.lay == 2 ? (root.big ? 110px : 80px) : 80px, root.free - root.e-mid - (root.lay == 2 ? root.e-left : 0px));
-    property <length> left-w: (root.big ? 340px : 320px) + root.e-left;
-    property <length> mid-w: root.lay == 0 ? root.col-w : 440px + root.e-mid;
-    property <length> side-w: (root.lay == 2 && root.big ? 340px : 320px) + root.e-side;
-    property <length> group-w: root.mid-w + root.side-w + root.gap + (root.lay == 2 ? root.left-w + root.gap : 0px);
-    property <length> left-x: (root.width - root.group-w) / 2;
-    property <length> mid-x: root.lay == 0 ? (root.width - root.col-w) / 2 : root.left-x + (root.lay == 2 ? root.left-w + root.gap : 0px);
-    property <length> side-x: root.mid-x + root.mid-w + root.gap;
-    // the settings card: a page of its own below 1200 px (560 px wide like the web's settings view at 900+)
-    property <length> set-w: root.lay == 2 ? root.left-w : (root.lay == 1 ? min(560px, root.width - 40px) : root.col-w);
-    property <length> set-x: root.lay == 2 ? root.left-x : (root.width - root.set-w) / 2;
+    in property <length> left-x: 20px;
+    in property <length> left-w: 320px;
+    in property <length> mid-x: 40px;
+    in property <length> mid-w: 440px;
+    in property <length> side-x: 20px;
+    in property <length> side-w: 320px;
+    // the settings card: a page of its own below 1200 px, the left column above
+    in property <length> set-x: 40px;
+    in property <length> set-w: 440px;
     // side cards use the web's `.side-panel` padding (32 px 28 px) + the 1 px border
     property <length> side-pad-v: root.lay == 0 ? 41px : 33px;
     property <length> side-pad-h: root.lay == 0 ? 41px : 29px;
@@ -494,11 +481,20 @@ export component MainWindow inherits Window {
     property <bool> can-submit: root.logged-in || (!root.busy && root.username != "" && root.password != "");
 
     // ── scrolling: wheel input comes from Rust (winit), animated here ─────
-    property <length> content-h: 80px + (
-        root.lay == 0 ? (root.page == 1 ? card-set.height : root.page == 2 ? card-chk.height : card-main.height + 18px + card-recent.height + 18px + card-info.height)
-        : root.lay == 1 && root.page == 1 ? card-set.height
-        : max(root.lay == 2 ? card-set.height : 0px, card-main.height + 18px + card-info.height,
-              card-recent.height + 18px + card-chk.height + 18px + card-links.height));
+    // the cards' places from the top: 40 px above and below the page, 18 px between stacked cards
+    property <length> page-pad: 40px;
+    property <length> stack-gap: 18px;
+    property <length> recent-y: root.lay == 0 ? root.page-pad + card-main.height + root.stack-gap : root.page-pad;
+    property <length> info-y: root.page-pad + card-main.height + root.stack-gap + (root.lay == 0 ? card-recent.height + root.stack-gap : 0px);
+    property <length> check-y: root.lay == 0 ? root.page-pad : root.recent-y + card-recent.height + root.stack-gap;
+    property <length> links-y: root.check-y + card-chk.height + root.stack-gap;
+    // where the lowest shown card ends
+    property <length> content-bottom:
+        root.page == 1 && root.lay < 2 ? root.page-pad + card-set.height
+        : root.page == 2 && root.lay == 0 ? root.check-y + card-chk.height
+        : root.lay == 0 ? root.info-y + card-info.height
+        : max(root.lay == 2 ? root.page-pad + card-set.height : 0px, root.info-y + card-info.height, root.links-y + card-links.height);
+    property <length> content-h: root.content-bottom + root.page-pad;
     property <length> max-scroll: max(0px, root.content-h - root.height);
     // Rust only starts middle-button autoscroll on the page when there is something to scroll
     out property <bool> can-scroll: root.max-scroll > 0px && root.confirm-kind == 0;
@@ -535,33 +531,31 @@ export component MainWindow inherits Window {
     function open-check() {
         if (root.lay == 0) { root.go-page(2); } else { root.pulse-chk = true; url-in.focus(); }
     }
-    // pick the layout for the current width; a switch makes the cards glide to their new places
-    function relayout() {
-        if (root.width <= 0px) { return; }
-        if ((root.width >= 1200px ? 2 : root.width >= 900px ? 1 : 0) != root.lay || (root.width >= 1800px) != root.big) {
-            root.glide = Anim.panel;
-            root.lay = root.width >= 1200px ? 2 : root.width >= 900px ? 1 : 0;
-            root.big = root.width >= 1800px;
-            // a page whose card is now always shown goes back to the main view
-            if ((root.page == 2 && root.lay >= 1) || (root.page == 1 && root.lay == 2)) { root.go-page(0); }
-            if (root.lay == 2) { root.settings-opened(); }
-        }
+    // Rust (`layout.rs`) picks the layout for the window width; a switch makes the cards glide to their new places
+    public function set-layout(lay: int, big: bool) {
+        if (lay == root.lay && big == root.big) { return; }
+        root.glide = Anim.panel;
+        root.lay = lay;
+        root.big = big;
+        // a page whose card is now always shown goes back to the main view
+        if ((root.page == 2 && root.lay >= 1) || (root.page == 1 && root.lay == 2)) { root.go-page(0); }
+        if (root.lay == 2) { root.settings-opened(); }
     }
 
     init => {
         Look.win-w = root.width;
         Look.win-h = root.height;
         keys.focus();
-        root.relayout();
     }
-    changed width => { Look.win-w = self.width; root.relayout(); }
+    changed width => { Look.win-w = self.width; }
     // Rust opens pages too (tray > Settings): an always shown card is highlighted instead
     changed page => {
         if (root.page == 1 && root.lay == 2) { root.page = 0; root.pulse-set = true; }
         if (root.page == 2 && root.lay >= 1) { root.page = 0; root.pulse-chk = true; }
     }
     Timer {
-        interval: Anim.panel + 150ms;
+        // a little longer than the slowest of the two (the fade), then the cards follow a resize at once again
+        interval: Anim.fade + 120ms;
         running: root.glide > 0ms;
         triggered => { root.glide = 0ms; }
     }
@@ -671,12 +665,12 @@ export component MainWindow inherits Window {
                     // ── main card ─────────────────────────────────────────────────
                     Slot {
                         x: root.mid-x;
-                        y: 40px;
+                        y: root.page-pad;
                         width: root.mid-w;
                         height: card-main.height;
                         shown: root.page == 0;
                         glide: root.glide;
-                        animate x, y, width { duration: self.opacity > 0.01 ? root.glide : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+                        animate x, y { duration: self.opacity > 0.01 ? root.glide : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
                     card-main := GlassCard {
                         height: lay1.preferred-height;
                         lay1 := VerticalLayout {
@@ -1543,12 +1537,12 @@ export component MainWindow inherits Window {
                     // ── recently uploaded ─────────────────────────────────────────
                     Slot {
                         x: root.lay == 0 ? root.mid-x : root.side-x;
-                        y: root.lay == 0 ? 40px + card-main.height + 18px : 40px;
+                        y: root.recent-y;
                         width: root.lay == 0 ? root.mid-w : root.side-w;
                         height: card-recent.height;
                         shown: root.page == 0;
                         glide: root.glide;
-                        animate x, y, width { duration: self.opacity > 0.01 ? root.glide : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+                        animate x, y { duration: self.opacity > 0.01 ? root.glide : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
                     card-recent := GlassCard {
                         height: lay2.preferred-height;
                         lay2 := VerticalLayout {
@@ -1620,12 +1614,12 @@ export component MainWindow inherits Window {
                     // ── settings / info ───────────────────────────────────────────
                     Slot {
                         x: root.mid-x;
-                        y: 40px + card-main.height + 18px + (root.lay == 0 ? card-recent.height + 18px : 0px);
+                        y: root.info-y;
                         width: root.mid-w;
                         height: card-info.height;
                         shown: root.page == 0;
                         glide: root.glide;
-                        animate x, y, width { duration: self.opacity > 0.01 ? root.glide : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+                        animate x, y { duration: self.opacity > 0.01 ? root.glide : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
                     card-info := GlassCard {
                         height: lay3.preferred-height;
                         lay3 := VerticalLayout {
@@ -1750,12 +1744,12 @@ export component MainWindow inherits Window {
                 // ── links (900+: their own card on the right, a vertical list like the web's #linksCard) ──
                 Slot {
                     x: root.side-x;
-                    y: 40px + card-recent.height + 18px + card-chk.height + 18px;
+                    y: root.links-y;
                     width: root.side-w;
                     height: card-links.height;
                     shown: root.page == 0 && root.lay >= 1;
                     glide: root.glide;
-                    animate x, y, width { duration: self.opacity > 0.01 ? root.glide : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+                    animate x, y { duration: self.opacity > 0.01 ? root.glide : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
                     card-links := GlassCard {
                         height: lay-lnk.preferred-height;
                         lay-lnk := VerticalLayout {
@@ -1776,13 +1770,13 @@ export component MainWindow inherits Window {
                 // a page below 1200 px, the left column above
                 Slot {
                     x: root.set-x;
-                    y: 40px;
+                    y: root.page-pad;
                     width: root.set-w;
                     height: card-set.height;
                     shown: root.page == 1 || root.lay == 2;
                     glide: root.glide;
                     pulse: root.pulse-set;
-                    animate x, y, width { duration: self.opacity > 0.01 ? root.glide : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+                    animate x, y { duration: self.opacity > 0.01 ? root.glide : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
                     card-set := GlassCard {
                         height: lay-app.preferred-height;
                         lay-app := VerticalLayout {
@@ -2343,13 +2337,13 @@ export component MainWindow inherits Window {
                 // ── File Check (the web's check view): a page below 900 px, always open on the right above ──
                 Slot {
                     x: root.lay == 0 ? root.mid-x : root.side-x;
-                    y: root.lay == 0 ? 40px : 40px + card-recent.height + 18px;
+                    y: root.check-y;
                     width: root.lay == 0 ? root.mid-w : root.side-w;
                     height: card-chk.height;
                     shown: root.lay == 0 ? root.page == 2 : root.page == 0;
                     glide: root.glide;
                     pulse: root.pulse-chk;
-                    animate x, y, width { duration: self.opacity > 0.01 ? root.glide : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+                    animate x, y { duration: self.opacity > 0.01 ? root.glide : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
                     card-chk := GlassCard {
                         height: lay-chk.preferred-height;
                         lay-chk := VerticalLayout {

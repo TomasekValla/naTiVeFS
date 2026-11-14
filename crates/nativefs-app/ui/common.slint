@@ -113,6 +113,8 @@ export global Anim {
     out property <duration> fast: 150ms;
     out property <duration> overlay: 220ms;
     out property <duration> panel: 350ms;
+    // main window cards fading in / out while the desktop layout switches
+    out property <duration> fade: 380ms;
 }
 
 export global Palette {
@@ -150,6 +152,8 @@ export global Look {
     // window size, so cards can line their backdrop up with the page background
     in-out property <length> win-w;
     in-out property <length> win-h;
+    // corner radius of the main window's glass cards (the web's 32 px)
+    out property <length> card-radius: 32px;
 }
 
 // Top-level glass card. With glass on it shows the (saturated) page backdrop
@@ -182,7 +186,7 @@ export component LocalBadge inherits Rectangle {
 export component GlassCard inherits Rectangle {
     property <bool> frosted: Look.glass && Look.has-backdrop;
     background: root.frosted ? transparent : Palette.glass;
-    border-radius: 32px;
+    border-radius: Look.card-radius;
     // The web's shadow is "0 30px 70px -15px": pushed down and shrunk by 15 px, so it shows under the card and hardly at
     // its sides. Slint has no shadow spread, so with glass on a 15 px smaller shape casts it (the opaque frosted layer
     // above hides the part under the card). Without glass the card is see-through: a plain, softer shadow on the card.
@@ -503,17 +507,18 @@ export component ClampExplain inherits VerticalLayout {
     in property <string> text;
     property <bool> expanded;
     property <length> two-lines: one.preferred-height * 2;
-    property <bool> long: m.preferred-height > self.two-lines + 1px;
+    // the text's own preferred height is the whole wrapped text at its width (the height below only cuts it), so the
+    // text is laid out once per width, not a second time in a measuring copy
+    property <bool> long: t.preferred-height > self.two-lines + 1px;
     spacing: 2px;
-    // measuring copies, outside the layout (one line, and the whole text at this width)
+    // one line of this font, outside the layout (does not depend on the width)
     Rectangle {
         height: 0px;
         one := Explain { text: "X"; visible: false; }
-        m := Explain { width: parent.width; text: root.text; visible: false; }
     }
-    Explain {
+    t := Explain {
         text: root.text;
-        height: root.expanded || !root.long ? m.preferred-height : root.two-lines;
+        height: root.expanded || !root.long ? self.preferred-height : root.two-lines;
         overflow: elide;
     }
     if root.long : HorizontalLayout {
