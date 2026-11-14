@@ -53,6 +53,10 @@ windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Media_Media
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 tray-icon = "0.21"
 
+# macOS: reopen from the Dock (objc2 is already in the tree through winit / tray-icon)
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+
 
 [build-dependencies]
 slint-build = "1"

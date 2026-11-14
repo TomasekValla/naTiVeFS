@@ -13,6 +13,8 @@ mod desktop_entry;
 mod files_ui;
 mod image_ui;
 mod open;
+#[cfg(target_os = "macos")]
+mod macos_reopen;
 #[cfg(windows)]
 mod reg;
 mod router;
@@ -2389,6 +2391,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             on_ui(&weak, move |ui| {
                 handle_ipc(ui, &shared, msg);
                 reply.ok();
+            });
+        });
+    }
+
+    // ── macOS: a click on the app while it runs hidden shows the main window ────
+    #[cfg(target_os = "macos")]
+    {
+        let shared = shared.clone();
+        slint::Timer::single_shot(Duration::ZERO, move || {
+            macos_reopen::install(move || {
+                let shared = shared.clone();
+                let _ = slint::invoke_from_event_loop(move || show_main(&shared));
             });
         });
     }
