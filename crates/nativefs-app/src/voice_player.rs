@@ -272,8 +272,10 @@ fn apply(state: &Rc<RefCell<State>>) {
     p.set_muted(sb.muted);
     p.set_dsp(Params {
         tempo: SPEEDS[sb.speed],
-        volume: (sb.volume as f64).powi(2) * 100.0,
-        norm_db: sb.gain_db,
+        // the engine applies its own perceptual curve up to 100 %; above that a clean boost (up to +6 dB at 200 %)
+        // goes into the normalization gain, so it passes the limiter like on the web instead of the music saturation
+        volume: (sb.volume.min(1.0) as f64) * 100.0,
+        norm_db: sb.gain_db + if sb.volume > 1.0 { 20.0 * (sb.volume as f64).log10() } else { 0.0 },
         ..Params::default()
     });
 }

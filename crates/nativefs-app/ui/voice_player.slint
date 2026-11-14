@@ -84,13 +84,16 @@ export component VoicePlayerWindow inherits Window {
                     width: 44px;
                     height: 44px;
                     border-radius: 22px;
-                    background: Palette.brand;
+                    background: #0d1117;
+                    border-width: 1px;
+                    border-color: #ffffff1f;
+                    // the real TVFS logo (transparent), same as the web voice page
                     Image {
-                        x: 8px;
-                        y: 8px;
-                        width: 28px;
-                        height: 28px;
-                        source: @image-url("../../../assets/app-128.png");
+                        x: 7px;
+                        y: 7px;
+                        width: 30px;
+                        height: 30px;
+                        source: @image-url("../../../assets/img/tvfs-mark.png");
                         image-rendering: smooth;
                     }
                 }
@@ -211,7 +214,7 @@ export component VoicePlayerWindow inherits Window {
         HorizontalLayout {
             alignment: center;
             Rectangle {
-                width: min(root.col-w, 240px);
+                width: min(root.col-w, 300px);
                 height: 28px;
                 Rectangle {
                     x: 0px;
@@ -229,11 +232,12 @@ export component VoicePlayerWindow inherits Window {
                     }
                     mute-ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.toggle-mute(); } }
                 }
+                // 0 - 200 %: the slider shows volume / 2, the middle is 100 %
                 vol := Rectangle {
                     x: 66px;
-                    width: parent.width - 66px;
+                    width: parent.width - 66px - 52px;
                     height: 28px;
-                    property <float> shown: root.muted ? 0 : (vol-ta.pressed ? clamp(vol-ta.mouse-x / vol.width, 0, 1) : root.volume);
+                    property <float> shown: root.muted ? 0 : (vol-ta.pressed ? clamp(vol-ta.mouse-x / vol.width, 0, 1) : root.volume / 2);
                     Rectangle {
                         y: (parent.height - 6px) / 2;
                         height: 6px;
@@ -258,13 +262,24 @@ export component VoicePlayerWindow inherits Window {
                         mouse-cursor: MouseCursor.pointer;
                         pointer-event(e) => {
                             if e.kind == PointerEventKind.down {
-                                root.set-volume(clamp(self.mouse-x / vol.width, 0, 1));
+                                root.set-volume(clamp(self.mouse-x / vol.width, 0, 1) * 2);
                             }
                         }
                         moved => {
-                            if self.pressed { root.set-volume(clamp(self.mouse-x / vol.width, 0, 1)); }
+                            if self.pressed { root.set-volume(clamp(self.mouse-x / vol.width, 0, 1) * 2); }
                         }
                     }
+                }
+                Text {
+                    x: parent.width - 44px;
+                    width: 44px;
+                    height: 28px;
+                    text: round(vol.shown * 200) + " %";
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: vol.shown > 0.5 ? Palette.warn : Palette.dim;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
                 }
             }
         }
