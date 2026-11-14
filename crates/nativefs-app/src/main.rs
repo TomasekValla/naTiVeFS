@@ -9,6 +9,7 @@ mod audio_rack;
 mod audio_ui;
 mod autostart;
 mod check_ui;
+mod debug;
 mod desktop_entry;
 mod files_ui;
 mod image_ui;
@@ -609,7 +610,7 @@ fn show_window(ui: &MainWindow, shared: &Arc<Shared>) {
         ui.window().set_size(slint::LogicalSize::new(ui.get_preferred_w(), ui.get_preferred_h()));
         // debug builds: `NATIVEFS_WINDOW_SIZE=<w>x<h>` (logical px) opens a wider window (tests of the desktop layout)
         #[cfg(debug_assertions)]
-        if let Some((w, h)) = std::env::var("NATIVEFS_WINDOW_SIZE").ok().and_then(|v| {
+        if let Some((w, h)) = crate::debug::var("NATIVEFS_WINDOW_SIZE").and_then(|v| {
             let (w, h) = v.split_once('x')?;
             Some((w.trim().parse::<f32>().ok()?, h.trim().parse::<f32>().ok()?))
         }) {
@@ -1523,7 +1524,7 @@ fn start_countdown(ui: &MainWindow, shared: &Arc<Shared>) {
 /// (no server needed), `NATIVEFS_DEMO=0` the logged-out screen with fake status chips.
 #[cfg(debug_assertions)]
 fn apply_demo(ui: &MainWindow) {
-    let Ok(mode) = std::env::var("NATIVEFS_DEMO") else { return };
+    let Some(mode) = crate::debug::var("NATIVEFS_DEMO") else { return };
     let item = |id: &str, name: &str, cat: &str, sub: &str, expired: bool| RecentItem {
         id: id.into(),
         name: name.into(),
@@ -1554,13 +1555,13 @@ fn apply_demo(ui: &MainWindow) {
         ui.set_recent(ModelRc::new(VecModel::from(items)));
         ui.set_logged_in(true);
     }
-    match std::env::var("NATIVEFS_PAGE").as_deref() {
-        Ok("settings") => ui.set_page(1),
-        Ok("check") => ui.set_page(2),
+    match crate::debug::var("NATIVEFS_PAGE").as_deref() {
+        Some("settings") => ui.set_page(1),
+        Some("check") => ui.set_page(2),
         _ => {}
     }
     // `NATIVEFS_SCROLL=<px>` scrolls the page (screenshots of its lower parts without touching the mouse)
-    if let Some(y) = std::env::var("NATIVEFS_SCROLL").ok().and_then(|v| v.parse::<f32>().ok()) {
+    if let Some(y) = crate::debug::var("NATIVEFS_SCROLL").and_then(|v| v.parse::<f32>().ok()) {
         let weak = ui.as_weak();
         slint::Timer::single_shot(Duration::from_millis(400), move || {
             if let Some(ui) = weak.upgrade() {
@@ -1732,7 +1733,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         refresh_router(&ui, &shared);
     }
     // debug builds: `NATIVEFS_UPDATE_OFFER=1` shows the restart offer (screenshots)
-    ui.set_update_offer(cfg!(debug_assertions) && std::env::var_os("NATIVEFS_UPDATE_OFFER").is_some());
+    ui.set_update_offer(crate::debug::flag("NATIVEFS_UPDATE_OFFER"));
     ui.set_file_menus(config.file_menus);
     ui.set_file_menus_available(cfg!(any(windows, target_os = "linux")));
     ui.set_autostart(autostart::enabled());
@@ -1774,7 +1775,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     apply_demo(&ui);
     // debug builds: `NATIVEFS_WINDOW_POS=x,y` opens the window at that screen position (testing on a second monitor)
     #[cfg(debug_assertions)]
-    if let Some((x, y)) = std::env::var("NATIVEFS_WINDOW_POS").ok().and_then(|v| {
+    if let Some((x, y)) = crate::debug::var("NATIVEFS_WINDOW_POS").and_then(|v| {
         let (x, y) = v.split_once(',')?;
         Some((x.trim().parse::<i32>().ok()?, y.trim().parse::<i32>().ok()?))
     }) {
@@ -2452,16 +2453,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // debug builds: `NATIVEFS_STARTUP=<autostart 0|1>,<background 0|1>` sets the startup toggles like a
                 // click; `NATIVEFS_TRAY=<action>[,<action>...]` runs tray menu actions one second apart
                 #[cfg(debug_assertions)]
-                if let Some((a, b)) = std::env::var("NATIVEFS_STARTUP").ok().and_then(|v| v.split_once(',').map(|(a, b)| (a == "1", b == "1"))) {
+                if let Some((a, b)) = crate::debug::var("NATIVEFS_STARTUP").and_then(|v| v.split_once(',').map(|(a, b)| (a == "1", b == "1"))) {
                     ui.invoke_startup_changed(a, b);
                 }
                 // `NATIVEFS_ROUTER=0|1` switches the link router like the settings toggle
                 #[cfg(debug_assertions)]
-                if let Ok(v) = std::env::var("NATIVEFS_ROUTER") {
+                if let Some(v) = crate::debug::var("NATIVEFS_ROUTER") {
                     ui.invoke_router_toggle(v == "1");
                 }
                 #[cfg(debug_assertions)]
-                for (n, name) in std::env::var("NATIVEFS_TRAY").unwrap_or_default().split(',').filter(|s| !s.is_empty()).enumerate() {
+                for (n, name) in crate::debug::var("NATIVEFS_TRAY").unwrap_or_default().split(',').filter(|s| !s.is_empty()).enumerate() {
                     use tray::Action::*;
                     let a = match name {
                         "show" => Show, "play" => PlayPause, "stop" => Stop, "local" => OpenLocal, "upload" => Upload,
@@ -2478,7 +2479,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             // debug builds: `NATIVEFS_CAMERA=photo|video` opens the camera window (tests without clicking)
             #[cfg(debug_assertions)]
-            if let Ok(kind) = std::env::var("NATIVEFS_CAMERA") {
+            if let Some(kind) = crate::debug::var("NATIVEFS_CAMERA") {
                 if let Some(ui) = weak.upgrade() {
                     camera_ui::open(&shared, &ui, kind == "video");
                 }
@@ -2487,7 +2488,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // "Use TVFS tools locally" card
             #[cfg(debug_assertions)]
             // (several paths separated by `;` open one after another)
-            if let Some(paths) = std::env::var("NATIVEFS_LOCAL_FILE").ok().or_else(|| std::env::var("NATIVEFS_AUDIO_FILE").ok()).filter(|p| !p.is_empty()) {
+            if let Some(paths) = crate::debug::var("NATIVEFS_LOCAL_FILE").or_else(|| crate::debug::var("NATIVEFS_AUDIO_FILE")).filter(|p| !p.is_empty()) {
                 for path in paths.split(';').filter(|p| !p.is_empty()) {
                     if let Err(msg) = open::open_local(&shared, std::path::Path::new(path)) {
                         eprintln!("NATIVEFS_LOCAL_FILE: {msg}");
@@ -2498,11 +2499,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // uses the recording (it lands in the upload queue; nothing is uploaded) - screenshots without clicking
             #[cfg(debug_assertions)]
             // (`NATIVEFS_VOICE=<seconds>,listen` plays it back instead of using it)
-            if let Some(secs) = std::env::var("NATIVEFS_VOICE").ok().and_then(|v| v.split(',').next()?.parse::<u64>().ok()) {
+            if let Some(secs) = crate::debug::var("NATIVEFS_VOICE").and_then(|v| v.split(',').next()?.parse::<u64>().ok()) {
                 if let Some(ui) = weak.upgrade() {
                     ui.set_mode(2);
                     voice::open(&ui, &shared);
-                    let last = if std::env::var("NATIVEFS_VOICE").is_ok_and(|v| v.ends_with(",listen")) { 5 } else { 2 };
+                    let last = if crate::debug::var("NATIVEFS_VOICE").is_some_and(|v| v.ends_with(",listen")) { 5 } else { 2 };
                     let steps: [(u64, i32); 3] = [(1500, 0), (1500 + secs * 1000, 1), (4500 + secs * 1000, last)];
                     for (ms, what) in steps {
                         let (weak, shared) = (weak.clone(), shared.clone());

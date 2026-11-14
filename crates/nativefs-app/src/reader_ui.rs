@@ -261,12 +261,12 @@ fn loaded(r: &Rc<RefCell<Reader>>, bytes: Vec<u8>) {
     rd.window.set_status("".into());
     // debug builds: `NATIVEFS_READER_FIND=<text>` opens Find with that text (synthetic typing does not reach winit windows)
     #[cfg(debug_assertions)]
-    if let Ok(q) = std::env::var("NATIVEFS_READER_FIND") {
+    if let Some(q) = crate::debug::var("NATIVEFS_READER_FIND") {
         rd.window.set_find_open(true);
         rd.window.set_find_text(q.as_str().into());
         rd.query = q;
         run_search(&mut rd);
-        if let Some(n) = std::env::var("NATIVEFS_READER_FIND_STEP").ok().and_then(|v| v.parse::<usize>().ok()) {
+        if let Some(n) = crate::debug::var("NATIVEFS_READER_FIND_STEP").and_then(|v| v.parse::<usize>().ok()) {
             rd.current = Some(n.min(rd.hits.len().saturating_sub(1)));
         }
     }

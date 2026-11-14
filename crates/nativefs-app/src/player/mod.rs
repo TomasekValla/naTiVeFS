@@ -224,15 +224,11 @@ pub fn open(shared: &Arc<Shared>, content: Content) {
         options.push(("pause", "yes"));
     }
     // debug builds: `NATIVEFS_MPV_OPTS="k=v;k=v"` adds / overrides mpv options (performance experiments)
-    let extra: Vec<(String, String)> = if cfg!(debug_assertions) {
-        std::env::var("NATIVEFS_MPV_OPTS")
-            .unwrap_or_default()
-            .split(';')
-            .filter_map(|kv| kv.split_once('=').map(|(k, v)| (k.trim().to_owned(), v.trim().to_owned())))
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let extra: Vec<(String, String)> = crate::debug::var("NATIVEFS_MPV_OPTS")
+        .unwrap_or_default()
+        .split(';')
+        .filter_map(|kv| kv.split_once('=').map(|(k, v)| (k.trim().to_owned(), v.trim().to_owned())))
+        .collect();
     for (k, v) in &extra {
         options.push((k.as_str(), v.as_str()));
     }
@@ -324,14 +320,14 @@ pub fn open(shared: &Arc<Shared>, content: Content) {
     // debug builds: `NATIVEFS_PLAYER_STATS=0..3` and `NATIVEFS_PLAYER_MENU=1..4` preset the overlay (screenshots)
     #[cfg(debug_assertions)]
     {
-        if let Some(l) = std::env::var("NATIVEFS_PLAYER_STATS").ok().and_then(|v| v.parse::<i32>().ok()) {
+        if let Some(l) = crate::debug::var("NATIVEFS_PLAYER_STATS").and_then(|v| v.parse::<i32>().ok()) {
             window.set_stats_level(l.clamp(0, 3));
         }
-        if let Some(m) = std::env::var("NATIVEFS_PLAYER_MENU").ok().and_then(|v| v.parse::<i32>().ok()) {
+        if let Some(m) = crate::debug::var("NATIVEFS_PLAYER_MENU").and_then(|v| v.parse::<i32>().ok()) {
             window.set_menu(m);
         }
         // `NATIVEFS_PLAYER_FULLSCREEN=1`: start in fullscreen (performance tests)
-        if std::env::var("NATIVEFS_PLAYER_FULLSCREEN").is_ok() {
+        if crate::debug::flag("NATIVEFS_PLAYER_FULLSCREEN") {
             let w = window.as_weak();
             slint::Timer::single_shot(Duration::from_millis(1500), move || {
                 if let Some(w) = w.upgrade() {
@@ -340,7 +336,7 @@ pub fn open(shared: &Arc<Shared>, content: Content) {
             });
         }
         // `NATIVEFS_PLAYER_PAUSE_AFTER=<s>`: pause by itself (idle CPU / GPU measurements)
-        if let Some(secs) = std::env::var("NATIVEFS_PLAYER_PAUSE_AFTER").ok().and_then(|v| v.parse::<u64>().ok()) {
+        if let Some(secs) = crate::debug::var("NATIVEFS_PLAYER_PAUSE_AFTER").and_then(|v| v.parse::<u64>().ok()) {
             let m = mpv.clone();
             slint::Timer::single_shot(Duration::from_secs(secs), move || {
                 let _ = m.set_flag("pause", true);
@@ -352,9 +348,9 @@ pub fn open(shared: &Arc<Shared>, content: Content) {
     let render: Rc<RefCell<Option<mpv::RenderContext>>> = Rc::default();
     let prof: Arc<std::sync::Mutex<Prof>> = Arc::default();
     let playing_flag: Arc<std::sync::atomic::AtomicBool> = Arc::default();
-    let drive = cfg!(debug_assertions) && std::env::var("NATIVEFS_PLAYER_DRIVE").is_ok();
+    let drive = crate::debug::flag("NATIVEFS_PLAYER_DRIVE");
     #[cfg(debug_assertions)]
-    if std::env::var("NATIVEFS_PLAYER_PROFILE").is_ok() {
+    if crate::debug::flag("NATIVEFS_PLAYER_PROFILE") {
         profile_timer(&mpv, &prof);
     }
     {
@@ -367,7 +363,7 @@ pub fn open(shared: &Arc<Shared>, content: Content) {
                 };
                 // debug: `NATIVEFS_SWAP_INTERVAL=<n>` changes the window's vsync (swap interval) for experiments
                 #[cfg(windows)]
-                if let Some(n) = std::env::var("NATIVEFS_SWAP_INTERVAL").ok().filter(|_| cfg!(debug_assertions)).and_then(|v| v.parse::<i32>().ok()) {
+                if let Some(n) = crate::debug::var("NATIVEFS_SWAP_INTERVAL").and_then(|v| v.parse::<i32>().ok()) {
                     let f = get_proc_address(c"wglSwapIntervalEXT");
                     if !f.is_null() {
                         type SwapInterval = unsafe extern "system" fn(i32) -> i32;
@@ -407,7 +403,7 @@ pub fn open(shared: &Arc<Shared>, content: Content) {
                 let t0 = Instant::now();
                 let frame = ctx.update();
                 let size = w.window().size();
-                let block = !(cfg!(debug_assertions) && std::env::var("NATIVEFS_MPV_NOBLOCK").is_ok());
+                let block = !(crate::debug::flag("NATIVEFS_MPV_NOBLOCK"));
                 ctx.render(current_fbo(get_proc_address), size.width as i32, size.height as i32, true, block);
                 let mut p = prof.lock().unwrap();
                 let took = t0.elapsed();
@@ -435,7 +431,7 @@ pub fn open(shared: &Arc<Shared>, content: Content) {
                 }
             }
             RenderingState::AfterRendering => {
-                let skip = cfg!(debug_assertions) && std::env::var("NATIVEFS_NO_REPORT_SWAP").is_ok();
+                let skip = crate::debug::flag("NATIVEFS_NO_REPORT_SWAP");
                 if let Some(ctx) = render.borrow().as_ref().filter(|_| !skip) {
                     ctx.report_swap();
                 }
@@ -623,7 +619,7 @@ fn handle(p: &Rc<RefCell<Player>>, ev: Event) {
         Event::FileLoaded => {
             pl.loaded = true;
             // debug experiment: the exact refresh rate of the window's monitor for display-synced playback
-            if cfg!(debug_assertions) && std::env::var("NATIVEFS_PLAYER_EXACT_HZ").is_ok() {
+            if crate::debug::flag("NATIVEFS_PLAYER_EXACT_HZ") {
                 if let Some(mhz) = w.window().with_winit_window(|x| x.current_monitor().and_then(|m| m.refresh_rate_millihertz())).flatten() {
                     eprintln!("PROFILE monitor {mhz} mHz");
                     let _ = pl.mpv.set_f64("display-fps-override", mhz as f64 / 1000.0);
@@ -755,7 +751,7 @@ fn activity(p: &Rc<RefCell<Player>>) {
         if let Some(p) = weak.upgrade() {
             let pl = p.borrow();
             // debug builds: `NATIVEFS_PLAYER_UI=1` keeps the controls up (screenshots)
-            let keep = cfg!(debug_assertions) && std::env::var("NATIVEFS_PLAYER_UI").is_ok();
+            let keep = crate::debug::flag("NATIVEFS_PLAYER_UI");
             if pl.playing && pl.window.get_menu() == 0 && !keep {
                 pl.window.set_controls(false);
                 sub_margin(&pl, false);
@@ -912,7 +908,7 @@ fn stats_update(p: &Rc<RefCell<Player>>) {
     drop(pl);
     std::thread::spawn(move || {
         // debug: `NATIVEFS_STATS_TEST=noread` fakes the snapshot, `=noapply` reads but does not touch the UI
-        let test = if cfg!(debug_assertions) { std::env::var("NATIVEFS_STATS_TEST").unwrap_or_default() } else { String::new() };
+        let test = crate::debug::var("NATIVEFS_STATS_TEST").unwrap_or_default();
         let snap = if test == "noread" {
             StatsSnapshot { rows: (0..24).map(|i| (format!("Key {i}"), format!("value {i}"), i % 6 == 0)).collect(), net: 1.0, ahead: 10.0 }
         } else {

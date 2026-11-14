@@ -207,7 +207,7 @@ fn start(cam: &Rc<RefCell<Cam>>) {
                     c.window.set_status("".into());
                     // debug builds: `NATIVEFS_CAMERA_AUTO=<s>` takes the photo / records <s> seconds by itself (tests)
                     #[cfg(debug_assertions)]
-                    if let Some(secs) = std::env::var("NATIVEFS_CAMERA_AUTO").ok().and_then(|v| v.parse::<u64>().ok()) {
+                    if let Some(secs) = crate::debug::var("NATIVEFS_CAMERA_AUTO").and_then(|v| v.parse::<u64>().ok()) {
                         let w = c.window.as_weak();
                         let video = c.video;
                         slint::Timer::single_shot(Duration::from_secs(2), move || {

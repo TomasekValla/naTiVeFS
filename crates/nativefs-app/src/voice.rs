@@ -304,7 +304,7 @@ fn ensure_preview(ui: &MainWindow) -> bool {
     });
     let player = nativefs_audio::engine::Player::new(dec, settings, events);
     // debug builds: `NATIVEFS_AUDIO_MUTE` keeps the preview silent (tests)
-    if cfg!(debug_assertions) && std::env::var_os("NATIVEFS_AUDIO_MUTE").is_some() {
+    if crate::debug::flag("NATIVEFS_AUDIO_MUTE") {
         player.set_muted(true);
     }
     let timer = slint::Timer::default();

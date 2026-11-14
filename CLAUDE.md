@@ -32,5 +32,6 @@ Rules:
 - `build.rs` compiles the Slint UI in a thread with a 64 MB stack (Windows' 1 MB main-thread stack overflowed on the big windows).
 - Slint `changed` handlers on properties inside `for` rows did not fire reliably; use an `if` element whose `init` runs instead
   (see the search reveal in `ui/reader.slint`). Ids inside `if` / `for` cannot be read from outside.
+- Debug switches (`NATIVEFS_*`, debug builds only, read through `debug.rs`): see `docs/DEBUG_SWITCHES.md`.
 - Testing on a real desktop: `NATIVEFS_CONFIG=<file>` uses a throw-away config; quit a running instance (tray → Quit) before starting a
   new build, otherwise the new process hands over to the old one and exits. The version/build date is on the app settings page (gear icon).

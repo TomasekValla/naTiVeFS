@@ -116,7 +116,7 @@ impl Source {
 
 /// Is this local file a recording of the app's voice recorder (or forced by the debug switch)?
 pub fn is_own_recording(path: &std::path::Path) -> bool {
-    if cfg!(debug_assertions) && std::env::var_os("NATIVEFS_VOICE_PLAYER").is_some() {
+    if crate::debug::flag("NATIVEFS_VOICE_PLAYER") {
         return true;
     }
     let named = path.file_name().is_some_and(|n| n.to_string_lossy().starts_with("voice-note-"));
@@ -363,13 +363,13 @@ fn loaded(state: &Rc<RefCell<State>>, result: Result<Loaded, String>) {
         sb.total = total;
         sb.gain_db = l.gain_db;
         // debug builds: `NATIVEFS_AUDIO_MUTE=1` plays muted, `NATIVEFS_AUDIO_NOPLAY=1` does not start
-        if cfg!(debug_assertions) && std::env::var_os("NATIVEFS_AUDIO_MUTE").is_some() {
+        if crate::debug::flag("NATIVEFS_AUDIO_MUTE") {
             sb.muted = true;
             w.set_muted(true);
         }
     }
     apply(state);
-    let noplay = cfg!(debug_assertions) && std::env::var_os("NATIVEFS_AUDIO_NOPLAY").is_some();
+    let noplay = crate::debug::flag("NATIVEFS_AUDIO_NOPLAY");
     if !noplay {
         play_pause(state);
     }
