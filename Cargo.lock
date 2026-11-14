@@ -4212,6 +4212,7 @@ name = "nativefs-ipc"
 version = "1.0.0"
 dependencies = [
  "interprocess",
+ "libc",
  "serde",
  "serde_json",
  "windows 0.62.2",
@@ -4224,6 +4225,7 @@ dependencies = [
  "nativefs-ipc",
  "opener",
  "tvfs-core",
+ "url",
 ]
 
 [[package]]

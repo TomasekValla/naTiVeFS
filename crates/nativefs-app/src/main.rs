@@ -846,12 +846,25 @@ fn delete_recent(shared: &Arc<Shared>, weak: &Weak<MainWindow>, handle: &tokio::
     });
 }
 
+/// A link in the browser: the one chosen in Settings > Links, else the system's default. A TVFS page is marked
+/// (`inbrowser=1`) so the web page does not hand it straight back to this app.
 fn open_external(url: &str, cfg: &Config) {
-    nativefs_ipc::allow_foreground();
-    let ok = cfg.browser.as_deref().is_some_and(|b| !b.trim().is_empty()) && cfg.open_in_browser(url).is_ok();
-    if !ok {
-        if let Err(e) = opener::open_browser(url) {
-            eprintln!("naTiVeFS: could not open {url}: {e}");
+    let url = match url::Url::parse(url) {
+        Ok(u) if tvfs_core::link::is_tvfs_host(&u) => nativefs_ipc::in_browser_url(url),
+        _ => url.to_owned(),
+    };
+    let chosen = cfg.browser.as_deref().map(str::trim).filter(|b| !b.is_empty());
+    let spawned = chosen.and_then(|cmd| {
+        let (program, args) = tvfs_core::config::browser_argv(cmd, &url).ok()?;
+        std::process::Command::new(program).args(args).spawn().ok()
+    });
+    match spawned {
+        // started from the foreground app: it may come to the front
+        Some(child) => nativefs_ipc::allow_foreground_for(child.id()),
+        None => {
+            if let Err(e) = opener::open_browser(&url) {
+                eprintln!("naTiVeFS: could not open {url}: {e}");
+            }
         }
     }
 }

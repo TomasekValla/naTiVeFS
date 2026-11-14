@@ -15,3 +15,4 @@ path = "src/main.rs"
 tvfs-core.workspace = true
 nativefs-ipc.workspace = true
 opener = "0.8"
+url.workspace = true

@@ -52,21 +52,84 @@ fn socket_name() -> String {
 
 /// Windows lets only the foreground process (or a process it just started) bring a window to the front. The
 /// process that receives a link or a file is usually in the background, so whoever hands work over passes its own
-/// right on first; otherwise the window only flashes in the taskbar. Harmless when this process has no such right.
+/// right on to exactly that process (never to "any process", which would let whatever runs pop up over the user's
+/// work); otherwise the window only flashes in the taskbar. Harmless when this process has no such right.
 /// No-op on other systems.
-pub fn allow_foreground() {
+pub fn allow_foreground_for(pid: u32) {
     #[cfg(windows)]
     {
-        use windows::Win32::UI::WindowsAndMessaging::{AllowSetForegroundWindow, ASFW_ANY};
+        use windows::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow;
         // SAFETY: plain Win32 call without pointers
-        let _ = unsafe { AllowSetForegroundWindow(ASFW_ANY) };
+        let _ = unsafe { AllowSetForegroundWindow(pid) };
+    }
+    #[cfg(not(windows))]
+    let _ = pid;
+}
+
+/// A TVFS page handed to the browser by naTiVeFS (Open in browser, the link router's fallback) carries
+/// `inbrowser=1`, so the page does not send the visitor straight back into the app.
+pub fn in_browser_url(url: &str) -> String {
+    let (base, fragment) = url.split_at(url.find('#').unwrap_or(url.len()));
+    let query = base.split_once('?').map(|(_, q)| q);
+    if query.is_some_and(|q| q.split('&').any(|p| p == "inbrowser" || p.starts_with("inbrowser="))) {
+        return url.to_owned();
+    }
+    let sep = match query {
+        None => "?",
+        Some(q) if q.is_empty() || q.ends_with('&') => "",
+        Some(_) => "&",
+    };
+    format!("{base}{sep}inbrowser=1{fragment}")
+}
+
+/// The listening process belongs to this user (in this login session). Another user on the machine could create
+/// the per-user socket name first; a message (paths to upload, links) must not go to that process.
+fn peer_is_same_user(stream: &Stream) -> bool {
+    #[cfg(windows)]
+    {
+        use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
+        use windows::Win32::System::Threading::GetCurrentProcessId;
+        #[allow(unreachable_patterns)]
+        let theirs = match stream {
+            Stream::NamedPipe(s) => s.inner().peer_session_id(),
+            _ => return true,
+        };
+        let Ok(theirs) = theirs else { return true };
+        let mut ours = 0u32;
+        // SAFETY: plain Win32 call writing one u32
+        if unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &mut ours) }.is_err() {
+            return true;
+        }
+        theirs == ours
+    }
+    #[cfg(unix)]
+    {
+        use interprocess::local_socket::traits::StreamCommon;
+        // SAFETY: geteuid has no preconditions
+        let ours = unsafe { libc::geteuid() };
+        // platforms without peer credentials cannot check (the socket is still per user by name)
+        stream.peer_creds().ok().and_then(|c| c.euid()).is_none_or(|theirs| theirs == ours)
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = stream;
+        true
     }
 }
 
 fn connect_and_write(msg: &Message) -> io::Result<Stream> {
-    allow_foreground();
     let name = socket_name().to_ns_name::<GenericNamespaced>()?;
     let mut stream = Stream::connect(name)?;
+    if !peer_is_same_user(&stream) {
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "the naTiVeFS socket belongs to another user"));
+    }
+    // the instance may need to raise a window for this message (not for a silent autostart ping)
+    if *msg != Message::Ping {
+        use interprocess::local_socket::traits::StreamCommon;
+        if let Some(pid) = stream.peer_creds().ok().and_then(|c| c.pid()) {
+            allow_foreground_for(pid as u32);
+        }
+    }
     let mut line = serde_json::to_string(msg).map_err(io::Error::other)?;
     line.push('\n');
     stream.write_all(line.as_bytes())?;
@@ -133,6 +196,11 @@ where
 {
     std::thread::spawn(move || {
         for conn in listener.0.incoming().filter_map(Result::ok) {
+            // Linux / macOS: the socket name is guessable and has no file permissions; only this user may drive the app
+            #[cfg(unix)]
+            if !peer_is_same_user(&conn) {
+                continue;
+            }
             let mut line = String::new();
             let mut reader = BufReader::new(conn);
             if reader.read_line(&mut line).is_ok() {
@@ -148,6 +216,17 @@ where
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    #[test]
+    fn browser_urls_are_marked_once() {
+        let f = in_browser_url;
+        assert_eq!(f("https://h/files/a.mp3"), "https://h/files/a.mp3?inbrowser=1");
+        assert_eq!(f("https://h/p?x=1"), "https://h/p?x=1&inbrowser=1");
+        assert_eq!(f("https://h/p?"), "https://h/p?inbrowser=1");
+        assert_eq!(f("https://h/p?x=1#t=5"), "https://h/p?x=1&inbrowser=1#t=5");
+        assert_eq!(f("https://h/p?inbrowser=1"), "https://h/p?inbrowser=1");
+        assert_eq!(f("https://h/p#a?b"), "https://h/p?inbrowser=1#a?b");
+    }
 
     // one test: every case shares the single per-user socket name
     #[test]
