@@ -378,7 +378,7 @@ thread_local! {
     static OPENED: Cell<i32> = const { Cell::new(0) };
 }
 
-/// Place a new window: debug builds honour `NATIVEFS_VIEWER_POS=x,y` (tests on the second monitor),
+/// Place a new window: debug builds honour `NATIVEFS_VIEWER_POS=x,y` (tests away from the screen someone works on),
 /// otherwise the system picks; successive windows cascade by 28 px.
 pub fn place(window: &slint::Window) {
     LIVE.with(|l| l.set(l.get() + 1));
@@ -405,7 +405,7 @@ pub fn place(window: &slint::Window) {
 ///
 /// When the window did not get the focus, it asks for attention instead (taskbar flash / dock bounce / urgency hint).
 pub fn raise(window: &slint::Window) {
-    // debug builds: `NATIVEFS_NO_FOCUS=1` never takes the keyboard focus (test windows on a second monitor)
+    // debug builds: `NATIVEFS_NO_FOCUS=1` never takes the keyboard focus (test windows beside someone working)
     if crate::debug::flag("NATIVEFS_NO_FOCUS") {
         return;
     }

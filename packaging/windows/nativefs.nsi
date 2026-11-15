@@ -17,10 +17,14 @@ RequestExecutionLevel user
 Name "${APP}"
 OutFile "${OUT}"
 BrandingText "${APP} ${VERSION}"
-VIProductVersion "${VERSION}.0"
+; Windows wants four numbers here: VERSION_NUM is VERSION without a pre-release suffix (1.1.0 for 1.1.0-pre.1)
+!ifndef VERSION_NUM
+  !define VERSION_NUM "${VERSION}"
+!endif
+VIProductVersion "${VERSION_NUM}.0"
 VIAddVersionKey "ProductName" "${APP}"
 VIAddVersionKey "FileDescription" "${APP} installer"
-VIAddVersionKey "FileVersion" "${VERSION}"
+VIAddVersionKey "FileVersion" "${VERSION_NUM}"
 VIAddVersionKey "LegalCopyright" "Tomas Valla, GPL-3.0-or-later"
 
 Var AllUsers

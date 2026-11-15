@@ -1786,7 +1786,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     #[cfg(debug_assertions)]
     apply_demo(&ui);
-    // debug builds: `NATIVEFS_WINDOW_POS=x,y` opens the window at that screen position (testing on a second monitor)
+    // debug builds: `NATIVEFS_WINDOW_POS=x,y` opens the window at that screen position (tests away from the screen someone works on)
     #[cfg(debug_assertions)]
     if let Some((x, y)) = crate::debug::var("NATIVEFS_WINDOW_POS").and_then(|v| {
         let (x, y) = v.split_once(',')?;

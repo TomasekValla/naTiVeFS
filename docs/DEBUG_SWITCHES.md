@@ -16,7 +16,7 @@ Debug builds only:
 | Variable | What it does |
 |---|---|
 | `NATIVEFS_NO_FOCUS=1` | Windows never take the keyboard focus (tests beside someone working). |
-| `NATIVEFS_WINDOW_POS=x,y` | Opens the main window at this screen position (physical px), e.g. on a second monitor. |
+| `NATIVEFS_WINDOW_POS=x,y` | Opens the main window at this screen position (physical px), e.g. away from the screen someone works on. |
 | `NATIVEFS_VIEWER_POS=x,y` | The same for viewer windows (they cascade by 28 px). |
 | `NATIVEFS_WINDOW_SIZE=WxH` | Opens the main window at this logical size (desktop layout tests). |
 | `NATIVEFS_DEMO=1` / `0` | Logged-in screen with fake recent files / logged-out screen with fake status chips; no server needed. |

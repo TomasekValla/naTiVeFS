@@ -54,7 +54,11 @@ jobs:
 
       - name: Version
         shell: bash
-        run: echo "VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_ENV"
+        # VERSION_NUM: the numbers only (1.1.0 for 1.1.0-pre.1), where Windows and macOS allow nothing else
+        run: |
+          v=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+          echo "VERSION_NUM=${v%%-*}" >> "$GITHUB_ENV"
 
       - name: Package (unix)
         if: matrix.ext == 'tar.gz'
@@ -94,7 +98,7 @@ jobs:
           mkdir -p "$app/MacOS" "$app/Resources"
           cp pkg/nativefs pkg/nativefs-link pkg/nativefs-cli "$app/MacOS/"
           cp assets/app.icns LICENSE packaging/THIRD-PARTY.txt "$app/Resources/"
-          sed "s/__VERSION__/$VERSION/g" packaging/macos/Info.plist > "$app/Info.plist"
+          sed -e "s/__VERSION__/$VERSION/g" -e "s/__VERSION_NUM__/$VERSION_NUM/g" packaging/macos/Info.plist > "$app/Info.plist"
           ln -s /Applications dmg/Applications
           hdiutil create -volname naTiVeFS -srcfolder dmg -ov -format UDZO out/naTiVeFS-macos-apple-silicon.dmg
 
@@ -116,7 +120,7 @@ jobs:
           }
           $src = (Resolve-Path stage).Path
           $setup = Join-Path (Resolve-Path out).Path "naTiVeFS-${{ matrix.name }}-setup.exe"
-          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /V2 "/DVERSION=$env:VERSION" "/DSRC=$src" "/DOUT=$setup" packaging\windows\nativefs.nsi
+          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /V2 "/DVERSION=$env:VERSION" "/DVERSION_NUM=$env:VERSION_NUM" "/DSRC=$src" "/DOUT=$setup" packaging\windows\nativefs.nsi
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       - name: Test the installer (windows)
@@ -208,5 +212,6 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
-          # 0.x tags are pre-releases; the first full release is v1.0.0
-          prerelease: ${{ startsWith(github.ref_name, 'v0.') }}
+          # 0.x tags and tags with a suffix (v1.1.0-pre.1) are pre-releases: only the updater's pre-release channel
+          # offers them, and the install scripts (releases/latest) never get them
+          prerelease: ${{ startsWith(github.ref_name, 'v0.') || contains(github.ref_name, '-') }}

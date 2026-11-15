@@ -8,8 +8,8 @@
   <key>CFBundleExecutable</key><string>nativefs</string>
   <key>CFBundleIconFile</key><string>app</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>__VERSION__</string>
-  <key>CFBundleVersion</key><string>__VERSION__</string>
+  <key>CFBundleShortVersionString</key><string>__VERSION_NUM__</string>
+  <key>CFBundleVersion</key><string>__VERSION_NUM__</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSCameraUsageDescription</key><string>Take photos and videos to upload.</string>
   <key>NSMicrophoneUsageDescription</key><string>Record voice notes.</string>
