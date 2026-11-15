@@ -905,7 +905,7 @@ export component MainWindow inherits Window {
                             // drop zone (hidden in Text mode)
                             if root.mode != 3 : Rectangle {
                                 property <bool> lit: dz.has-hover || (root.drop-hover && !root.drop-local);
-                                height: root.voice-state == 4 ? 420px : root.voice-state == 2 || root.voice-state == 3 ? 460px + (root.voice-state == 2 && root.voice-mics.length > 2 ? 39px : 0px) : root.voice-state > 0 ? 380px : root.capture-menu ? 300px : Look.compact ? 150px : 182px;
+                                height: root.voice-state == 4 ? 420px : root.voice-state == 2 || root.voice-state == 3 ? 460px + (root.voice-state == 2 && root.voice-mics.length > 1 ? 39px : 0px) : root.voice-state > 0 ? 380px : root.capture-menu ? 300px : Look.compact ? 150px : 182px;
                                 animate height { duration: 220ms; easing: ease-out; }
                                 border-radius: 22px;
                                 background: self.lit ? #2fffc408 : Palette.glass;
@@ -1014,7 +1014,7 @@ export component MainWindow inherits Window {
                                             }
                                         }
                                         // microphone picker (web `.voice-mic-row`): before recording, when there is a choice
-                                        if (root.voice-state == 1 || root.voice-state == 2) && root.voice-mics.length > 2 : HorizontalLayout {
+                                        if (root.voice-state == 1 || root.voice-state == 2) && root.voice-mics.length > 1 : HorizontalLayout {
                                             alignment: center;
                                             HorizontalLayout {
                                                 width: min(280px, parent.width);
