@@ -2008,6 +2008,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
     {
+        let (shared, weak) = (shared.clone(), weak.clone());
+        ui.on_voice_mic_picked(move |id| {
+            if let Some(ui) = weak.upgrade() {
+                voice::mic_picked(&ui, &shared, &id);
+            }
+        });
+    }
+    {
         let weak = weak.clone();
         ui.on_queue_rename(move |i, t| {
             if let Some(ui) = weak.upgrade() {
@@ -2635,6 +2643,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     slint::run_event_loop_until_quit()?;
+    voice::shutdown();
     rt.shutdown_background();
     Ok(())
 }

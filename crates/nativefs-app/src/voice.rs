@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
-use crate::{capture, upload_ui, MainWindow, Shared};
+use crate::{capture, upload_ui, DeviceItem, MainWindow, Shared};
 
 /// Recordings stop by themselves after this long (they are kept in memory: 48 kHz stereo is ~11 MB a minute).
 const MAX_SECONDS: u64 = 30 * 60;
@@ -47,6 +47,13 @@ struct Voice {
     bars: Rc<VecModel<f32>>,
     /// Input level / auto level, applied on the microphone thread.
     chain: Arc<Mutex<InputChain>>,
+    /// What the microphone feeds (kept to reopen it on another device).
+    pcm: capture::PcmSink,
+    sink: capture::Sink,
+    /// The microphones of the picker (without "System default"); `None` = this system cannot list them.
+    mics: Option<Vec<capture::Device>>,
+    /// Bumped on every (re)open of the microphone, so a slow start of an earlier one is dropped.
+    generation: u64,
 }
 
 thread_local! {
@@ -264,13 +271,9 @@ pub fn open(ui: &MainWindow, shared: &Arc<Shared>) {
         })
     };
     let mic_id = shared.config.lock().unwrap().mic_device.clone();
-    let (mic, result) = match capture::Mic::start(&mic_id, pcm, sink) {
-        Ok(mic) => (Some(mic), Ok(())),
-        Err(e) => (None, Err(e)),
-    };
     VOICE.with(|v| {
         *v.borrow_mut() = Some(Voice {
-            mic,
+            mic: None,
             buf,
             recording,
             started: Instant::now(),
@@ -281,12 +284,134 @@ pub fn open(ui: &MainWindow, shared: &Arc<Shared>) {
             preview_timer: None,
             bars,
             chain,
+            pcm,
+            sink,
+            mics: None,
+            generation: 0,
         })
     });
-    match result {
-        Ok(()) => status(ui, 2, "Ready when you are", false),
-        // the web: "Microphone access denied or unavailable." with only Cancel left
-        Err(e) => status(ui, 1, &e, true),
+    ui.set_voice_mics(ModelRc::default());
+    ui.set_voice_mic_menu(false);
+    open_mic(ui, mic_id, true);
+}
+
+/// "System default" + the microphones, for the picker.
+fn show_mics(ui: &MainWindow, mics: &[capture::Device], current: &str) {
+    let mut items = vec![DeviceItem { id: "".into(), name: "System default".into() }];
+    items.extend(mics.iter().map(|d| DeviceItem { id: d.id.as_str().into(), name: d.name.as_str().into() }));
+    let name = items.iter().find(|d| d.id == current).map(|d| d.name.clone()).unwrap_or_else(|| "System default".into());
+    ui.set_voice_mics(ModelRc::new(VecModel::from(items)));
+    ui.set_voice_mic(current.into());
+    ui.set_voice_mic_name(name);
+}
+
+/// The saved device id as the picker knows it: "" = the system default (Linux lists that one as "default"), and a
+/// device that is not connected any more falls back to it as well.
+fn resolve_mic(id: &str, mics: Option<&[capture::Device]>) -> String {
+    match mics {
+        _ if id == "default" => String::new(),
+        Some(list) if !list.iter().any(|d| d.id == id) => String::new(),
+        _ => id.to_owned(),
+    }
+}
+
+/// (Re)open the microphone `id` ("" = system default) off the UI thread; `list` also (re)reads the device list.
+/// A recording in progress or a take waiting for review is never interrupted.
+fn open_mic(ui: &MainWindow, id: String, list: bool) {
+    let started = VOICE.with(|v| {
+        let mut v = v.borrow_mut();
+        let v = v.as_mut()?;
+        if v.recording.load(Ordering::Relaxed) || v.take.is_some() {
+            return None;
+        }
+        v.generation += 1;
+        // the old device is released first (its thread joins here)
+        drop(v.mic.take());
+        Some((v.pcm.clone(), v.sink.clone(), v.generation, v.mics.clone()))
+    });
+    let Some((pcm, sink, generation, known)) = started else { return };
+    ui.set_voice_meter(0.0);
+    ui.set_voice_hot(false);
+    if ui.get_voice_state() == 2 {
+        status(ui, 2, "Switching the microphone…", false);
+    } else {
+        status(ui, 1, "Requesting microphone…", false);
+    }
+    let weak = ui.as_weak();
+    std::thread::spawn(move || {
+        // `microphones()` fails where capture is not supported: no picker there
+        let mics = if list { capture::microphones().ok().map(|l| l.into_iter().filter(|d| d.id != "default").collect::<Vec<_>>()) } else { known };
+        let id = resolve_mic(&id, mics.as_deref());
+        let result = capture::Mic::start(&id, pcm, sink);
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let current = VOICE.with(|v| {
+                let mut v = v.borrow_mut();
+                let v = v.as_mut().filter(|v| v.generation == generation)?;
+                v.mics = mics.clone();
+                Some(())
+            });
+            if current.is_none() {
+                // closed or switched again meanwhile: this microphone goes away again
+                drop(result);
+                return;
+            }
+            match &mics {
+                Some(list) => show_mics(&ui, list, &id),
+                None => ui.set_voice_mics(ModelRc::default()),
+            }
+            match result {
+                Ok(mic) => {
+                    VOICE.with(|v| {
+                        if let Some(v) = v.borrow_mut().as_mut() {
+                            v.mic = Some(mic);
+                        }
+                    });
+                    status(&ui, 2, "Ready when you are", false);
+                }
+                // the web: "Microphone access denied or unavailable." with only Cancel left (and the picker)
+                Err(e) => status(&ui, 1, &e, true),
+            }
+            #[cfg(debug_assertions)]
+            if list {
+                debug_pick_mics(&ui);
+            }
+        });
+    });
+}
+
+/// A microphone was chosen in the recorder's picker: reopen it at once and remember it (shared with the camera
+/// window).
+pub fn mic_picked(ui: &MainWindow, shared: &Arc<Shared>, id: &str) {
+    let idle = VOICE.with(|v| v.borrow().as_ref().is_some_and(|v| !v.recording.load(Ordering::Relaxed) && v.take.is_none()));
+    if !idle {
+        return;
+    }
+    {
+        let mut cfg = shared.config.lock().unwrap();
+        if cfg.mic_device != id {
+            cfg.mic_device = id.to_owned();
+            let _ = cfg.save();
+        }
+    }
+    let mics = VOICE.with(|v| v.borrow().as_ref().and_then(|v| v.mics.clone())).unwrap_or_default();
+    show_mics(ui, &mics, id);
+    open_mic(ui, id.to_owned(), false);
+}
+
+/// Debug builds (`NATIVEFS_VOICE_MIC=<n>[,<n>...]`): picks the n-th entry of the microphone picker (0 = System
+/// default), one every 3 s, without clicking.
+#[cfg(debug_assertions)]
+fn debug_pick_mics(ui: &MainWindow) {
+    let Some(list) = crate::debug::var("NATIVEFS_VOICE_MIC") else { return };
+    for (k, n) in list.split(',').filter_map(|n| n.trim().parse::<usize>().ok()).enumerate() {
+        let weak = ui.as_weak();
+        slint::Timer::single_shot(Duration::from_secs(3 * (k as u64 + 1)), move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let Some(item) = ui.get_voice_mics().row_data(n) else { return };
+            eprintln!("NATIVEFS_VOICE_MIC: entry {n}");
+            ui.invoke_voice_mic_picked(item.id);
+        });
     }
 }
 
@@ -301,6 +426,11 @@ pub fn preview_ui(ui: &MainWindow) {
     ui.set_voice_level(prefs.voice_level);
     ui.set_voice_auto(prefs.voice_auto);
     ui.set_voice_meter(0.62);
+    // a made-up device list (nothing of this computer on screenshots); `NATIVEFS_VOICE_UI=menu` opens it
+    let fake = [("usb", "Microphone (USB Audio Device)"), ("headset", "Headset Microphone (Bluetooth)")];
+    let mics: Vec<capture::Device> = fake.iter().map(|(id, name)| capture::Device { id: (*id).into(), name: (*name).into() }).collect();
+    show_mics(ui, &mics, "");
+    ui.set_voice_mic_menu(crate::debug::var("NATIVEFS_VOICE_UI").as_deref() == Some("menu"));
     status(ui, 2, "Ready when you are", false);
 }
 
@@ -530,6 +660,21 @@ pub fn close(ui: &MainWindow) {
     ui.set_voice_listening(false);
 }
 
+/// The app quits: release a recorder that is still open while its microphone thread still runs. Left to the
+/// thread-local's destructor, the join would happen after Windows has ended that thread (a panic on exit).
+pub fn shutdown() {
+    if let Some(mut v) = VOICE.with(|v| v.borrow_mut().take()) {
+        v.recording.store(false, Ordering::Relaxed);
+        v.timer = None;
+        v.preview_timer = None;
+        v.preview = None;
+        if let Some(w) = v.wav.take() {
+            let _ = std::fs::remove_file(w);
+        }
+        drop(v.mic.take());
+    }
+}
+
 fn use_recording(ui: &MainWindow, shared: &Arc<Shared>) {
     preview_ended(ui);
     let Some(take) = VOICE.with(|v| v.borrow().as_ref().and_then(|v| v.take.clone())) else { return };
@@ -753,6 +898,17 @@ mod tests {
         let input = tone_at(-20.0, 1.0);
         let out = run(&mut c, &input);
         assert!((rms_dbfs(&out) - (rms_dbfs(&input) - 6.02)).abs() < 0.1);
+    }
+
+    #[test]
+    fn a_missing_microphone_falls_back_to_the_default() {
+        let list = vec![capture::Device { id: "a".into(), name: "A".into() }];
+        assert_eq!(resolve_mic("a", Some(&list)), "a");
+        assert_eq!(resolve_mic("gone", Some(&list)), "");
+        assert_eq!(resolve_mic("default", Some(&list)), "");
+        assert_eq!(resolve_mic("", Some(&list)), "");
+        // no list (this system cannot list devices): the saved id is tried as it is
+        assert_eq!(resolve_mic("a", None), "a");
     }
 
     #[test]

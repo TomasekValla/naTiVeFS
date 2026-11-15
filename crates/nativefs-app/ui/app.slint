@@ -1,4 +1,5 @@
 import { QueueMetrics } from "common.slint";
+import { DeviceItem } from "camera.slint";
 import { RecentItem, QueueRow, FileProgressRow, BatchRow, MetricTile, PillState, LibInfo, BrowserRow, CheckStat, CheckStatPair, CheckStream, Palette, Look, GlassCard, Ico, StatusChip, ModeCell, Pill, Eyebrow, TextField, ActionBtn, SmallBtn, Seg, SettingCard, Explain, ClampExplain, InfoCard, XMark, EmojiBtn, RecentRow, IconBtn, SettingRow, LibRow, CheckLabel, CheckStatCell, CheckGrid, CheckStreamCard, ProbeBtn, DashedOutline, QueueFileRow, CopyPill, PillPair, LinkBox, BatchFileRow, MetricCol, StatsTile, NumBox, Anim } from "common.slint";
 // re-exported for the Rust side (structs used in callbacks / models, globals set from Rust)
 export { ReaderWindow, ReaderBlock, ReaderRow, ReaderChunk } from "reader.slint";
@@ -31,6 +32,89 @@ component VoiceBtn inherits Rectangle {
         vertical-alignment: center;
     }
     ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+}
+
+// the voice recorder's microphone picker (web `.voice-mic`, a compact select): the chosen device, a list below
+component VoiceMicSelect inherits Rectangle {
+    in property <[DeviceItem]> items;
+    // the chosen id ("" = system default) and its name
+    in property <string> current;
+    in property <string> current-name;
+    // debug builds: the list is open from the start (screenshots)
+    in property <bool> open-at-start;
+    callback picked(string);
+    height: 23px;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: #ffffff24;
+    background: ta.has-hover ? #ffffff1f : #ffffff14;
+    animate background { duration: Anim.fast; }
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 9px;
+        spacing: 6px;
+        Text { horizontal-stretch: 1; text: root.current-name; font-size: 11.52px; font-weight: 600; color: #ffffff; vertical-alignment: center; overflow: elide; }
+        Path {
+            width: 10px;
+            height: 10px;
+            y: (parent.height - 10px) / 2;
+            viewbox-width: 10;
+            viewbox-height: 10;
+            commands: "M 1 3 L 5 7 L 9 3";
+            stroke: #ffffffb8;
+            stroke-width: 1.5px;
+        }
+    }
+    ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { pop.show(); } }
+    // (not from `init`: showing a popup while the element is being created recurses)
+    property <bool> opened-at-start;
+    Timer {
+        interval: 400ms;
+        running: root.open-at-start && !root.opened-at-start;
+        triggered => {
+            root.opened-at-start = true;
+            pop.show();
+        }
+    }
+    pop := PopupWindow {
+        x: 0px;
+        y: root.height + 4px;
+        width: root.width;
+        height: min(lst.preferred-height, 206px);
+        Rectangle {
+            border-radius: 12px;
+            background: #14111ff2;
+            border-width: 1px;
+            border-color: #ffffff24;
+            drop-shadow-blur: 20px;
+            drop-shadow-offset-y: 8px;
+            drop-shadow-color: #000000a0;
+            clip: true;
+            Flickable {
+                viewport-height: lst.preferred-height;
+                lst := VerticalLayout {
+                    padding: 4px;
+                    for d in root.items : Rectangle {
+                        height: 28px;
+                        border-radius: 8px;
+                        background: dta.has-hover ? #ffffff14 : transparent;
+                        Text {
+                            x: 9px;
+                            width: parent.width - 18px;
+                            height: parent.height;
+                            text: d.name;
+                            font-size: 11.52px;
+                            font-weight: 600;
+                            color: d.id == root.current ? Palette.dot-good : #ffffff;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        dta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.picked(d.id); } }
+                    }
+                }
+            }
+        }
+    }
 }
 
 // one browser in settings > Links (a radio row)
@@ -391,6 +475,12 @@ export component MainWindow inherits Window {
     in property <float> voice-meter;
     in property <bool> voice-hot;
     callback voice-input-changed(float, bool);
+    // the microphone picker: "System default" + the devices (empty = cannot list), the chosen id and its name
+    in property <[DeviceItem]> voice-mics;
+    in property <string> voice-mic;
+    in property <string> voice-mic-name;
+    in property <bool> voice-mic-menu;
+    callback voice-mic-picked(string);
     // 0 start, 1 stop, 2 use, 3 discard & retry, 4 cancel, 5 listen / stop listening
     callback voice(int);
     callback voice-format-picked(int);
@@ -813,7 +903,7 @@ export component MainWindow inherits Window {
                             // drop zone (hidden in Text mode)
                             if root.mode != 3 : Rectangle {
                                 property <bool> lit: dz.has-hover || (root.drop-hover && !root.drop-local);
-                                height: root.voice-state == 4 ? 420px : root.voice-state == 2 || root.voice-state == 3 ? 460px : root.voice-state > 0 ? 380px : root.capture-menu ? 300px : Look.compact ? 150px : 182px;
+                                height: root.voice-state == 4 ? 420px : root.voice-state == 2 || root.voice-state == 3 ? 460px + (root.voice-state == 2 && root.voice-mics.length > 2 ? 39px : 0px) : root.voice-state > 0 ? 380px : root.capture-menu ? 300px : Look.compact ? 150px : 182px;
                                 animate height { duration: 220ms; easing: ease-out; }
                                 border-radius: 22px;
                                 background: self.lit ? #2fffc408 : Palette.glass;
@@ -918,6 +1008,24 @@ export component MainWindow inherits Window {
                                                     enabled: root.voice-state == 4;
                                                     mouse-cursor: root.voice-state == 4 ? MouseCursor.pointer : MouseCursor.default;
                                                     clicked => { root.voice-seek(clamp(self.mouse-x / self.width, 0, 1)); }
+                                                }
+                                            }
+                                        }
+                                        // microphone picker (web `.voice-mic-row`): before recording, when there is a choice
+                                        if (root.voice-state == 1 || root.voice-state == 2) && root.voice-mics.length > 2 : HorizontalLayout {
+                                            alignment: center;
+                                            HorizontalLayout {
+                                                width: min(280px, parent.width);
+                                                height: 23px;
+                                                spacing: 9px;
+                                                Text { text: "Microphone"; font-size: 11.52px; font-weight: 600; color: #ffffffb8; vertical-alignment: center; }
+                                                VoiceMicSelect {
+                                                    horizontal-stretch: 1;
+                                                    items: root.voice-mics;
+                                                    current: root.voice-mic;
+                                                    current-name: root.voice-mic-name;
+                                                    open-at-start: root.voice-mic-menu;
+                                                    picked(id) => { root.voice-mic-picked(id); }
                                                 }
                                             }
                                         }

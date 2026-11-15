@@ -33,7 +33,8 @@ Debug builds only:
 | `NATIVEFS_CAMERA=photo\|video` | Opens the camera window. |
 | `NATIVEFS_CAMERA_AUTO=<s>` | Takes the photo / records `<s>` seconds by itself. |
 | `NATIVEFS_VOICE=<s>[,listen]` | Records a voice note for `<s>` seconds and uses it (or plays it back). |
-| `NATIVEFS_VOICE_UI=1` | Shows the recorder's ready state with its level controls, without opening the microphone. |
+| `NATIVEFS_VOICE_UI=1\|menu` | Shows the recorder's ready state with its level controls and a made-up microphone list, without opening the microphone (`menu` also opens the microphone picker). |
+| `NATIVEFS_VOICE_MIC=<n>[,<n>...]` | Once the recorder has listed the microphones, picks entry `n` of its picker (0 = System default), one every 3 s. |
 | `NATIVEFS_VOICE_PLAYER=1` | Every local audio file opens in the voice note player. |
 | `NATIVEFS_AUDIO_MUTE=1` | Audio windows, the voice player and the recorder's preview play muted. |
 | `NATIVEFS_AUDIO_NOPLAY=1` | Audio windows and the voice player open without starting playback. |
