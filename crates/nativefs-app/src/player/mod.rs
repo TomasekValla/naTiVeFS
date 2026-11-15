@@ -1206,7 +1206,7 @@ fn wire(shared: &Arc<Shared>, p: &Rc<RefCell<Player>>) {
             }
         }));
     }
-    windows::zoomable(&mut hooks, &w, &shared, |c| &mut c.player_zoom);
+    windows::zoomable(&mut hooks, &w, shared, |c| &mut c.player_zoom);
     {
         let (shared, weak) = (shared.clone(), w.as_weak());
         w.on_zoom_step(move |dir| {

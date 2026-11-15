@@ -127,6 +127,8 @@ fn connect_and_write(msg: &Message) -> io::Result<Stream> {
     if *msg != Message::Ping {
         use interprocess::local_socket::traits::StreamCommon;
         if let Some(pid) = stream.peer_creds().ok().and_then(|c| c.pid()) {
+            // u32 on Windows, pid_t elsewhere
+            #[allow(clippy::unnecessary_cast)]
             allow_foreground_for(pid as u32);
         }
     }
