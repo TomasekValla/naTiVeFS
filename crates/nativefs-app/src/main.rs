@@ -27,6 +27,7 @@ mod reader_ui;
 mod thumbs;
 mod tray;
 mod media_keys;
+mod modal_loop;
 mod updater;
 mod upload_ui;
 mod voice;
@@ -1449,11 +1450,21 @@ fn on_window_event(ui: &MainWindow, shared: &Arc<Shared>, w: &slint::Window, ev:
         // Windows reports minimizing as a 0x0 resize rather than `Occluded`
         E::Resized(size) => {
             set_visible(ui, shared, size.width > 0 && size.height > 0 && shared.main_shown.load(Ordering::Relaxed));
-            // the cards' places for the new width, before Slint lays out and draws the first frame at that size
-            layout::apply(ui, size.width as f32 / ui.window().scale_factor());
+            // animations, timers and `changed` handlers keep running while the frame is dragged (Windows)
+            modal_loop::attach(ui.window());
             // the first resize comes right after winit created the window (before that there is no system scale
-            // to multiply); afterwards this is a no-op while the scale factor already matches
+            // to multiply); afterwards this is a no-op while the scale factor already matches. It lays the cards out
+            // for Slint's window size, which is still the old one here (Slint takes the new size after this hook), so
+            // it goes first and the new width's layout below has the last word.
             apply_zoom(ui, shared);
+            let sf = ui.window().scale_factor();
+            // the glass inside the cards lines up with the page background at this size right away (the `changed
+            // width` handler would only run after Slint's next update step)
+            let look = ui.global::<Look>();
+            look.set_win_w(size.width as f32 / sf);
+            look.set_win_h(size.height as f32 / sf);
+            // the cards' places for the new width, before Slint lays out and draws the first frame at that size
+            layout::apply(ui, size.width as f32 / sf);
             EventResult::Propagate
         }
         // drag & drop of files / folders anywhere on the window (the web: on the drop zone)

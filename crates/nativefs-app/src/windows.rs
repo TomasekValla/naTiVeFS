@@ -225,6 +225,8 @@ pub fn attach(window: &slint::Window, hooks: Hooks) {
                 EventResult::Propagate
             }
             E::Resized(size) => {
+                // animations and timers keep running while the frame is dragged (Windows)
+                crate::modal_loop::attach(w);
                 let now = size.width > 0 && size.height > 0;
                 if visible.replace(now) != now {
                     (hooks.visible)(now);

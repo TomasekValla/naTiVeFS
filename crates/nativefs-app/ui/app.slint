@@ -69,7 +69,9 @@ component Slot inherits Rectangle {
     in property <duration> glide;
     in property <bool> pulse;
     opacity: root.shown ? 1 : 0;
-    animate opacity { duration: root.glide > 0ms ? Anim.fade : 0ms; easing: ease-out; }
+    // a card that a layout switch shows fades in; one it hides goes at once (like the web): fading out while it
+    // glided to its new place, it slid under the other cards and showed through them
+    animate opacity { duration: root.glide > 0ms && root.shown ? Anim.fade : 0ms; easing: ease-out; }
     visible: self.opacity > 0;
     @children
     Rectangle {
