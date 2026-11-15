@@ -34,6 +34,11 @@ export struct QueueRow {
     ext-label: string,
     size: string,
     anon: bool,
+    // an audio file: a second line "Upload as" Audio / Voice note (web `.file-entry.two-line`)
+    audio: bool,
+    voice: bool,
+    // a recording of the voice recorder: always a voice note
+    recorded: bool,
 }
 
 // Per-file progress row of a multi-file upload (`.per-file-row`).
@@ -1003,17 +1008,48 @@ export component DashedOutline inherits Rectangle {
     for i in floor(root.height / 14px) + 1 : Rectangle { x: root.width - 1px; y: i * 14px; width: 1px; height: min(6px, root.height - i * 14px); background: root.dash; }
 }
 
-// `.file-row`: [EXT] name, rename, anonymize, size, remove
+// one choice of the "Upload as" pill switch (web `.file-kind button`)
+component KindBtn inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    in property <bool> enabled: true;
+    callback clicked();
+    width: t.preferred-width + 20px;
+    background: root.on ? Palette.brand : transparent;
+    t := Text {
+        text: root.label;
+        font-size: 11.2px;
+        font-weight: 700;
+        color: root.on ? Palette.on-brand : (ta.has-hover && root.enabled ? Palette.text : Palette.dim);
+        animate color { duration: Anim.fast; }
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ta := TouchArea { enabled: root.enabled; mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+}
+
+// Height of a queue row: one line, or two for audio files (web: 9 px padding, 5 px under the first line of a
+// two-line row, the second line 0 12 9 54 around a 21.5 px pill switch)
+export global QueueMetrics {
+    out property <length> row: 41px;
+    out property <length> two-line: 67.5px;
+}
+
+// `.file-row`: [EXT] name, rename, anonymize, size, remove; audio files get a second line
+// "UPLOAD AS  [Audio | Voice note]" (`.file-entry.two-line` / `.file-row-sub`)
 export component QueueFileRow inherits Rectangle {
     in property <QueueRow> entry;
     in property <bool> editing;
     in property <bool> locked;
+    // the window is narrower than 420 px: the second line starts at the left (web media query)
+    in property <bool> narrow;
     callback rename-clicked();
     callback rename-commit(string);
     callback rename-cancel();
     callback anon-clicked();
     callback remove-clicked();
-    height: 41px;
+    callback voice-picked(bool);
+    height: root.entry.audio ? QueueMetrics.two-line : QueueMetrics.row;
     border-radius: 13px;
     background: Palette.glass;
     border-width: root.entry.anon ? 0px : 1px;
@@ -1024,7 +1060,52 @@ export component QueueFileRow inherits Rectangle {
         clip: true;
         DashedOutline { width: root.width; height: root.height; }
     }
+    if root.entry.audio : HorizontalLayout {
+        x: 0px;
+        y: 1px + 9px + 21px + 5px;
+        height: root.height - self.y - 1px;
+        padding-left: root.narrow ? 12px : 54px;
+        padding-right: 12px;
+        padding-bottom: 9px;
+        spacing: 8px;
+        alignment: start;
+        Text {
+            text: "UPLOAD AS";
+            font-size: 10.88px;
+            font-weight: 700;
+            letter-spacing: 0.435px;
+            color: Palette.dim;
+            vertical-alignment: center;
+        }
+        if root.entry.recorded : Text {
+            text: "Voice note (recorded here)";
+            font-size: 11.2px;
+            font-weight: 700;
+            color: Palette.good;
+            vertical-alignment: center;
+        }
+        if !root.entry.recorded : VerticalLayout {
+            alignment: center;
+            Rectangle {
+                height: 21.5px;
+                width: kinds.preferred-width + 2px;
+                border-radius: self.height / 2;
+                border-width: 1px;
+                border-color: Palette.border;
+                clip: true;
+                kinds := HorizontalLayout {
+                    x: 1px;
+                    y: 1px;
+                    height: parent.height - 2px;
+                    KindBtn { label: "Audio"; on: !root.entry.voice; enabled: !root.locked; clicked => { root.voice-picked(false); } }
+                    KindBtn { label: "Voice note"; on: root.entry.voice; enabled: !root.locked; clicked => { root.voice-picked(true); } }
+                }
+            }
+        }
+    }
     HorizontalLayout {
+        y: 0px;
+        height: QueueMetrics.row - (root.entry.audio ? 4px : 0px);
         padding-left: 12px;
         padding-right: 12px;
         spacing: 8px;

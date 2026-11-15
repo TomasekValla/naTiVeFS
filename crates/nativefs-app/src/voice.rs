@@ -407,8 +407,12 @@ fn use_recording(ui: &MainWindow, shared: &Arc<Shared>) {
             let Some(ui) = weak.upgrade() else { return };
             match result {
                 Ok(path) => {
-                    close(&ui);
-                    upload_ui::add_voice_note(&ui, path);
+                    if upload_ui::add_voice_note(&ui, path) {
+                        close(&ui);
+                    } else {
+                        // the recording stays in the recorder (and on disk) instead of vanishing silently
+                        status(&ui, 4, "Not added: wait until the running upload has finished, then use it again.", true);
+                    }
                 }
                 Err(e) => status(&ui, 4, &format!("Encoding failed: {e}"), true),
             }

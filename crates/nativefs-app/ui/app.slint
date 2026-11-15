@@ -1,3 +1,4 @@
+import { QueueMetrics } from "common.slint";
 import { RecentItem, QueueRow, FileProgressRow, BatchRow, MetricTile, PillState, LibInfo, BrowserRow, CheckStat, CheckStatPair, CheckStream, Palette, Look, GlassCard, Ico, StatusChip, ModeCell, Pill, Eyebrow, TextField, ActionBtn, SmallBtn, Seg, SettingCard, Explain, ClampExplain, InfoCard, XMark, EmojiBtn, RecentRow, IconBtn, SettingRow, LibRow, CheckLabel, CheckStatCell, CheckGrid, CheckStreamCard, ProbeBtn, DashedOutline, QueueFileRow, CopyPill, PillPair, LinkBox, BatchFileRow, MetricCol, StatsTile, NumBox, Anim } from "common.slint";
 // re-exported for the Rust side (structs used in callbacks / models, globals set from Rust)
 export { ReaderWindow, ReaderBlock, ReaderRow } from "reader.slint";
@@ -403,6 +404,10 @@ export component MainWindow inherits Window {
     callback pick-local();
     callback queue-rename(int, string);
     callback queue-anon(int);
+    // an audio file in the list: upload it as a voice note (true) or as a normal audio file
+    callback queue-voice(int, bool);
+    // how many rows of the list are two-line audio rows (their height differs)
+    in property <int> queue-audio-rows;
     callback queue-remove(int);
     callback queue-clear();
     callback start-upload();
@@ -1145,7 +1150,7 @@ export component MainWindow inherits Window {
                                     }
                                 }
                                 queue-view := Rectangle {
-                                    property <length> list-h: root.queue.length * 41px + max(0, root.queue.length - 1) * 4px;
+                                    property <length> list-h: root.queue.length * QueueMetrics.row + root.queue-audio-rows * (QueueMetrics.two-line - QueueMetrics.row) + max(0, root.queue.length - 1) * 4px;
                                     height: min(180px, self.list-h);
                                     clip: true;
                                     TouchArea {
@@ -1173,7 +1178,9 @@ export component MainWindow inherits Window {
                                                 rename-clicked => { root.editing-index = i; }
                                                 rename-commit(t) => { root.editing-index = -1; root.queue-rename(i, t); }
                                                 rename-cancel => { root.editing-index = -1; }
+                                                narrow: root.width < 420px;
                                                 anon-clicked => { root.editing-index = -1; root.queue-anon(i); }
+                                                voice-picked(on) => { root.queue-voice(i, on); }
                                                 remove-clicked => { root.editing-index = -1; root.queue-remove(i); }
                                             }
                                         }

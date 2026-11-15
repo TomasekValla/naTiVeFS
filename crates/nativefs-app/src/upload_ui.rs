@@ -50,6 +50,8 @@ struct UiState {
     paused_before_cancel: bool,
     stats_timer: Option<slint::Timer>,
     chunk_msg_timer: Option<slint::Timer>,
+    /// Files the voice recorder made: always voice notes (no "Upload as" choice).
+    recorded: Vec<PathBuf>,
 }
 
 thread_local! {
@@ -81,19 +83,33 @@ fn shown_base(f: &UploadFile) -> String {
     }
 }
 
+/// Audio the web offers "Upload as: Audio / Voice note" for (`isAudioFile`: the MIME type or these extensions).
+fn is_audio(f: &UploadFile) -> bool {
+    const EXTS: [&str; 14] = ["mp3", "ogg", "oga", "opus", "flac", "wav", "m4a", "aac", "wma", "aif", "aiff", "weba", "mka", "amr"];
+    let ext = f.ext.trim_start_matches('.').to_ascii_lowercase();
+    f.mime.starts_with("audio/") || EXTS.contains(&ext.as_str())
+}
+
 pub fn push_queue(ui: &MainWindow) {
     with_state(|s| {
         let rows: Vec<QueueRow> = s
             .queue
             .iter()
-            .map(|f| QueueRow {
-                base: shown_base(f).into(),
-                ext_label: ext_label(&f.ext).into(),
-                size: fmt_bytes(f.size).into(),
-                anon: f.anon_name.is_some(),
+            .map(|f| {
+                let recorded = s.recorded.contains(&f.path);
+                QueueRow {
+                    base: shown_base(f).into(),
+                    ext_label: ext_label(&f.ext).into(),
+                    size: fmt_bytes(f.size).into(),
+                    anon: f.anon_name.is_some(),
+                    audio: recorded || is_audio(f),
+                    voice: f.voice_note,
+                    recorded,
+                }
             })
             .collect();
         let total: u64 = s.queue.iter().map(|f| f.size).sum();
+        ui.set_queue_audio_rows(rows.iter().filter(|r| r.audio).count() as i32);
         ui.set_queue(ModelRc::new(VecModel::from(rows)));
         ui.set_queue_total(format!("Total: {}", fmt_bytes(total)).into());
     });
@@ -105,7 +121,8 @@ pub fn busy() -> bool {
     with_state(|s| s.run.is_some() || !s.queue.is_empty())
 }
 
-pub fn add_paths(ui: &MainWindow, paths: Vec<PathBuf>) {
+/// Returns `false` when the files were not queued because an upload is running (the web locks the list then).
+pub fn add_paths(ui: &MainWindow, paths: Vec<PathBuf>) -> bool {
     let mut errors = Vec::new();
     let mut added = Vec::new();
     for p in paths {
@@ -122,18 +139,48 @@ pub fn add_paths(ui: &MainWindow, paths: Vec<PathBuf>) {
     }
     if with_state(|s| s.run.is_some()) {
         // the web locks the file list while uploading
-        return;
+        return false;
     }
     with_state(|s| s.queue.extend(added));
     ui.set_editing_index(-1);
     push_queue(ui);
     ui.set_upload_error(errors.join("\n").into());
+    true
 }
 
-/// A recording made with the voice recorder: queued like any file, but the server is told it is a voice note.
-pub fn add_voice_note(ui: &MainWindow, path: PathBuf) {
-    add_paths(ui, vec![path.clone()]);
-    with_state(|s| s.queue.iter_mut().filter(|f| f.path == path).for_each(|f| f.voice_note = true));
+/// A recording made with the voice recorder: queued like any file, but always as a voice note. Returns `false`
+/// when it could not be queued (an upload is running, or the file cannot be read); the caller says so.
+pub fn add_voice_note(ui: &MainWindow, path: PathBuf) -> bool {
+    if with_state(|s| s.run.is_some()) {
+        return false;
+    }
+    let mut file = match inspect(&path, None) {
+        Ok(f) => f,
+        Err(r) => {
+            ui.set_upload_error(r.to_string().into());
+            return false;
+        }
+    };
+    file.voice_note = true;
+    with_state(|s| {
+        s.recorded.push(path);
+        s.queue.push(file);
+    });
+    ui.set_editing_index(-1);
+    push_queue(ui);
+    ui.set_upload_error("".into());
+    true
+}
+
+/// "Upload as": Audio or Voice note for one audio file of the list (recordings stay voice notes).
+pub fn queue_voice(ui: &MainWindow, i: usize, on: bool) {
+    with_state(|s| {
+        let recorded = s.queue.get(i).is_some_and(|f| s.recorded.contains(&f.path));
+        if let Some(f) = s.queue.get_mut(i).filter(|_| !recorded && s.run.is_none()) {
+            f.voice_note = on;
+        }
+    });
+    push_queue(ui);
 }
 
 pub fn queue_rename(ui: &MainWindow, i: usize, text: &str) {
@@ -166,7 +213,10 @@ pub fn queue_remove(ui: &MainWindow, i: usize) {
 }
 
 pub fn queue_clear(ui: &MainWindow) {
-    with_state(|s| s.queue.clear());
+    with_state(|s| {
+        s.queue.clear();
+        s.recorded.clear();
+    });
     ui.set_queue_scroll(0.0);
     push_queue(ui);
     ui.set_upload_error("".into());

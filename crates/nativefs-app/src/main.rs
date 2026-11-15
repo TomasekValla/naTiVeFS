@@ -2007,6 +2007,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     {
         let weak = weak.clone();
+        ui.on_queue_voice(move |i, on| {
+            if let Some(ui) = weak.upgrade() {
+                upload_ui::queue_voice(&ui, i.max(0) as usize, on);
+            }
+        });
+    }
+    {
+        let weak = weak.clone();
         ui.on_queue_anon(move |i| {
             if let Some(ui) = weak.upgrade() {
                 upload_ui::queue_anon(&ui, i.max(0) as usize);
