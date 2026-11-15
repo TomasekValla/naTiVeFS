@@ -104,11 +104,11 @@ component LinkCards inherits VerticalLayout {
     }
     if root.stacked : VerticalLayout {
         spacing: 10px;
-        InfoCard { height: 54px; icon: @image-url("../../../assets/img/github.png"); title: "View source on GitHub"; sub: "Don't trust, verify"; clicked => { root.open-link("https://github.com/TomasekValla/TVFS"); } }
-        InfoCard { height: 54px; icon: @image-url("../../../assets/img/paper.png"); title: "View official whitepaper"; sub: ""; clicked => { root.open-link("https://files.tomasekvalla.cz/whitepaper.pdf"); } }
+        InfoCard { height: Look.compact ? 46px : 54px; icon: @image-url("../../../assets/img/github.png"); title: "View source on GitHub"; sub: "Don't trust, verify"; clicked => { root.open-link("https://github.com/TomasekValla/TVFS"); } }
+        InfoCard { height: Look.compact ? 46px : 54px; icon: @image-url("../../../assets/img/paper.png"); title: "View official whitepaper"; sub: ""; clicked => { root.open-link("https://files.tomasekvalla.cz/whitepaper.pdf"); } }
     }
     if root.show-check : VerticalLayout {
-        InfoCard { height: 54px; icon: @image-url("../../../assets/img/tvfs-logo.png"); title: "Check files"; sub: ""; clicked => { root.check(); } }
+        InfoCard { height: Look.compact ? 46px : 54px; icon: @image-url("../../../assets/img/tvfs-logo.png"); title: "Check files"; sub: ""; clicked => { root.check(); } }
     }
 }
 
@@ -221,7 +221,7 @@ export component MainWindow inherits Window {
     in property <string> queue-total;
     // nested scroll of the queue list (max 180 px like the web), driven by the wheel from Rust
     in-out property <length> queue-scroll: 0px;
-    property <length> queue-max: max(0px, root.queue.length * 41px + max(0, root.queue.length - 1) * 4px - 180px);
+    property <length> queue-max: max(0px, root.queue.length * QueueMetrics.row + root.queue-audio-rows * (QueueMetrics.two-line - QueueMetrics.row) + max(0, root.queue.length - 1) * 4px - 180px);
     // textarea of the Text mode: scroll position and how far it can go
     in-out property <length> text-scroll: 0px;
     in-out property <length> text-max: 0px;
@@ -480,11 +480,20 @@ export component MainWindow inherits Window {
     // the settings card: a page of its own below 1200 px, the left column above
     in property <length> set-x: 40px;
     in property <length> set-w: 440px;
-    // side cards use the web's `.side-panel` padding (32 px 28 px) + the 1 px border
-    property <length> side-pad-v: root.lay == 0 ? 41px : 33px;
-    property <length> side-pad-h: root.lay == 0 ? 41px : 29px;
-    property <length> inner-w: root.mid-w - 82px;
-    property <length> set-inner-w: root.set-w - (root.lay == 2 ? 58px : 82px);
+    // 520 px or narrower (Rust, with the geometry above)
+    in property <bool> narrow;
+    // card padding + the 1 px border: the web's .glass-card 40 px, compact 24 px (20 px 14 px at 520 px and below)
+    property <length> card-pad-v: Look.compact ? (root.narrow ? 21px : 25px) : 41px;
+    property <length> card-pad-h: Look.compact ? (root.narrow ? 15px : 25px) : 41px;
+    // the space between the sections of a card (web .glass-card gap 24 px, compact 14 px)
+    property <length> card-gap: Look.compact ? 14px : 24px;
+    // side cards use the web's `.side-panel` padding (32 px 28 px, compact 20 px) + the 1 px border
+    property <length> side-pad-v: root.lay == 0 ? root.card-pad-v : Look.compact ? 21px : 33px;
+    property <length> side-pad-h: root.lay == 0 ? root.card-pad-h : Look.compact ? 21px : 29px;
+    property <length> inner-w: root.mid-w - 2 * root.card-pad-h;
+    property <length> set-pad-v: root.lay == 2 ? root.side-pad-v : root.card-pad-v;
+    property <length> set-pad-h: root.lay == 2 ? root.side-pad-h : root.card-pad-h;
+    property <length> set-inner-w: root.set-w - 2 * root.set-pad-h;
     // Settings is shown (Rust: background fps readout, link router refresh)
     out property <bool> settings-shown: root.page == 1 || root.lay == 2;
     // cards glide while this is non-zero (a layout switch); a resize within one layout moves them at once
@@ -498,7 +507,7 @@ export component MainWindow inherits Window {
     // ── scrolling: wheel input comes from Rust (winit), animated here ─────
     // the cards' places from the top: 40 px above and below the page, 18 px between stacked cards
     property <length> page-pad: 40px;
-    property <length> stack-gap: 18px;
+    property <length> stack-gap: Look.compact ? 10px : 18px;
     property <length> recent-y: root.lay == 0 ? root.page-pad + card-main.height + root.stack-gap : root.page-pad;
     property <length> info-y: root.page-pad + card-main.height + root.stack-gap + (root.lay == 0 ? card-recent.height + root.stack-gap : 0px);
     property <length> check-y: root.lay == 0 ? root.page-pad : root.recent-y + card-recent.height + root.stack-gap;
@@ -689,8 +698,11 @@ export component MainWindow inherits Window {
                     card-main := GlassCard {
                         height: lay1.preferred-height;
                         lay1 := VerticalLayout {
-                            padding: 41px;
-                            spacing: 24px;
+                            padding-top: root.card-pad-v;
+                            padding-bottom: root.card-pad-v;
+                            padding-left: root.card-pad-h;
+                            padding-right: root.card-pad-h;
+                            spacing: root.card-gap;
 
                             if !root.logged-in : Rectangle {
                                 height: lay-w.preferred-height;
@@ -699,10 +711,10 @@ export component MainWindow inherits Window {
                                 border-color: #ffaa2859;
                                 background: #ff9b281c;
                                 lay-w := VerticalLayout {
-                                    padding-top: 20px;
-                                    padding-bottom: 20px;
-                                    padding-left: 24px;
-                                    padding-right: 24px;
+                                    padding-top: Look.compact ? 14px : 20px;
+                                    padding-bottom: Look.compact ? 14px : 20px;
+                                    padding-left: Look.compact ? 18px : 24px;
+                                    padding-right: Look.compact ? 18px : 24px;
                                     spacing: 10px;
                                     Text { text: "New to TVFS?"; color: #ffd27a; font-size: 16px; font-weight: 700; letter-spacing: -0.16px; }
                                     Text { text: "This site is a private and unlisted part of the TomasekValla network. Uploading to the network is only possible with a special access token given only to me and selected people."; color: #ffd278d9; font-size: 12.8px; wrap: word-wrap; }
@@ -714,14 +726,14 @@ export component MainWindow inherits Window {
 
                             // brand card
                             Rectangle {
-                                height: 94px;
+                                height: Look.compact ? 82px : 94px;
                                 border-radius: 22px;
                                 background: Palette.glass;
                                 border-width: 1px;
                                 border-color: Palette.border;
                                 HorizontalLayout {
-                                    padding-left: 24px;
-                                    padding-right: 24px;
+                                    padding-left: Look.compact ? 18px : 24px;
+                                    padding-right: Look.compact ? 18px : 24px;
                                     VerticalLayout {
                                         alignment: center;
                                         spacing: 5px;
@@ -773,7 +785,7 @@ export component MainWindow inherits Window {
 
                             // mode toggle (2 x 2)
                             VerticalLayout {
-                                padding-bottom: 14px;
+                                padding-bottom: Look.compact ? 8px : 14px;
                                 Rectangle {
                                     height: 76px;
                                     border-radius: 16px;
@@ -797,7 +809,7 @@ export component MainWindow inherits Window {
                             // drop zone (hidden in Text mode)
                             if root.mode != 3 : Rectangle {
                                 property <bool> lit: dz.has-hover || (root.drop-hover && !root.drop-local);
-                                height: root.voice-state == 4 ? 420px : root.voice-state == 2 || root.voice-state == 3 ? 460px : root.voice-state > 0 ? 380px : root.capture-menu ? 300px : 182px;
+                                height: root.voice-state == 4 ? 420px : root.voice-state == 2 || root.voice-state == 3 ? 460px : root.voice-state > 0 ? 380px : root.capture-menu ? 300px : Look.compact ? 150px : 182px;
                                 animate height { duration: 220ms; easing: ease-out; }
                                 border-radius: 22px;
                                 background: self.lit ? #2fffc408 : Palette.glass;
@@ -1288,7 +1300,7 @@ export component MainWindow inherits Window {
 
                             // options
                             VerticalLayout {
-                                spacing: 12px;
+                                spacing: Look.compact ? 8px : 12px;
                                 Eyebrow { text: "OPTIONS"; }
                                 VerticalLayout {
                                     spacing: 8px;
@@ -1312,7 +1324,7 @@ export component MainWindow inherits Window {
 
                             // access
                             VerticalLayout {
-                                spacing: 12px;
+                                spacing: Look.compact ? 8px : 12px;
                                 Eyebrow { text: "ACCESS"; }
                                 if !root.logged-in : VerticalLayout {
                                     spacing: 10px;
@@ -1662,7 +1674,7 @@ export component MainWindow inherits Window {
                                 vertical-alignment: center;
                             }
                             VerticalLayout {
-                                spacing: 10px;
+                                spacing: Look.compact ? 6px : 10px;
                                 for item in root.recent : RecentRow {
                                     item: item;
                                     copied-kind: root.recent-copied-id == item.id ? root.recent-copied-kind : -1;
@@ -1724,8 +1736,11 @@ export component MainWindow inherits Window {
                     card-info := GlassCard {
                         height: lay3.preferred-height;
                         lay3 := VerticalLayout {
-                            padding: 41px;
-                            spacing: 24px;
+                            padding-top: root.card-pad-v;
+                            padding-bottom: root.card-pad-v;
+                            padding-left: root.card-pad-h;
+                            padding-right: root.card-pad-h;
+                            spacing: root.card-gap;
 
                             // the links (in their own card on the right in wider windows)
                             if root.lay == 0 : LinkCards {
@@ -1854,10 +1869,10 @@ export component MainWindow inherits Window {
                     card-links := GlassCard {
                         height: lay-lnk.preferred-height;
                         lay-lnk := VerticalLayout {
-                            padding-top: 25px;
-                            padding-bottom: 25px;
-                            padding-left: 29px;
-                            padding-right: 29px;
+                            padding-top: Look.compact ? 17px : 25px;
+                            padding-bottom: Look.compact ? 17px : 25px;
+                            padding-left: Look.compact ? 21px : 29px;
+                            padding-right: Look.compact ? 21px : 29px;
                             LinkCards {
                                 stacked: true;
                                 show-check: false;
@@ -1882,11 +1897,11 @@ export component MainWindow inherits Window {
                     card-set := GlassCard {
                         height: lay-app.preferred-height;
                         lay-app := VerticalLayout {
-                            padding-top: root.lay == 2 ? 33px : 41px;
-                            padding-bottom: root.lay == 2 ? 33px : 41px;
-                            padding-left: root.lay == 2 ? 29px : 41px;
-                            padding-right: root.lay == 2 ? 29px : 41px;
-                            spacing: 24px;
+                            padding-top: root.set-pad-v;
+                            padding-bottom: root.set-pad-v;
+                            padding-left: root.set-pad-h;
+                            padding-right: root.set-pad-h;
+                            spacing: root.card-gap;
 
                             HorizontalLayout {
                                 spacing: 12px;
@@ -1916,16 +1931,16 @@ export component MainWindow inherits Window {
                             }
 
                             VerticalLayout {
-                                spacing: 12px;
+                                spacing: Look.compact ? 8px : 12px;
                                 Eyebrow { text: "APPEARANCE"; }
                                 SettingCard {
                                     height: lay-a1.preferred-height;
                                     lay-a1 := VerticalLayout {
-                                        padding-top: 16px;
-                                        padding-bottom: 16px;
-                                        padding-left: 18px;
-                                        padding-right: 18px;
-                                        spacing: 8px;
+                                        padding-top: Look.compact ? 11px : 16px;
+                                        padding-bottom: Look.compact ? 11px : 16px;
+                                        padding-left: Look.compact ? 14px : 18px;
+                                        padding-right: Look.compact ? 14px : 18px;
+                                        spacing: Look.compact ? 6px : 8px;
                                         SettingRow {
                                             label: "Theme";
                                             Seg {
@@ -1941,11 +1956,11 @@ export component MainWindow inherits Window {
                                 SettingCard {
                                     height: lay-a2.preferred-height;
                                     lay-a2 := VerticalLayout {
-                                        padding-top: 16px;
-                                        padding-bottom: 16px;
-                                        padding-left: 18px;
-                                        padding-right: 18px;
-                                        spacing: 8px;
+                                        padding-top: Look.compact ? 11px : 16px;
+                                        padding-bottom: Look.compact ? 11px : 16px;
+                                        padding-left: Look.compact ? 14px : 18px;
+                                        padding-right: Look.compact ? 14px : 18px;
+                                        spacing: Look.compact ? 6px : 8px;
                                         SettingRow {
                                             label: "Glass";
                                             Seg {
@@ -1958,14 +1973,56 @@ export component MainWindow inherits Window {
                                         Explain { text: "Frosted glass cards like the web: the cards show the saturated, softened background behind them. Off = flat translucent cards."; }
                                     }
                                 }
+                                // web: Settings > Appearance > Layout (`#layoutSwitch`, `#layoutResetBtn`)
+                                SettingCard {
+                                    height: lay-al.preferred-height;
+                                    lay-al := VerticalLayout {
+                                        padding-top: Look.compact ? 11px : 16px;
+                                        padding-bottom: Look.compact ? 11px : 16px;
+                                        padding-left: Look.compact ? 14px : 18px;
+                                        padding-right: Look.compact ? 14px : 18px;
+                                        spacing: Look.compact ? 6px : 8px;
+                                        SettingRow {
+                                            label: "Layout";
+                                            Seg {
+                                                controlled: true;
+                                                options: ["Normal", "Compact"];
+                                                selected: Look.compact ? 1 : 0;
+                                                picked(i) => { Look.compact = i == 1; root.appearance-changed(); }
+                                            }
+                                        }
+                                        Explain { text: "Compact = less space around and between the cards, so more fits on the screen without scrolling."; }
+                                        // `.layout-reset`: back to the default layout (later also moved cards)
+                                        HorizontalLayout {
+                                            alignment: start;
+                                            Rectangle {
+                                                width: rl.preferred-width + 20px;
+                                                height: rl.preferred-height + 8px;
+                                                border-radius: 8px;
+                                                border-width: 1px;
+                                                border-color: rla.has-hover ? Palette.accent : Palette.border;
+                                                animate border-color { duration: Anim.fast; }
+                                                rl := Text {
+                                                    text: "Reset layout";
+                                                    font-size: 11.84px;
+                                                    font-weight: 700;
+                                                    color: rla.has-hover ? Palette.text : Palette.dim;
+                                                    horizontal-alignment: center;
+                                                    vertical-alignment: center;
+                                                }
+                                                rla := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { Look.compact = false; root.appearance-changed(); } }
+                                            }
+                                        }
+                                    }
+                                }
                                 SettingCard {
                                     height: lay-az.preferred-height;
                                     lay-az := VerticalLayout {
-                                        padding-top: 16px;
-                                        padding-bottom: 16px;
-                                        padding-left: 18px;
-                                        padding-right: 18px;
-                                        spacing: 8px;
+                                        padding-top: Look.compact ? 11px : 16px;
+                                        padding-bottom: Look.compact ? 11px : 16px;
+                                        padding-left: Look.compact ? 14px : 18px;
+                                        padding-right: Look.compact ? 14px : 18px;
+                                        spacing: Look.compact ? 6px : 8px;
                                         SettingRow {
                                             label: "Zoom";
                                             Text {
@@ -2028,11 +2085,11 @@ export component MainWindow inherits Window {
                                 SettingCard {
                                     height: lay-a3.preferred-height;
                                     lay-a3 := VerticalLayout {
-                                        padding-top: 16px;
-                                        padding-bottom: 16px;
-                                        padding-left: 18px;
-                                        padding-right: 18px;
-                                        spacing: 8px;
+                                        padding-top: Look.compact ? 11px : 16px;
+                                        padding-bottom: Look.compact ? 11px : 16px;
+                                        padding-left: Look.compact ? 14px : 18px;
+                                        padding-right: Look.compact ? 14px : 18px;
+                                        spacing: Look.compact ? 6px : 8px;
                                         Text { text: "Background motion"; font-size: 13.12px; font-weight: 700; color: Palette.text; }
                                         HorizontalLayout {
                                             alignment: start;
@@ -2057,11 +2114,11 @@ export component MainWindow inherits Window {
                                 SettingCard {
                                     height: lay-a4.preferred-height;
                                     lay-a4 := VerticalLayout {
-                                        padding-top: 16px;
-                                        padding-bottom: 16px;
-                                        padding-left: 18px;
-                                        padding-right: 18px;
-                                        spacing: 8px;
+                                        padding-top: Look.compact ? 11px : 16px;
+                                        padding-bottom: Look.compact ? 11px : 16px;
+                                        padding-left: Look.compact ? 14px : 18px;
+                                        padding-right: Look.compact ? 14px : 18px;
+                                        spacing: Look.compact ? 6px : 8px;
                                         SettingRow {
                                             label: "Smooth scrolling";
                                             Seg {
@@ -2077,16 +2134,16 @@ export component MainWindow inherits Window {
                             }
 
                             VerticalLayout {
-                                spacing: 12px;
+                                spacing: Look.compact ? 8px : 12px;
                                 Eyebrow { text: "SHARING"; }
                                 SettingCard {
                                     height: lay-s1.preferred-height;
                                     lay-s1 := VerticalLayout {
-                                        padding-top: 16px;
-                                        padding-bottom: 16px;
-                                        padding-left: 18px;
-                                        padding-right: 18px;
-                                        spacing: 8px;
+                                        padding-top: Look.compact ? 11px : 16px;
+                                        padding-bottom: Look.compact ? 11px : 16px;
+                                        padding-left: Look.compact ? 14px : 18px;
+                                        padding-right: Look.compact ? 14px : 18px;
+                                        spacing: Look.compact ? 6px : 8px;
                                         HorizontalLayout {
                                             Text { text: "TVFS Users Only"; font-size: 13.12px; font-weight: 700; color: Palette.text; vertical-alignment: center; }
                                             Rectangle { }
@@ -2103,16 +2160,16 @@ export component MainWindow inherits Window {
                             }
 
                             VerticalLayout {
-                                spacing: 12px;
+                                spacing: Look.compact ? 8px : 12px;
                                 Eyebrow { text: "UPLOADS"; }
                                 SettingCard {
                                     height: lay-s2.preferred-height;
                                     lay-s2 := VerticalLayout {
-                                        padding-top: 16px;
-                                        padding-bottom: 16px;
-                                        padding-left: 18px;
-                                        padding-right: 18px;
-                                        spacing: 8px;
+                                        padding-top: Look.compact ? 11px : 16px;
+                                        padding-bottom: Look.compact ? 11px : 16px;
+                                        padding-left: Look.compact ? 14px : 18px;
+                                        padding-right: Look.compact ? 14px : 18px;
+                                        spacing: Look.compact ? 6px : 8px;
                                         Text { text: "Chunk configuration"; font-size: 13.12px; font-weight: 700; color: Palette.text; }
                                         HorizontalLayout {
                                             alignment: start;
@@ -2160,16 +2217,16 @@ export component MainWindow inherits Window {
                             }
 
                             VerticalLayout {
-                                spacing: 12px;
+                                spacing: Look.compact ? 8px : 12px;
                                 Eyebrow { text: "AUTO COPY"; }
                                 SettingCard {
                                     height: lay-s3.preferred-height;
                                     lay-s3 := VerticalLayout {
-                                        padding-top: 16px;
-                                        padding-bottom: 16px;
-                                        padding-left: 18px;
-                                        padding-right: 18px;
-                                        spacing: 8px;
+                                        padding-top: Look.compact ? 11px : 16px;
+                                        padding-bottom: Look.compact ? 11px : 16px;
+                                        padding-left: Look.compact ? 14px : 18px;
+                                        padding-right: Look.compact ? 14px : 18px;
+                                        spacing: Look.compact ? 6px : 8px;
                                         HorizontalLayout {
                                             Text { text: "Auto copy"; font-size: 13.12px; font-weight: 700; color: Palette.text; vertical-alignment: center; }
                                             Rectangle { }
@@ -2208,16 +2265,16 @@ export component MainWindow inherits Window {
                             }
 
                             VerticalLayout {
-                                spacing: 12px;
+                                spacing: Look.compact ? 8px : 12px;
                                 Eyebrow { text: "BEHAVIOUR"; }
                                 SettingCard {
                                     height: lay-a5.preferred-height;
                                     lay-a5 := VerticalLayout {
-                                        padding-top: 16px;
-                                        padding-bottom: 16px;
-                                        padding-left: 18px;
-                                        padding-right: 18px;
-                                        spacing: 10px;
+                                        padding-top: Look.compact ? 11px : 16px;
+                                        padding-bottom: Look.compact ? 11px : 16px;
+                                        padding-left: Look.compact ? 14px : 18px;
+                                        padding-right: Look.compact ? 14px : 18px;
+                                        spacing: Look.compact ? 8px : 10px;
                                         if root.tray-enabled : VerticalLayout {
                                             spacing: 10px;
                                             HorizontalLayout {
@@ -2275,16 +2332,16 @@ export component MainWindow inherits Window {
                             }
 
                             VerticalLayout {
-                                spacing: 12px;
+                                spacing: Look.compact ? 8px : 12px;
                                 Eyebrow { text: "LINKS"; }
                                 SettingCard {
                                     height: lay-links.preferred-height;
                                     lay-links := VerticalLayout {
-                                        padding-top: 16px;
-                                        padding-bottom: 16px;
-                                        padding-left: 18px;
-                                        padding-right: 18px;
-                                        spacing: 10px;
+                                        padding-top: Look.compact ? 11px : 16px;
+                                        padding-bottom: Look.compact ? 11px : 16px;
+                                        padding-left: Look.compact ? 14px : 18px;
+                                        padding-right: Look.compact ? 14px : 18px;
+                                        spacing: Look.compact ? 8px : 10px;
                                         HorizontalLayout {
                                             spacing: 10px;
                                             Text { text: "Use naTiVeFS as the default browser"; font-size: 13.12px; font-weight: 700; color: Palette.text; vertical-alignment: center; wrap: word-wrap; }
@@ -2320,16 +2377,16 @@ export component MainWindow inherits Window {
                             }
 
                             VerticalLayout {
-                                spacing: 12px;
+                                spacing: Look.compact ? 8px : 12px;
                                 Eyebrow { text: "AI AGENTS"; }
                                 SettingCard {
                                     height: lay-ai.preferred-height;
                                     lay-ai := VerticalLayout {
-                                        padding-top: 16px;
-                                        padding-bottom: 16px;
-                                        padding-left: 18px;
-                                        padding-right: 18px;
-                                        spacing: 10px;
+                                        padding-top: Look.compact ? 11px : 16px;
+                                        padding-bottom: Look.compact ? 11px : 16px;
+                                        padding-left: Look.compact ? 14px : 18px;
+                                        padding-right: Look.compact ? 14px : 18px;
+                                        spacing: Look.compact ? 8px : 10px;
                                         HorizontalLayout {
                                             spacing: 10px;
                                             Text { text: "Onboard your AI agent"; font-size: 13.12px; font-weight: 700; color: Palette.text; vertical-alignment: center; wrap: word-wrap; }
@@ -2341,16 +2398,16 @@ export component MainWindow inherits Window {
                             }
 
                             VerticalLayout {
-                                spacing: 12px;
+                                spacing: Look.compact ? 8px : 12px;
                                 Eyebrow { text: "UPDATES"; }
                                 SettingCard {
                                     height: lay-a6.preferred-height;
                                     lay-a6 := VerticalLayout {
-                                        padding-top: 16px;
-                                        padding-bottom: 16px;
-                                        padding-left: 18px;
-                                        padding-right: 18px;
-                                        spacing: 10px;
+                                        padding-top: Look.compact ? 11px : 16px;
+                                        padding-bottom: Look.compact ? 11px : 16px;
+                                        padding-left: Look.compact ? 14px : 18px;
+                                        padding-right: Look.compact ? 14px : 18px;
+                                        spacing: Look.compact ? 8px : 10px;
                                         VerticalLayout {
                                             spacing: 3px;
                                             Text { text: "naTiVeFS " + root.app-version; font-size: 14.4px; font-weight: 800; color: Palette.text; }
@@ -2404,7 +2461,7 @@ export component MainWindow inherits Window {
                             }
 
                             VerticalLayout {
-                                spacing: 12px;
+                                spacing: Look.compact ? 8px : 12px;
                                 Eyebrow { text: "ABOUT"; }
                                 HorizontalLayout {
                                     spacing: 10px;
@@ -2415,7 +2472,7 @@ export component MainWindow inherits Window {
                             }
 
                             VerticalLayout {
-                                spacing: 12px;
+                                spacing: Look.compact ? 8px : 12px;
                                 Eyebrow { text: "OPEN-SOURCE LIBRARIES"; }
                                 Explain {
                                     opacity: 0.9;
@@ -2453,7 +2510,7 @@ export component MainWindow inherits Window {
                             padding-bottom: root.side-pad-v;
                             padding-left: root.side-pad-h;
                             padding-right: root.side-pad-h;
-                            spacing: 24px;
+                            spacing: root.card-gap;
 
                             VerticalLayout {
                                 spacing: 12px;

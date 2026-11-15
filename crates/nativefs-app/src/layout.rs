@@ -14,6 +14,8 @@ use crate::MainWindow;
 pub const TWO_COLUMNS: f32 = 900.0;
 pub const THREE_COLUMNS: f32 = 1200.0;
 pub const WIDE: f32 = 1800.0;
+/// The web's `max-width: 520px` styles.
+pub const NARROW: f32 = 520.0;
 /// Space left and right of the cards (each side).
 const MARGIN: f32 = 20.0;
 /// The phone column (the web's 440 px).
@@ -33,6 +35,8 @@ pub struct Geometry {
     /// The settings card: a page of its own below 1200 px (560 px wide like the web's settings view at 900+).
     pub set_x: f32,
     pub set_w: f32,
+    /// 520 px or narrower (the web's phone styles, e.g. the compact layout's smaller card padding).
+    pub narrow: bool,
 }
 
 pub fn compute(width: f32) -> Geometry {
@@ -79,7 +83,7 @@ pub fn compute(width: f32) -> Geometry {
         _ => col_w,
     };
     let set_x = if lay == 2 { left_x } else { (width - set_w) / 2.0 };
-    Geometry { lay, big, left_x, left_w, mid_x, mid_w, side_x, side_w, set_x, set_w }
+    Geometry { lay, big, left_x, left_w, mid_x, mid_w, side_x, side_w, set_x, set_w, narrow: width <= NARROW }
 }
 
 /// Lay the main window out for a logical width (on every resize, zoom change and at start).
@@ -98,6 +102,7 @@ pub fn apply(ui: &MainWindow, width: f32) {
     ui.set_side_w(g.side_w);
     ui.set_set_x(g.set_x);
     ui.set_set_w(g.set_w);
+    ui.set_narrow(g.narrow);
 }
 
 #[cfg(test)]

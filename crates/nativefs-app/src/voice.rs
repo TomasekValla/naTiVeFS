@@ -134,52 +134,22 @@ impl InputChain {
     }
 }
 
-/// The recorder's input level and auto level, remembered beside the config (`recorder.json`).
-#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq, Debug)]
-#[serde(default)]
-pub struct InputPrefs {
-    /// 0.0 - 2.0 (0 - 200 %)
-    pub level: f32,
-    pub auto: bool,
-}
-
-impl Default for InputPrefs {
-    fn default() -> Self {
-        Self { level: 1.0, auto: false }
-    }
-}
-
-fn prefs_path() -> Option<PathBuf> {
-    tvfs_core::config::Config::data_dir().ok().map(|d| d.join("recorder.json"))
-}
-
-pub fn load_prefs() -> InputPrefs {
-    let p: InputPrefs = prefs_path().and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
-    InputPrefs { level: if p.level.is_finite() { p.level.clamp(0.0, 2.0) } else { 1.0 }, ..p }
-}
-
-fn save_prefs(p: InputPrefs) {
-    if let Some(path) = prefs_path() {
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let _ = std::fs::write(path, serde_json::to_string(&p).unwrap_or_default());
-    }
-}
-
 /// The input level slider / auto level switch were changed (applied at once, remembered).
 pub fn input_changed(ui: &MainWindow, level: f32, auto: bool) {
-    let p = InputPrefs { level: ((level * 20.0).round() / 20.0).clamp(0.0, 2.0), auto };
-    ui.set_voice_level(p.level);
-    ui.set_voice_auto(p.auto);
+    let level = ((level * 20.0).round() / 20.0).clamp(0.0, 2.0);
+    ui.set_voice_level(level);
+    ui.set_voice_auto(auto);
     VOICE.with(|v| {
         if let Some(v) = v.borrow().as_ref() {
             let mut c = v.chain.lock().unwrap();
-            c.level = p.level;
-            c.auto = p.auto;
+            c.level = level;
+            c.auto = auto;
         }
     });
-    save_prefs(p);
+    crate::prefs::update(|p| {
+        p.voice_level = level;
+        p.voice_auto = auto;
+    });
 }
 
 fn fmt_time(secs: u64) -> String {
@@ -245,11 +215,11 @@ pub fn open(ui: &MainWindow, shared: &Arc<Shared>) {
     status(ui, 1, "Requesting microphone…", false);
     let buf = Arc::new(Mutex::new(Recording::default()));
     let recording = Arc::new(AtomicBool::new(false));
-    let prefs = load_prefs();
-    ui.set_voice_level(prefs.level);
-    ui.set_voice_auto(prefs.auto);
+    let prefs = crate::prefs::load();
+    ui.set_voice_level(prefs.voice_level);
+    ui.set_voice_auto(prefs.voice_auto);
     ui.set_voice_meter(0.0);
-    let chain = Arc::new(Mutex::new(InputChain { level: prefs.level, auto: prefs.auto, ..InputChain::default() }));
+    let chain = Arc::new(Mutex::new(InputChain { level: prefs.voice_level, auto: prefs.voice_auto, ..InputChain::default() }));
     // the peak after the input chain since the last meter update (f32 bits)
     let meter = Arc::new(std::sync::atomic::AtomicU32::new(0));
     let pcm: capture::PcmSink = {
@@ -324,12 +294,12 @@ pub fn open(ui: &MainWindow, shared: &Arc<Shared>) {
 /// meter, without a microphone.
 #[cfg(debug_assertions)]
 pub fn preview_ui(ui: &MainWindow) {
-    let prefs = load_prefs();
+    let prefs = crate::prefs::load();
     ui.set_voice_format(0);
     ui.set_voice_time("0:00".into());
     ui.set_voice_bars(ModelRc::new(VecModel::from(vec![0.08f32; BARS])));
-    ui.set_voice_level(prefs.level);
-    ui.set_voice_auto(prefs.auto);
+    ui.set_voice_level(prefs.voice_level);
+    ui.set_voice_auto(prefs.voice_auto);
     ui.set_voice_meter(0.62);
     status(ui, 2, "Ready when you are", false);
 }

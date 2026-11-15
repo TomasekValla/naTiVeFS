@@ -159,6 +159,8 @@ export global Look {
     in-out property <length> win-h;
     // corner radius of the main window's glass cards (the web's 32 px)
     out property <length> card-radius: 32px;
+    // Settings > Appearance > Layout: Compact (the web's `body.compact`: less space around and between the cards)
+    in-out property <bool> compact;
 }
 
 // Top-level glass card. With glass on it shows the (saturated) page backdrop
@@ -255,7 +257,10 @@ export component StatusChip inherits Rectangle {
     border-width: 1px;
     border-color: Palette.border;
     VerticalLayout {
-        padding: 14px;
+        padding-top: Look.compact ? 10px : 14px;
+        padding-bottom: Look.compact ? 10px : 14px;
+        padding-left: Look.compact ? 12px : 14px;
+        padding-right: Look.compact ? 12px : 14px;
         spacing: 6px;
         alignment: center;
         Text {
@@ -550,9 +555,9 @@ export component InfoCard inherits Rectangle {
     border-color: ta.has-hover ? Palette.accent : Palette.border;
     animate background, border-color { duration: Anim.fast; }
     HorizontalLayout {
-        padding: 12px;
-        padding-left: 14px;
-        padding-right: 14px;
+        padding: Look.compact ? 8px : 12px;
+        padding-left: Look.compact ? 12px : 14px;
+        padding-right: Look.compact ? 12px : 14px;
         spacing: 10px;
         Ico { src: root.icon; size: 28px; }
         VerticalLayout {
@@ -613,7 +618,7 @@ export component RecentRow inherits Rectangle {
     callback forget();
     callback open();
     property <bool> unfinished: root.item.kind == 1 || root.item.kind == 2;
-    height: max(62px, info.preferred-height + 20px);
+    height: max(Look.compact ? 56px : 62px, info.preferred-height + (Look.compact ? 14px : 20px));
     border-radius: 16px;
     background: Palette.glass;
     border-width: 1px;
@@ -629,10 +634,10 @@ export component RecentRow inherits Rectangle {
         clicked => { root.open(); }
     }
     HorizontalLayout {
-        padding-top: 10px;
-        padding-bottom: 10px;
-        padding-left: 13px;
-        padding-right: 13px;
+        padding-top: Look.compact ? 7px : 10px;
+        padding-bottom: Look.compact ? 7px : 10px;
+        padding-left: Look.compact ? 11px : 13px;
+        padding-right: Look.compact ? 11px : 13px;
         spacing: 12px;
         VerticalLayout {
             alignment: center;

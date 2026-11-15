@@ -22,6 +22,7 @@ mod reg;
 mod router;
 mod shellmenu;
 mod player;
+mod prefs;
 mod reader_ui;
 mod thumbs;
 mod tray;
@@ -1724,6 +1725,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.global::<Palette>().set_light(config.light_theme);
     let look = ui.global::<Look>();
     look.set_glass(config.glass);
+    look.set_compact(prefs::load().compact);
     look.set_smooth_scroll(config.smooth_scroll);
     ui.set_motion(config.motion.index() as i32);
     ui.set_close_to_tray(config.close_to_tray);
@@ -2335,6 +2337,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ui.on_appearance_changed(move || {
             let Some(ui) = weak.upgrade() else { return };
             let look = ui.global::<Look>();
+            let compact = look.get_compact();
+            prefs::update(|p| p.compact = compact);
             let motion = Motion::from_index(ui.get_motion().max(0) as usize);
             {
                 let mut cfg = shared.config.lock().unwrap();
