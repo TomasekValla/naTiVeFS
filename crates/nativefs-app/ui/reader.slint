@@ -87,6 +87,15 @@ export struct ReaderBlock {
     code-styled: bool,
 }
 
+// A run of consecutive blocks. The page is a list of these, so a frame only visits the few runs on screen: the
+// renderer skips a run outside the view without looking at its blocks (one list of thousands of blocks cost
+// ~1.2 us per block and frame while scrolling).
+export struct ReaderChunk {
+    // index of the first block (search / reveal count blocks over the whole page)
+    first: int,
+    blocks: [ReaderBlock],
+}
+
 global RP {
     in-out property <bool> light;
     out property <color> bg: light ? #fafafa : #111111;
@@ -190,7 +199,7 @@ export component ReaderWindow inherits Window {
     in property <string> file-name;
     // a file on this computer ("Use TVFS tools locally"): Local badge, Download = Show in folder
     in property <bool> local;
-    in property <[ReaderBlock]> blocks;
+    in property <[ReaderChunk]> chunks;
     // "" = system font (the web's "Default"); otherwise a bundled family
     in property <string> font-family;
     in property <string> font-label: "Default";
@@ -315,7 +324,12 @@ export component ReaderWindow inherits Window {
                 width: root.col-w;
                 // a short document keeps its spacing (without this the blocks share the window's height)
                 height: self.preferred-height;
-                for b[i] in root.blocks : brow := VerticalLayout {
+                for ch in root.chunks : chunk := VerticalLayout {
+                // runs well outside the view are not drawn at all (their place in the layout stays). The run holding the
+                // current search match is always drawn: drawing creates its reveal element, which scrolls to it.
+                visible: (self.y + self.height >= root.scroll-pos - root.view-h && self.y <= root.scroll-pos + 2 * root.view-h)
+                    || (root.current-block >= ch.first && root.current-block < ch.first + ch.blocks.length);
+                for b[j] in ch.blocks : brow := VerticalLayout {
                     padding-top: b.quote && !b.quote-first ? 0px : b.gap;
                     // the quote box spans the gap between two of its blocks too
                     blk := Rectangle {
@@ -325,10 +339,10 @@ export component ReaderWindow inherits Window {
                         nat := Text { visible: false; text: "Ag"; font-size: b.font-size; font-family: root.font-family; }
                         property <length> lead: b.lh > 0 ? max(0px, (b.lh * b.font-size - nat.preferred-height) / 2) : 0px;
                         // the block holding the current search match scrolls into view (created anew on every jump)
-                        if i == root.current-block : Rectangle {
+                        if ch.first + j == root.current-block : Rectangle {
                             width: 0px;
                             height: 0px;
-                            init => { root.reveal(blk.y + brow.y, blk.height); }
+                            init => { root.reveal(blk.y + brow.y + chunk.y, blk.height); }
                         }
                         if b.quote : Rectangle {
                             y: b.quote-first ? 0px : -b.gap;
@@ -497,6 +511,7 @@ export component ReaderWindow inherits Window {
                             }
                         }
                     }
+                }
                 }
             }
         }

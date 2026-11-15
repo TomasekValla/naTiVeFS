@@ -39,3 +39,16 @@ The short, public list of why naTiVeFS works the way it does. "Owner" = the proj
 - File manager menus "Upload to TVFS" and "Open locally in naTiVeFS": Windows classic menu + Send To (per user), Dolphin, Nautilus,
   Nemo, Thunar. The app claims its single-instance socket first thing, so many files sent at once all reach one instance.
 - Windows installer offers per-user and all-users installs.
+
+## Performance and layout (2026-11)
+- The main window's column geometry is computed in Rust (`layout.rs`) and handed to Slint as plain values. Measured on Windows
+  (femtovg): with bindings on the window width every resize step re-wrapped the text of every card (~8 ms per step, also where no
+  card changes width), because Slint marks all dependants dirty even when a value stays the same. The layout switch glides the
+  cards' x / y and snaps their width (animating the width re-wrapped text on every frame).
+- The Markdown / text reader groups its blocks into runs of 32 (`ReaderChunk`) and hides the runs more than a screen away from
+  the view (their place in the layout stays). Measured on a ~3,900-line document: a scroll frame went from ~5.6 ms to ~2.4 ms
+  of rendering; Slint's own clipping did not skip the off-screen blocks.
+- App-only preferences without a field in the shared config (compact layout, the recorder's input level / auto level) are kept
+  in `app-prefs.json` beside the config.
+- Pages that naTiVeFS or the link router hands to the browser carry `inbrowser=1`, so the web page does not send them straight
+  back to the app. The foreground right (Windows) is passed only to the process that receives the hand-over.

@@ -10,7 +10,11 @@ use slint::{ComponentHandle, Model, ModelRc, SharedPixelBuffer, VecModel};
 use tvfs_core::content::{Content, ContentKind};
 use tvfs_core::markdown::{self, Block, BlockKind, Colors, Mark};
 
-use crate::{windows, ReaderBlock, ReaderRow, ReaderWindow, Shared};
+use crate::{windows, ReaderBlock, ReaderChunk, ReaderRow, ReaderWindow, Shared};
+
+/// Blocks per run of the page (see `ReaderChunk`): few enough that a run on screen is cheap to draw, enough that
+/// a long document has only a few hundred runs.
+const CHUNK: usize = 32;
 
 /// The web's `READER_FONTS` (files_backend/upload.js): id, button label, font family ("" = system font).
 /// Noto Serif JP and M PLUS Rounded 1c are left out (owner: one Japanese font is enough); their saved ids
@@ -458,18 +462,27 @@ fn rebuild(rd: &Reader) {
             let _ = n;
         }
     }
-    let model = rd.window.get_blocks();
-    if let Some(vm) = model.as_any().downcast_ref::<VecModel<ReaderBlock>>() {
-        if vm.row_count() == out.len() {
-            for (i, b) in out.into_iter().enumerate() {
-                if vm.row_data(i).as_ref() != Some(&b) {
-                    vm.set_row_data(i, b);
+    // the same blocks again (a task ticked, search marks, theme): update the changed rows in place
+    let model = rd.window.get_chunks();
+    let same_shape = model.row_count() == out.len().div_ceil(CHUNK)
+        && (0..model.row_count()).all(|c| model.row_data(c).is_some_and(|ch| ch.blocks.row_count() == out[c * CHUNK..].len().min(CHUNK)));
+    if same_shape && !out.is_empty() {
+        for (c, part) in out.chunks(CHUNK).enumerate() {
+            let Some(ch) = model.row_data(c) else { continue };
+            for (j, b) in part.iter().enumerate() {
+                if ch.blocks.row_data(j).as_ref() != Some(b) {
+                    ch.blocks.set_row_data(j, b.clone());
                 }
             }
-            return;
         }
+        return;
     }
-    rd.window.set_blocks(ModelRc::new(VecModel::from(out)));
+    let chunks: Vec<ReaderChunk> = out
+        .chunks(CHUNK)
+        .enumerate()
+        .map(|(c, part)| ReaderChunk { first: (c * CHUNK) as i32, blocks: ModelRc::new(VecModel::from(part.to_vec())) })
+        .collect();
+    rd.window.set_chunks(ModelRc::new(VecModel::from(chunks)));
 }
 
 /// Fetch the images of a Markdown file (relative sources resolve against the file's URL).
