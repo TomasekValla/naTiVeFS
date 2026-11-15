@@ -12,8 +12,9 @@ use std::time::{Duration, Instant};
 
 use windows::core::{Interface, GUID, PCWSTR, PWSTR};
 use windows::Win32::Foundation::E_ACCESSDENIED;
+use windows::Win32::Media::Audio::{eCapture, eConsole, IMMDeviceEnumerator, MMDeviceEnumerator};
 use windows::Win32::Media::MediaFoundation::*;
-use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_MULTITHREADED};
+use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_MULTITHREADED};
 
 use super::{peak_i16, Device, Event, Frame, PcmSink, Sink, AUDIO_BITRATE, MAX_FPS, MAX_H, MAX_W, VIDEO_BITRATE};
 
@@ -96,10 +97,25 @@ pub fn microphones() -> Result<Vec<Device>, String> {
     list(MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_AUDCAP_GUID, &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_AUDCAP_ENDPOINT_ID)
 }
 
+/// The endpoint id of the system's default recording device (the same string as Media Foundation's
+/// `AUDCAP_ENDPOINT_ID`), if there is one. Call on a thread in the multithreaded apartment.
+unsafe fn default_mic_id() -> Option<String> {
+    unsafe {
+        let en: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).ok()?;
+        let p = en.GetDefaultAudioEndpoint(eCapture, eConsole).ok()?.GetId().ok()?;
+        let s = p.to_string().ok();
+        CoTaskMemFree(Some(p.0 as *const _));
+        s
+    }
+}
+
 unsafe fn open_reader(kind: GUID, id_key: &GUID, id: &str, what: &str) -> Result<(IMFMediaSource, IMFSourceReader), String> {
     unsafe {
         let acts = devices(kind).map_err(|e| e.message())?;
-        let act = acts.iter().find(|a| string(a, id_key) == id).or(acts.first()).ok_or_else(|| format!("No {what} was found."))?;
+        let find = |want: &str| acts.iter().find(|a| !want.is_empty() && string(a, id_key) == want);
+        // an empty id or a device that is gone: the system default microphone (Sound settings), else the first device
+        let fallback = || if kind == MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_AUDCAP_GUID { default_mic_id().and_then(|d| find(&d)) } else { None };
+        let act = find(id).or_else(fallback).or(acts.first()).ok_or_else(|| format!("No {what} was found."))?;
         let source: IMFMediaSource = act.ActivateObject().map_err(|e| describe(&e, what))?;
         let mut attrs: Option<IMFAttributes> = None;
         MFCreateAttributes(&mut attrs, 2).map_err(|e| e.message())?;
@@ -659,5 +675,21 @@ fn audio_thread(id: &str, sh: Arc<Shared>, sink: Sink, ready: mpsc::Sender<Resul
     drop(reader);
     unsafe {
         let _ = source.Shutdown();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The default recording device's id (Core Audio) is one Media Foundation lists, so "System default" opens it.
+    /// Machines without a microphone have nothing to check.
+    #[test]
+    fn default_microphone_is_in_the_list() {
+        let mics = microphones().unwrap_or_default();
+        let default = std::thread::spawn(|| init_thread().ok().and_then(|_| unsafe { default_mic_id() })).join().unwrap();
+        if let (Some(id), false) = (default, mics.is_empty()) {
+            assert!(mics.iter().any(|d| d.id == id), "the default microphone is not among the listed ones");
+        }
     }
 }
