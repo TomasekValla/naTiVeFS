@@ -28,7 +28,7 @@ pub fn opened(ui: &MainWindow) {
     ui.set_check_url("".into());
     // debug builds: `NATIVEFS_CHECK_URL=<link>` pre-fills the field (synthetic typing does not reach winit windows)
     #[cfg(debug_assertions)]
-    if let Ok(url) = std::env::var("NATIVEFS_CHECK_URL") {
+    if let Some(url) = crate::debug::var("NATIVEFS_CHECK_URL") {
         ui.set_check_url(url.into());
     }
 }

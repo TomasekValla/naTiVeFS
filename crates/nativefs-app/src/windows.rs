@@ -386,7 +386,7 @@ pub fn place(window: &slint::Window) {
         n
     });
     #[cfg(debug_assertions)]
-    if let Some((x, y)) = std::env::var("NATIVEFS_VIEWER_POS").ok().and_then(|v| {
+    if let Some((x, y)) = crate::debug::var("NATIVEFS_VIEWER_POS").and_then(|v| {
         let (x, y) = v.split_once(',')?;
         Some((x.trim().parse::<i32>().ok()?, y.trim().parse::<i32>().ok()?))
     }) {
@@ -396,15 +396,24 @@ pub fn place(window: &slint::Window) {
     let _ = (n, window);
 }
 
-/// Bring a window to the front: new viewers, the same file opened again, the main window. Windows only allows it
-/// when the process that handed the link / file over passed on its foreground right (`nativefs_ipc::allow_foreground`).
+/// Bring a window to the front: new viewers, the same file opened again, the main window.
+/// - Windows only allows it when this process is in the foreground or the process that handed the link / file
+///   over passed on its foreground right (`nativefs_ipc::allow_foreground_for`); otherwise the system refuses.
+/// - Wayland compositors ignore it without an activation token; X11 window managers and macOS usually allow it.
+///
+/// When the window did not get the focus, it asks for attention instead (taskbar flash / dock bounce / urgency hint).
 pub fn raise(window: &slint::Window) {
     // debug builds: `NATIVEFS_NO_FOCUS=1` never takes the keyboard focus (test windows on a second monitor)
-    if cfg!(debug_assertions) && std::env::var_os("NATIVEFS_NO_FOCUS").is_some() {
+    if crate::debug::flag("NATIVEFS_NO_FOCUS") {
         return;
     }
     window.set_minimized(false);
-    window.with_winit_window(|w| w.focus_window());
+    window.with_winit_window(|w| {
+        w.focus_window();
+        if !w.has_focus() {
+            w.request_user_attention(Some(winit::window::UserAttentionType::Informational));
+        }
+    });
 }
 
 /// A short message at the bottom of a window that disappears by itself.

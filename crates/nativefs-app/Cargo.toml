@@ -38,6 +38,7 @@ tokio-util = "0.7"
 # the Downloads folder for "Save as"
 directories = "6"
 opus = "0.3"
+bytes = "1"
 ogg = "0.9"
 flacenc = "0.4"
 

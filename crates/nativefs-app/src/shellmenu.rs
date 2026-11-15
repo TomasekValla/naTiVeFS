@@ -289,7 +289,7 @@ pub use imp::{install, installed, uninstall};
 
 /// At startup (release builds): keep the menus pointing at this installation, or remove them when switched off.
 pub fn sync(wanted: bool) {
-    if cfg!(debug_assertions) && std::env::var_os("NATIVEFS_FILE_MENUS").is_none() {
+    if cfg!(debug_assertions) && !crate::debug::flag("NATIVEFS_FILE_MENUS") {
         return;
     }
     if wanted {

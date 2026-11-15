@@ -34,6 +34,11 @@ export struct QueueRow {
     ext-label: string,
     size: string,
     anon: bool,
+    // an audio file: a second line "Upload as" Audio / Voice note (web `.file-entry.two-line`)
+    audio: bool,
+    voice: bool,
+    // a recording of the voice recorder: always a voice note
+    recorded: bool,
 }
 
 // Per-file progress row of a multi-file upload (`.per-file-row`).
@@ -113,6 +118,8 @@ export global Anim {
     out property <duration> fast: 150ms;
     out property <duration> overlay: 220ms;
     out property <duration> panel: 350ms;
+    // main window cards fading in / out while the desktop layout switches
+    out property <duration> fade: 380ms;
 }
 
 export global Palette {
@@ -150,6 +157,10 @@ export global Look {
     // window size, so cards can line their backdrop up with the page background
     in-out property <length> win-w;
     in-out property <length> win-h;
+    // corner radius of the main window's glass cards (the web's 32 px)
+    out property <length> card-radius: 32px;
+    // Settings > Appearance > Layout: Compact (the web's `body.compact`: less space around and between the cards)
+    in-out property <bool> compact;
 }
 
 // Top-level glass card. With glass on it shows the (saturated) page backdrop
@@ -182,7 +193,7 @@ export component LocalBadge inherits Rectangle {
 export component GlassCard inherits Rectangle {
     property <bool> frosted: Look.glass && Look.has-backdrop;
     background: root.frosted ? transparent : Palette.glass;
-    border-radius: 32px;
+    border-radius: Look.card-radius;
     // The web's shadow is "0 30px 70px -15px": pushed down and shrunk by 15 px, so it shows under the card and hardly at
     // its sides. Slint has no shadow spread, so with glass on a 15 px smaller shape casts it (the opaque frosted layer
     // above hides the part under the card). Without glass the card is see-through: a plain, softer shadow on the card.
@@ -246,7 +257,10 @@ export component StatusChip inherits Rectangle {
     border-width: 1px;
     border-color: Palette.border;
     VerticalLayout {
-        padding: 14px;
+        padding-top: Look.compact ? 10px : 14px;
+        padding-bottom: Look.compact ? 10px : 14px;
+        padding-left: Look.compact ? 12px : 14px;
+        padding-right: Look.compact ? 12px : 14px;
         spacing: 6px;
         alignment: center;
         Text {
@@ -503,17 +517,18 @@ export component ClampExplain inherits VerticalLayout {
     in property <string> text;
     property <bool> expanded;
     property <length> two-lines: one.preferred-height * 2;
-    property <bool> long: m.preferred-height > self.two-lines + 1px;
+    // the text's own preferred height is the whole wrapped text at its width (the height below only cuts it), so the
+    // text is laid out once per width, not a second time in a measuring copy
+    property <bool> long: t.preferred-height > self.two-lines + 1px;
     spacing: 2px;
-    // measuring copies, outside the layout (one line, and the whole text at this width)
+    // one line of this font, outside the layout (does not depend on the width)
     Rectangle {
         height: 0px;
         one := Explain { text: "X"; visible: false; }
-        m := Explain { width: parent.width; text: root.text; visible: false; }
     }
-    Explain {
+    t := Explain {
         text: root.text;
-        height: root.expanded || !root.long ? m.preferred-height : root.two-lines;
+        height: root.expanded || !root.long ? self.preferred-height : root.two-lines;
         overflow: elide;
     }
     if root.long : HorizontalLayout {
@@ -540,9 +555,9 @@ export component InfoCard inherits Rectangle {
     border-color: ta.has-hover ? Palette.accent : Palette.border;
     animate background, border-color { duration: Anim.fast; }
     HorizontalLayout {
-        padding: 12px;
-        padding-left: 14px;
-        padding-right: 14px;
+        padding: Look.compact ? 8px : 12px;
+        padding-left: Look.compact ? 12px : 14px;
+        padding-right: Look.compact ? 12px : 14px;
         spacing: 10px;
         Ico { src: root.icon; size: 28px; }
         VerticalLayout {
@@ -603,7 +618,7 @@ export component RecentRow inherits Rectangle {
     callback forget();
     callback open();
     property <bool> unfinished: root.item.kind == 1 || root.item.kind == 2;
-    height: max(62px, info.preferred-height + 20px);
+    height: max(Look.compact ? 56px : 62px, info.preferred-height + (Look.compact ? 14px : 20px));
     border-radius: 16px;
     background: Palette.glass;
     border-width: 1px;
@@ -619,10 +634,10 @@ export component RecentRow inherits Rectangle {
         clicked => { root.open(); }
     }
     HorizontalLayout {
-        padding-top: 10px;
-        padding-bottom: 10px;
-        padding-left: 13px;
-        padding-right: 13px;
+        padding-top: Look.compact ? 7px : 10px;
+        padding-bottom: Look.compact ? 7px : 10px;
+        padding-left: Look.compact ? 11px : 13px;
+        padding-right: Look.compact ? 11px : 13px;
         spacing: 12px;
         VerticalLayout {
             alignment: center;
@@ -998,17 +1013,48 @@ export component DashedOutline inherits Rectangle {
     for i in floor(root.height / 14px) + 1 : Rectangle { x: root.width - 1px; y: i * 14px; width: 1px; height: min(6px, root.height - i * 14px); background: root.dash; }
 }
 
-// `.file-row`: [EXT] name, rename, anonymize, size, remove
+// one choice of the "Upload as" pill switch (web `.file-kind button`)
+component KindBtn inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    in property <bool> enabled: true;
+    callback clicked();
+    width: t.preferred-width + 20px;
+    background: root.on ? Palette.brand : transparent;
+    t := Text {
+        text: root.label;
+        font-size: 11.2px;
+        font-weight: 700;
+        color: root.on ? Palette.on-brand : (ta.has-hover && root.enabled ? Palette.text : Palette.dim);
+        animate color { duration: Anim.fast; }
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ta := TouchArea { enabled: root.enabled; mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+}
+
+// Height of a queue row: one line, or two for audio files (web: 9 px padding, 5 px under the first line of a
+// two-line row, the second line 0 12 9 54 around a 21.5 px pill switch)
+export global QueueMetrics {
+    out property <length> row: 41px;
+    out property <length> two-line: 67.5px;
+}
+
+// `.file-row`: [EXT] name, rename, anonymize, size, remove; audio files get a second line
+// "UPLOAD AS  [Audio | Voice note]" (`.file-entry.two-line` / `.file-row-sub`)
 export component QueueFileRow inherits Rectangle {
     in property <QueueRow> entry;
     in property <bool> editing;
     in property <bool> locked;
+    // the window is narrower than 420 px: the second line starts at the left (web media query)
+    in property <bool> narrow;
     callback rename-clicked();
     callback rename-commit(string);
     callback rename-cancel();
     callback anon-clicked();
     callback remove-clicked();
-    height: 41px;
+    callback voice-picked(bool);
+    height: root.entry.audio ? QueueMetrics.two-line : QueueMetrics.row;
     border-radius: 13px;
     background: Palette.glass;
     border-width: root.entry.anon ? 0px : 1px;
@@ -1019,7 +1065,52 @@ export component QueueFileRow inherits Rectangle {
         clip: true;
         DashedOutline { width: root.width; height: root.height; }
     }
+    if root.entry.audio : HorizontalLayout {
+        x: 0px;
+        y: 1px + 9px + 21px + 5px;
+        height: root.height - self.y - 1px;
+        padding-left: root.narrow ? 12px : 54px;
+        padding-right: 12px;
+        padding-bottom: 9px;
+        spacing: 8px;
+        alignment: start;
+        Text {
+            text: "UPLOAD AS";
+            font-size: 10.88px;
+            font-weight: 700;
+            letter-spacing: 0.435px;
+            color: Palette.dim;
+            vertical-alignment: center;
+        }
+        if root.entry.recorded : Text {
+            text: "Voice note (recorded here)";
+            font-size: 11.2px;
+            font-weight: 700;
+            color: Palette.good;
+            vertical-alignment: center;
+        }
+        if !root.entry.recorded : VerticalLayout {
+            alignment: center;
+            Rectangle {
+                height: 21.5px;
+                width: kinds.preferred-width + 2px;
+                border-radius: self.height / 2;
+                border-width: 1px;
+                border-color: Palette.border;
+                clip: true;
+                kinds := HorizontalLayout {
+                    x: 1px;
+                    y: 1px;
+                    height: parent.height - 2px;
+                    KindBtn { label: "Audio"; on: !root.entry.voice; enabled: !root.locked; clicked => { root.voice-picked(false); } }
+                    KindBtn { label: "Voice note"; on: root.entry.voice; enabled: !root.locked; clicked => { root.voice-picked(true); } }
+                }
+            }
+        }
+    }
     HorizontalLayout {
+        y: 0px;
+        height: QueueMetrics.row - (root.entry.audio ? 4px : 0px);
         padding-left: 12px;
         padding-right: 12px;
         spacing: 8px;

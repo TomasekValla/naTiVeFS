@@ -45,6 +45,8 @@ struct Voice {
     preview_timer: Option<slint::Timer>,
     /// The waveform's rows (updated in place, never rebuilt).
     bars: Rc<VecModel<f32>>,
+    /// Input level / auto level, applied on the microphone thread.
+    chain: Arc<Mutex<InputChain>>,
 }
 
 thread_local! {
@@ -53,6 +55,102 @@ thread_local! {
 
 /// Bars in the waveform.
 const BARS: usize = 40;
+
+/// The recorder's input chain, the web's 1:1: input level (0-200 %) -> auto level -> soft clipper. Auto level moves
+/// the voice towards -18 dBFS RMS in 50 ms steps (attack 0.15 s, release 1.5 s), at most +18 dB / -12 dB and never
+/// more than the peaks allow (-1 dBFS); pauses below -50 dBFS hold the gain. The soft clipper is linear up to 0.8
+/// and rounds off towards 0.95, so the recording never clips.
+pub struct InputChain {
+    pub level: f32,
+    pub auto: bool,
+    agc_db: f32,
+    applied: f32,
+    sum: f64,
+    count: usize,
+    peak: f32,
+    frames: usize,
+}
+
+impl Default for InputChain {
+    fn default() -> Self {
+        Self { level: 1.0, auto: false, agc_db: 0.0, applied: 1.0, sum: 0.0, count: 0, peak: 0.0, frames: 0 }
+    }
+}
+
+const AGC_TARGET_DBFS: f32 = -18.0;
+const AGC_STEP_S: f32 = 0.05;
+
+fn soft_clip(x: f32) -> f32 {
+    let a = x.abs();
+    let y = if a <= 0.8 { a } else { 0.8 + 0.15 * ((a - 0.8) / 0.15).tanh() };
+    y.copysign(x)
+}
+
+impl InputChain {
+    fn agc_step(&mut self) {
+        if self.auto {
+            let rms_db = 20.0 * ((self.sum / self.count.max(1) as f64).sqrt() as f32).max(1e-6).log10();
+            let peak_db = 20.0 * self.peak.max(1e-6).log10();
+            if rms_db >= -50.0 {
+                let want = (AGC_TARGET_DBFS - rms_db).clamp(-12.0, 18.0).min(-1.0 - peak_db);
+                let tau = if want < self.agc_db { 0.15 } else { 1.5 };
+                self.agc_db += (want - self.agc_db) * (1.0 - (-AGC_STEP_S / tau).exp());
+            }
+        } else {
+            self.agc_db = 0.0;
+        }
+        self.sum = 0.0;
+        self.count = 0;
+        self.peak = 0.0;
+    }
+
+    /// Process interleaved 16-bit PCM into `out`; returns the peak (0..1) of what comes out (the level meter).
+    pub fn process(&mut self, input: &[i16], rate: u32, channels: u16, out: &mut Vec<i16>) -> f32 {
+        let ch = channels.max(1) as usize;
+        let step = (rate as f32 * AGC_STEP_S) as usize;
+        // the applied gain follows the auto level smoothly (the web's setTargetAtTime, 40 ms)
+        let k = 1.0 - (-1.0 / (0.04 * rate.max(1) as f32)).exp();
+        let mut out_peak = 0f32;
+        out.reserve(input.len());
+        for frame in input.chunks(ch) {
+            let target = 10f32.powf(self.agc_db / 20.0);
+            self.applied += (target - self.applied) * k;
+            for v in frame {
+                let pre = *v as f32 / 32768.0 * self.level;
+                self.sum += (pre * pre) as f64;
+                self.count += 1;
+                self.peak = self.peak.max(pre.abs());
+                let y = soft_clip(pre * self.applied);
+                out_peak = out_peak.max(y.abs());
+                out.push((y * 32767.0).round() as i16);
+            }
+            self.frames += 1;
+            if self.frames >= step.max(1) {
+                self.frames = 0;
+                self.agc_step();
+            }
+        }
+        out_peak
+    }
+}
+
+/// The input level slider / auto level switch were changed (applied at once, remembered).
+pub fn input_changed(ui: &MainWindow, level: f32, auto: bool) {
+    let level = ((level * 20.0).round() / 20.0).clamp(0.0, 2.0);
+    ui.set_voice_level(level);
+    ui.set_voice_auto(auto);
+    VOICE.with(|v| {
+        if let Some(v) = v.borrow().as_ref() {
+            let mut c = v.chain.lock().unwrap();
+            c.level = level;
+            c.auto = auto;
+        }
+    });
+    crate::prefs::update(|p| {
+        p.voice_level = level;
+        p.voice_auto = auto;
+    });
+}
 
 fn fmt_time(secs: u64) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
@@ -117,25 +215,48 @@ pub fn open(ui: &MainWindow, shared: &Arc<Shared>) {
     status(ui, 1, "Requesting microphone…", false);
     let buf = Arc::new(Mutex::new(Recording::default()));
     let recording = Arc::new(AtomicBool::new(false));
+    let prefs = crate::prefs::load();
+    ui.set_voice_level(prefs.voice_level);
+    ui.set_voice_auto(prefs.voice_auto);
+    ui.set_voice_meter(0.0);
+    let chain = Arc::new(Mutex::new(InputChain { level: prefs.voice_level, auto: prefs.voice_auto, ..InputChain::default() }));
+    // the peak after the input chain since the last meter update (f32 bits)
+    let meter = Arc::new(std::sync::atomic::AtomicU32::new(0));
     let pcm: capture::PcmSink = {
-        let (buf, recording) = (buf.clone(), recording.clone());
+        let (buf, recording, chain, meter) = (buf.clone(), recording.clone(), chain.clone(), meter.clone());
+        let mut out = Vec::new();
+        let out = Mutex::new(std::mem::take(&mut out));
         Arc::new(move |samples: &[i16], rate: u32, channels: u16| {
+            // the chain also runs while not recording: the meter shows the level and auto level settles beforehand
+            let mut o = out.lock().unwrap();
+            o.clear();
+            let peak = chain.lock().unwrap().process(samples, rate, channels, &mut o);
+            let _ = meter.fetch_max(peak.to_bits(), Ordering::Relaxed);
             if recording.load(Ordering::Relaxed) {
                 let mut b = buf.lock().unwrap();
                 b.rate = rate;
                 b.channels = channels;
-                b.samples.extend_from_slice(samples);
+                b.samples.extend_from_slice(&o);
             }
         })
     };
     let sink: capture::Sink = {
         let weak = ui.as_weak();
+        let meter = meter.clone();
         Arc::new(move |ev| {
             let weak = weak.clone();
+            let meter = meter.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(ui) = weak.upgrade() else { return };
                 match ev {
-                    capture::Event::Level(l) => push_level(l),
+                    capture::Event::Level(_) => {
+                        // the level after the input chain (positive f32 bits order like the values)
+                        let peak = f32::from_bits(meter.swap(0, Ordering::Relaxed));
+                        let db = 20.0 * peak.max(1e-6).log10();
+                        ui.set_voice_meter(((db + 60.0) / 60.0).clamp(0.0, 1.0));
+                        ui.set_voice_hot(db > -3.0);
+                        push_level(peak);
+                    }
                     capture::Event::Error(e) => status(&ui, ui.get_voice_state().max(2), &e, true),
                     _ => {}
                 }
@@ -159,6 +280,7 @@ pub fn open(ui: &MainWindow, shared: &Arc<Shared>) {
             preview: None,
             preview_timer: None,
             bars,
+            chain,
         })
     });
     match result {
@@ -166,6 +288,20 @@ pub fn open(ui: &MainWindow, shared: &Arc<Shared>) {
         // the web: "Microphone access denied or unavailable." with only Cancel left
         Err(e) => status(ui, 1, &e, true),
     }
+}
+
+/// Debug builds (`NATIVEFS_VOICE_UI`): the recorder's ready state with the remembered input settings and a fake
+/// meter, without a microphone.
+#[cfg(debug_assertions)]
+pub fn preview_ui(ui: &MainWindow) {
+    let prefs = crate::prefs::load();
+    ui.set_voice_format(0);
+    ui.set_voice_time("0:00".into());
+    ui.set_voice_bars(ModelRc::new(VecModel::from(vec![0.08f32; BARS])));
+    ui.set_voice_level(prefs.voice_level);
+    ui.set_voice_auto(prefs.voice_auto);
+    ui.set_voice_meter(0.62);
+    status(ui, 2, "Ready when you are", false);
 }
 
 /// The recorder's buttons: 0 start, 1 stop, 2 use, 3 discard & retry, 4 cancel, 5 listen / pause.
@@ -304,7 +440,7 @@ fn ensure_preview(ui: &MainWindow) -> bool {
     });
     let player = nativefs_audio::engine::Player::new(dec, settings, events);
     // debug builds: `NATIVEFS_AUDIO_MUTE` keeps the preview silent (tests)
-    if cfg!(debug_assertions) && std::env::var_os("NATIVEFS_AUDIO_MUTE").is_some() {
+    if crate::debug::flag("NATIVEFS_AUDIO_MUTE") {
         player.set_muted(true);
     }
     let timer = slint::Timer::default();
@@ -407,8 +543,12 @@ fn use_recording(ui: &MainWindow, shared: &Arc<Shared>) {
             let Some(ui) = weak.upgrade() else { return };
             match result {
                 Ok(path) => {
-                    close(&ui);
-                    upload_ui::add_voice_note(&ui, path);
+                    if upload_ui::add_voice_note(&ui, path) {
+                        close(&ui);
+                    } else {
+                        // the recording stays in the recorder (and on disk) instead of vanishing silently
+                        status(&ui, 4, "Not added: wait until the running upload has finished, then use it again.", true);
+                    }
                 }
                 Err(e) => status(&ui, 4, &format!("Encoding failed: {e}"), true),
             }
@@ -495,16 +635,20 @@ pub fn encode_opus(rec: &Recording) -> Result<Vec<u8>, String> {
         const FRAME: usize = 960;
         let mut packet = vec![0u8; 4000];
         let mut frame = vec![0i16; FRAME * ch];
-        let mut done = 0usize;
-        while done < total {
-            let n = (total - done).min(FRAME);
+        // the encoder delays everything by the pre-skip: encode that much silence after the end too, so the decoder
+        // gets the whole recording; the last granule position (pre-skip + length) then trims exactly to it
+        let end = pre_skip + total as u64;
+        let mut fed = 0usize;
+        while (fed as u64) < end {
+            let n = total.saturating_sub(fed).min(FRAME);
             frame.fill(0);
-            frame[..n * ch].copy_from_slice(&pcm[done * ch..(done + n) * ch]);
+            frame[..n * ch].copy_from_slice(&pcm[fed * ch..(fed + n) * ch]);
             let len = enc.encode(&frame, &mut packet).map_err(err)?;
-            done += n;
-            let last = done >= total;
+            fed += FRAME;
+            let last = fed as u64 >= end;
             let info = if last { ogg::PacketWriteEndInfo::EndStream } else { ogg::PacketWriteEndInfo::NormalPacket };
-            w.write_packet(packet[..len].to_vec(), serial, info, pre_skip + done as u64).map_err(|e| e.to_string())?;
+            // granule = samples decoded so far (pre-skip included), the end trimmed on the last page
+            w.write_packet(packet[..len].to_vec(), serial, info, (fed as u64).min(end)).map_err(|e| e.to_string())?;
         }
     }
     Ok(out)
@@ -566,6 +710,58 @@ pub fn write_wav(rec: &Recording, path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tone_at(dbfs: f32, secs: f32) -> Vec<i16> {
+        let amp = 10f32.powf(dbfs / 20.0) * std::f32::consts::SQRT_2 * 32767.0;
+        (0..(48000.0 * secs) as usize).map(|i| ((i as f32 * 0.06).sin() * amp) as i16).collect()
+    }
+
+    fn rms_dbfs(v: &[i16]) -> f32 {
+        let p = v.iter().map(|s| (*s as f64 / 32768.0).powi(2)).sum::<f64>() / v.len() as f64;
+        10.0 * p.log10() as f32
+    }
+
+    fn run(chain: &mut InputChain, input: &[i16]) -> Vec<i16> {
+        let mut out = Vec::new();
+        // in 10 ms pieces like the microphone delivers them
+        for piece in input.chunks(480) {
+            let mut o = Vec::new();
+            chain.process(piece, 48000, 1, &mut o);
+            out.extend(o);
+        }
+        out
+    }
+
+    #[test]
+    fn auto_level_brings_speech_to_the_target() {
+        let mut c = InputChain { auto: true, ..InputChain::default() };
+        let out = run(&mut c, &tone_at(-30.0, 12.0));
+        let tail = &out[out.len() - 48000..];
+        assert!((rms_dbfs(tail) - AGC_TARGET_DBFS).abs() < 1.0, "{}", rms_dbfs(tail));
+        // a very quiet input gets at most +18 dB
+        let mut c = InputChain { auto: true, ..InputChain::default() };
+        let out = run(&mut c, &tone_at(-45.0, 12.0));
+        assert!((rms_dbfs(&out[out.len() - 48000..]) - -27.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn pauses_hold_the_gain_and_off_is_unity() {
+        let mut c = InputChain { auto: true, ..InputChain::default() };
+        run(&mut c, &tone_at(-70.0, 5.0));
+        assert_eq!(c.agc_db, 0.0);
+        let mut c = InputChain { level: 0.5, ..InputChain::default() };
+        let input = tone_at(-20.0, 1.0);
+        let out = run(&mut c, &input);
+        assert!((rms_dbfs(&out) - (rms_dbfs(&input) - 6.02)).abs() < 0.1);
+    }
+
+    #[test]
+    fn never_clips() {
+        let mut c = InputChain { level: 2.0, auto: true, ..InputChain::default() };
+        let out = run(&mut c, &tone_at(-1.0, 3.0));
+        let peak = out.iter().map(|v| v.unsigned_abs()).max().unwrap();
+        assert!(peak as f32 <= 0.951 * 32767.0, "{peak}");
+    }
 
     fn tone(rate: u32, secs: f64) -> Recording {
         let n = (rate as f64 * secs) as usize;

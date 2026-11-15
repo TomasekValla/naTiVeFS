@@ -137,7 +137,7 @@ mod imp {
 
     fn settings_page(id: &str) {
         // debug builds: `NATIVEFS_NO_SETTINGS=1` skips opening Settings (tests must not pop windows on the main monitor)
-        if cfg!(debug_assertions) && std::env::var_os("NATIVEFS_NO_SETTINGS").is_some() {
+        if crate::debug::flag("NATIVEFS_NO_SETTINGS") {
             eprintln!("router: would open Settings for {id:?}");
             return;
         }

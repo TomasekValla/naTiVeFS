@@ -14,6 +14,7 @@ use nativefs_audio::decode::Decoder;
 use nativefs_audio::dsp::Params;
 use nativefs_audio::engine::{Event, OutputSettings, PauseBehavior, Player};
 use nativefs_audio::output::ShareMode;
+use bytes::Bytes;
 use slint::{ComponentHandle, ModelRc, VecModel};
 use tvfs_core::content::Content;
 
@@ -41,52 +42,104 @@ fn date_from_name(name: &str) -> Option<String> {
     Some(local.format("%-d %b %Y, %H:%M").to_string())
 }
 
+/// Longest voice note decoded (the recorder's own limit): bounds the memory a voice-note link can take
+/// (30 min of 48 kHz stereo 16-bit PCM is ~330 MB; recorder notes are mono, half that).
+const MAX_SECONDS: usize = 30 * 60;
+const OPUS_RATE: usize = 48_000;
+
+fn wav_header(data_bytes: u32, channels: u16, rate: u32) -> [u8; 44] {
+    let mut h = [0u8; 44];
+    let mut w = |at: usize, b: &[u8]| h[at..at + b.len()].copy_from_slice(b);
+    w(0, b"RIFF");
+    w(4, &(36u32.saturating_add(data_bytes)).to_le_bytes());
+    w(8, b"WAVEfmt ");
+    w(16, &16u32.to_le_bytes());
+    w(20, &1u16.to_le_bytes());
+    w(22, &channels.to_le_bytes());
+    w(24, &rate.to_le_bytes());
+    w(28, &(rate * channels as u32 * 2).to_le_bytes());
+    w(32, &(channels * 2).to_le_bytes());
+    w(34, &16u16.to_le_bytes());
+    w(36, b"data");
+    w(40, &data_bytes.to_le_bytes());
+    h
+}
+
 /// Ogg Opus is the recorder's default format, but the engine's decoder (Symphonia) has no Opus codec: decode it with
-/// libopus to a 16-bit WAV in memory, which the engine plays like any other file. Other formats are returned as they are.
-fn prepare(bytes: Vec<u8>) -> Result<(Vec<u8>, Option<&'static str>), String> {
+/// libopus (RFC 7845: pre-skip, output gain, end trimming by the last granule position) straight into a 16-bit WAV
+/// in memory, which the engine plays like any other file. Other formats are returned as they are (no copy).
+fn prepare(bytes: Bytes) -> Result<(Bytes, Option<&'static str>), String> {
     if !(bytes.starts_with(b"OggS") && bytes.windows(8).take(80).any(|w| w == b"OpusHead")) {
         return Ok((bytes, None));
     }
     let err = |e: opus::Error| format!("Opus: {e}");
-    let mut reader = ogg::PacketReader::new(std::io::Cursor::new(&bytes));
+    let mut reader = ogg::PacketReader::new(std::io::Cursor::new(&bytes[..]));
     let head = reader.read_packet().map_err(|e| e.to_string())?.ok_or("empty Opus file")?;
-    if head.data.len() < 19 {
+    let h = &head.data;
+    if h.len() < 19 || !h.starts_with(b"OpusHead") {
         return Err("broken Opus header".into());
     }
-    let ch = head.data[9].clamp(1, 2) as usize;
-    let pre_skip = u16::from_le_bytes([head.data[10], head.data[11]]) as usize;
+    let serial = head.stream_serial();
+    let ch = h[9] as usize;
+    // mapping family 0 = mono / stereo; 1 and 255 are surround / multi-stream layouts (not a voice note)
+    if h[18] != 0 || !(1..=2).contains(&ch) {
+        return Err(format!("{ch}-channel Opus is not supported for voice notes"));
+    }
+    let pre_skip = u16::from_le_bytes([h[10], h[11]]) as usize;
+    // output gain, Q7.8 dB
+    let gain = 10f32.powf(i16::from_le_bytes([h[16], h[17]]) as f32 / 256.0 / 20.0);
     let mut dec = opus::Decoder::new(48000, if ch == 1 { opus::Channels::Mono } else { opus::Channels::Stereo }).map_err(err)?;
-    let mut pcm: Vec<i16> = Vec::new();
+    let max_frames = MAX_SECONDS * OPUS_RATE + pre_skip;
+    let mut wav: Vec<u8> = Vec::with_capacity(44 + (bytes.len() * 16).min(max_frames * ch * 2));
+    wav.extend_from_slice(&[0u8; 44]);
     let mut frame = vec![0i16; 5760 * ch];
-    let mut index = 0;
+    let (mut decoded, mut last_granule, mut index) = (0usize, None, 0);
     while let Some(pk) = reader.read_packet().map_err(|e| e.to_string())? {
+        // a chained file: only its first stream
+        if pk.stream_serial() != serial {
+            break;
+        }
         index += 1;
         // the second packet is the tags
         if index == 1 && pk.data.starts_with(b"OpusTags") {
             continue;
         }
-        let n = dec.decode(&pk.data, &mut frame, false).map_err(err)?;
-        pcm.extend_from_slice(&frame[..n * ch]);
+        if decoded >= max_frames {
+            return Err("this voice note is longer than 30 minutes".into());
+        }
+        let n = match dec.decode(&pk.data, &mut frame, false) {
+            Ok(n) => n,
+            // a broken packet: its length concealed by the decoder (or silence) instead of giving up on the note
+            Err(_) => {
+                let len = opus::packet::get_nb_samples(&pk.data, 48000).unwrap_or(960).clamp(120, 5760);
+                dec.decode(&[], &mut frame[..len * ch], false).unwrap_or_else(|_| {
+                    frame[..len * ch].fill(0);
+                    len
+                })
+            }
+        };
+        for v in &frame[..n * ch] {
+            let s = if gain == 1.0 { *v } else { (*v as f32 * gain).round().clamp(-32768.0, 32767.0) as i16 };
+            wav.extend_from_slice(&s.to_le_bytes());
+        }
+        decoded += n;
+        if pk.last_in_page() {
+            last_granule = Some(pk.absgp_page() as usize);
+        }
     }
-    pcm.drain(..(pre_skip * ch).min(pcm.len()));
-    let data = pcm.len() as u32 * 2;
-    let mut w = Vec::with_capacity(44 + data as usize);
-    w.extend_from_slice(b"RIFF");
-    w.extend_from_slice(&(36 + data).to_le_bytes());
-    w.extend_from_slice(b"WAVEfmt ");
-    w.extend_from_slice(&16u32.to_le_bytes());
-    w.extend_from_slice(&1u16.to_le_bytes());
-    w.extend_from_slice(&(ch as u16).to_le_bytes());
-    w.extend_from_slice(&48000u32.to_le_bytes());
-    w.extend_from_slice(&(48000 * ch as u32 * 2).to_le_bytes());
-    w.extend_from_slice(&(ch as u16 * 2).to_le_bytes());
-    w.extend_from_slice(&16u16.to_le_bytes());
-    w.extend_from_slice(b"data");
-    w.extend_from_slice(&data.to_le_bytes());
-    for v in &pcm {
-        w.extend_from_slice(&v.to_le_bytes());
+    // the last granule position marks the real end (the encoder pads the last packet)
+    let mut frames = decoded;
+    if let Some(end) = last_granule.filter(|g| *g >= pre_skip) {
+        frames = frames.min(end);
     }
-    Ok((w, Some("wav")))
+    let skip = pre_skip.min(frames);
+    let keep = frames - skip;
+    // drop the pre-skip at the start and the padding at the end
+    wav.copy_within(44 + skip * ch * 2..44 + frames * ch * 2, 44);
+    wav.truncate(44 + keep * ch * 2);
+    let data = u32::try_from(keep * ch * 2).map_err(|_| "voice note too long")?;
+    wav[..44].copy_from_slice(&wav_header(data, ch as u16, 48000));
+    Ok((Bytes::from(wav), Some("wav")))
 }
 
 fn fmt_time(secs: f64) -> String {
@@ -116,7 +169,7 @@ impl Source {
 
 /// Is this local file a recording of the app's voice recorder (or forced by the debug switch)?
 pub fn is_own_recording(path: &std::path::Path) -> bool {
-    if cfg!(debug_assertions) && std::env::var_os("NATIVEFS_VOICE_PLAYER").is_some() {
+    if crate::debug::flag("NATIVEFS_VOICE_PLAYER") {
         return true;
     }
     let named = path.file_name().is_some_and(|n| n.to_string_lossy().starts_with("voice-note-"));
@@ -158,6 +211,7 @@ pub fn open(shared: &Arc<Shared>, source: Source) {
         return;
     }
     let Ok(w) = VoicePlayerWindow::new() else { return };
+    w.set_light(shared.config.lock().unwrap().light_theme);
     let name = source.name();
     let date = date_from_name(&name).or_else(|| match &source {
         Source::Local(p) => std::fs::metadata(p).and_then(|m| m.modified()).ok().map(|t| {
@@ -240,8 +294,9 @@ fn wire(w: &VoicePlayerWindow, state: &Rc<RefCell<State>>) {
         }
     });
     on!(on_set_speed, |s, i| {
-        s.borrow_mut().speed = (i.max(0) as usize).min(SPEEDS.len() - 1);
-        s.borrow().window.set_speed_index(i.clamp(0, 3));
+        let i = (i.max(0) as usize).min(SPEEDS.len() - 1);
+        s.borrow_mut().speed = i;
+        s.borrow().window.set_speed_index(i as i32);
         apply(&s);
     });
     on!(on_set_volume, |s, v| {
@@ -315,20 +370,25 @@ fn load(state: &Rc<RefCell<State>>, shared: &Arc<Shared>) {
                 let (bytes, name) = match source {
                     Ok(path) => {
                         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                        (std::fs::read(&path).map_err(|e| e.to_string())?, name)
+                        if std::fs::metadata(&path).map_err(|e| e.to_string())?.len() > MAX_BYTES {
+                            return Err("the file is too big for a voice note".into());
+                        }
+                        (Bytes::from(std::fs::read(&path).map_err(|e| e.to_string())?), name)
                     }
                     Err(c) => {
                         let b = shared.rt.block_on(shared.client.fetch_bytes(&c.url, MAX_BYTES)).map_err(|e| crate::open::describe(&e))?;
-                        (b.to_vec(), c.name)
+                        (b, c.name)
                     }
                 };
                 let ext = std::path::Path::new(&name).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
                 let (bytes, wav) = prepare(bytes)?;
                 let ext = wav.map(str::to_owned).or(ext);
-                // one pass for the loudness and the waveform, a second decoder plays
-                let mut scan = Decoder::open_bytes(bytes.clone(), ext.as_deref()).map_err(|e| e.to_string())?;
+                // one pass for the loudness and the waveform, a second decoder plays; both read the same buffer
+                let open = |b: Bytes| Decoder::open(Box::new(std::io::Cursor::new(b)), ext.as_deref()).map_err(|e| e.to_string());
+                let mut scan = open(bytes.clone())?;
                 let (lufs, bars) = nativefs_audio::analysis::voice_scan(&mut scan, BARS);
-                let dec = Decoder::open_bytes(bytes, ext.as_deref()).map_err(|e| e.to_string())?;
+                drop(scan);
+                let dec = open(bytes)?;
                 Ok(Loaded { player: Player::new(dec, settings, events), bars, gain_db: gain_db_for(lufs) })
             })();
             let _ = weak.upgrade_in_event_loop(move |w| {
@@ -363,13 +423,13 @@ fn loaded(state: &Rc<RefCell<State>>, result: Result<Loaded, String>) {
         sb.total = total;
         sb.gain_db = l.gain_db;
         // debug builds: `NATIVEFS_AUDIO_MUTE=1` plays muted, `NATIVEFS_AUDIO_NOPLAY=1` does not start
-        if cfg!(debug_assertions) && std::env::var_os("NATIVEFS_AUDIO_MUTE").is_some() {
+        if crate::debug::flag("NATIVEFS_AUDIO_MUTE") {
             sb.muted = true;
             w.set_muted(true);
         }
     }
     apply(state);
-    let noplay = cfg!(debug_assertions) && std::env::var_os("NATIVEFS_AUDIO_NOPLAY").is_some();
+    let noplay = crate::debug::flag("NATIVEFS_AUDIO_NOPLAY");
     if !noplay {
         play_pause(state);
     }
@@ -476,14 +536,54 @@ mod tests {
     fn opus_notes_decode_to_wav() {
         let rec = crate::voice::Recording { samples: (0..48000).map(|i| ((i as f32 * 0.05).sin() * 8000.0) as i16).collect(), rate: 48000, channels: 1 };
         let ogg = crate::voice::encode_opus(&rec).unwrap();
-        let (wav, ext) = prepare(ogg).unwrap();
+        let (wav, ext) = prepare(Bytes::from(ogg)).unwrap();
         assert_eq!(ext, Some("wav"));
-        let mut d = Decoder::open_bytes(wav, Some("wav")).unwrap();
-        assert!(d.total_frames().unwrap() >= 47000);
+        let mut d = Decoder::open_bytes(wav.to_vec(), Some("wav")).unwrap();
+        // pre-skip and end padding trimmed: exactly the recorded length
+        assert_eq!(d.total_frames().unwrap(), 48000);
         let (lufs, bars) = nativefs_audio::analysis::voice_scan(&mut d, 10);
         assert!(lufs.is_some() && bars.len() == 10);
         // not Opus: untouched
-        assert_eq!(prepare(vec![1, 2, 3]).unwrap(), (vec![1, 2, 3], None));
+        assert_eq!(prepare(Bytes::from_static(&[1, 2, 3])).unwrap(), (Bytes::from_static(&[1, 2, 3]), None));
+    }
+
+    fn opus_with_head(rec: &crate::voice::Recording, patch: impl Fn(&mut Vec<u8>)) -> Bytes {
+        let mut ogg = crate::voice::encode_opus(rec).unwrap();
+        // OpusHead sits alone in the first page; patching it breaks that page's CRC, which the reader checks
+        let at = ogg.windows(8).position(|w| w == b"OpusHead").unwrap();
+        let mut head = ogg[at..at + 19].to_vec();
+        patch(&mut head);
+        ogg[at..at + 19].copy_from_slice(&head);
+        let segs = ogg[26] as usize;
+        let page_len = 27 + segs + ogg[27..27 + segs].iter().map(|v| *v as usize).sum::<usize>();
+        ogg[22..26].fill(0);
+        let crc = ogg_crc(&ogg[..page_len]);
+        ogg[22..26].copy_from_slice(&crc.to_le_bytes());
+        Bytes::from(ogg)
+    }
+
+    fn ogg_crc(data: &[u8]) -> u32 {
+        let mut crc = 0u32;
+        for b in data {
+            crc ^= (*b as u32) << 24;
+            for _ in 0..8 {
+                crc = if crc & 0x8000_0000 != 0 { (crc << 1) ^ 0x04c1_1db7 } else { crc << 1 };
+            }
+        }
+        crc
+    }
+
+    #[test]
+    fn opus_header_gain_and_mapping() {
+        let rec = crate::voice::Recording { samples: (0..24000).map(|i| ((i as f32 * 0.05).sin() * 4000.0) as i16).collect(), rate: 48000, channels: 1 };
+        let peak = |b: &Bytes| b[44..].chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]]).unsigned_abs()).max().unwrap();
+        let plain = prepare(opus_with_head(&rec, |_| {})).unwrap().0;
+        // +6.02 dB output gain (Q7.8: 6.02 * 256) doubles the level
+        let louder = prepare(opus_with_head(&rec, |h| h[16..18].copy_from_slice(&1541i16.to_le_bytes()))).unwrap().0;
+        let ratio = peak(&louder) as f32 / peak(&plain) as f32;
+        assert!((ratio - 2.0).abs() < 0.05, "{ratio}");
+        // a surround mapping family is refused instead of decoded as garbage
+        assert!(prepare(opus_with_head(&rec, |h| h[18] = 1)).is_err());
     }
 
     /// A quiet note is boosted by the clamped gain and the limiter keeps a hot peak under full scale.

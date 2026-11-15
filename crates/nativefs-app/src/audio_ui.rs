@@ -320,8 +320,8 @@ fn open_source(shared: &Arc<Shared>, source: Source) {
     }
     // debug builds: `NATIVEFS_AUDIO_EQ=1` opens the EQ panel right away (screenshots without clicking)
     // (`NATIVEFS_AUDIO_EQ=<n>` also applies EQ preset n)
-    if cfg!(debug_assertions) && std::env::var_os("NATIVEFS_AUDIO_EQ").is_some() {
-        if let Some(n) = std::env::var("NATIVEFS_AUDIO_EQ").ok().and_then(|v| v.parse::<usize>().ok()).filter(|n| *n < crate::audio_eq::PRESETS.len()) {
+    if crate::debug::flag("NATIVEFS_AUDIO_EQ") {
+        if let Some(n) = crate::debug::var("NATIVEFS_AUDIO_EQ").and_then(|v| v.parse::<usize>().ok()).filter(|n| *n < crate::audio_eq::PRESETS.len()) {
             state.borrow_mut().eq.bands = crate::audio_eq::preset_bands(n);
             state.borrow_mut().eq.compute();
         }
@@ -493,7 +493,7 @@ fn loaded(state: &Rc<RefCell<State>>, result: Result<Loaded, String>) {
         w.invoke_tour_show(0);
     }
     // debug builds: `NATIVEFS_AUDIO_TOUR=<step>` opens the tour at that step (screenshots without clicking)
-    if let Some(n) = std::env::var("NATIVEFS_AUDIO_TOUR").ok().and_then(|v| v.parse::<i32>().ok()).filter(|_| cfg!(debug_assertions)) {
+    if let Some(n) = crate::debug::var("NATIVEFS_AUDIO_TOUR").and_then(|v| v.parse::<i32>().ok()) {
         w.invoke_tour_show(n);
     }
     {
@@ -509,7 +509,7 @@ fn loaded(state: &Rc<RefCell<State>>, result: Result<Loaded, String>) {
         // debug builds: `NATIVEFS_AUDIO_MUTE=1` plays muted (silent tests of the moving parts). Set in the player's own
         // state, which apply_gain sends on: muting only the window and the engine made the button look muted while
         // the next gain update (any knob, the first M) played out loud
-        if cfg!(debug_assertions) && std::env::var_os("NATIVEFS_AUDIO_MUTE").is_some() {
+        if crate::debug::flag("NATIVEFS_AUDIO_MUTE") {
             sb.muted = true;
             w.set_muted(true);
         }
@@ -524,7 +524,7 @@ fn loaded(state: &Rc<RefCell<State>>, result: Result<Loaded, String>) {
         w.set_status_error(false);
     } else if let Some(p) = &state.borrow().player {
         // debug builds: `NATIVEFS_AUDIO_NOPLAY=1` opens without starting playback (silent UI tests)
-        if !(cfg!(debug_assertions) && std::env::var_os("NATIVEFS_AUDIO_NOPLAY").is_some()) {
+        if !(crate::debug::flag("NATIVEFS_AUDIO_NOPLAY")) {
             start(state, p);
         }
     }

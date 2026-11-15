@@ -8,58 +8,69 @@ use crate::decode::Decoder;
 /// Integrated loudness in LUFS of the rest of `dec` (decodes it to the end). `None` for silence or
 /// unsupported channel counts.
 pub fn integrated_loudness(dec: &mut Decoder) -> Option<f64> {
-    let info = dec.info().clone();
-    let mut meter = EbuR128::new(info.channels as u32, info.rate, Mode::I).ok()?;
-    let mut buf = Vec::new();
-    loop {
-        buf.clear();
-        match dec.next(&mut buf) {
-            Ok(true) => meter.add_frames_i32(&buf).ok()?,
-            Ok(false) => break,
-            Err(_) => return None,
-        }
-    }
-    meter.loudness_global().ok().filter(|l| l.is_finite())
+    scan(dec, |_| {}).0
 }
 
-/// One pass over `dec` for a voice note: integrated loudness plus `bars` waveform values (0..1, loudest = 1).
-/// The values are the RMS of ~46 ms blocks, the largest one per bar. Stops early with `None` loudness on decode errors.
+/// Decodes the rest of `dec` once, feeding the loudness meter and `each` with every decoded chunk.
+/// Returns the integrated loudness (`None` on silence, decode errors or unsupported channel counts) and whether
+/// the whole file decoded.
+fn scan(dec: &mut Decoder, mut each: impl FnMut(&[i32])) -> (Option<f64>, bool) {
+    let info = dec.info().clone();
+    let mut meter = EbuR128::new(info.channels as u32, info.rate, Mode::I).ok();
+    let mut buf = Vec::new();
+    let complete = loop {
+        buf.clear();
+        match dec.next(&mut buf) {
+            Ok(true) => {
+                if meter.as_mut().is_some_and(|m| m.add_frames_i32(&buf).is_err()) {
+                    meter = None;
+                }
+                each(&buf);
+            }
+            Ok(false) => break true,
+            Err(_) => break false,
+        }
+    };
+    let lufs = meter.filter(|_| complete).and_then(|m| m.loudness_global().ok()).filter(|l| l.is_finite());
+    (lufs, complete)
+}
+
+/// One pass over `dec` for a voice note: integrated loudness plus `bars` waveform values (0..1). The values are the
+/// RMS of ~46 ms blocks, the largest one per bar, scaled so a high percentile (not the single loudest block) is 1:
+/// one click or pop does not flatten the rest of the note. `None` loudness on decode errors.
 pub fn voice_scan(dec: &mut Decoder, bars: usize) -> (Option<f64>, Vec<f32>) {
     let info = dec.info().clone();
     let ch = (info.channels as usize).max(1);
-    let mut meter = EbuR128::new(info.channels as u32, info.rate, Mode::I).ok();
     let block = (info.rate as usize / 21).max(256) * ch;
-    let (mut buf, mut pending, mut levels) = (Vec::new(), Vec::<i32>::new(), Vec::<f32>::new());
     let rms = |chunk: &[i32]| {
         let sum: f64 = chunk.iter().map(|v| (*v as f64 / 2_147_483_648.0).powi(2)).sum();
         (sum / chunk.len().max(1) as f64).sqrt() as f32
     };
-    loop {
-        buf.clear();
-        match dec.next(&mut buf) {
-            Ok(true) => {
-                if let Some(m) = meter.as_mut() {
-                    if m.add_frames_i32(&buf).is_err() {
-                        meter = None;
-                    }
-                }
-                pending.extend_from_slice(&buf);
-                while pending.len() >= block {
-                    levels.push(rms(&pending[..block]));
-                    pending.drain(..block);
-                }
-            }
-            Ok(false) => break,
-            Err(_) => {
-                meter = None;
-                break;
+    let (mut pending, mut levels) = (Vec::<i32>::new(), Vec::<f32>::new());
+    let (lufs, _) = scan(dec, |buf| {
+        // whole blocks straight from the chunk; only the remainder is kept (no shifting of a growing buffer)
+        let mut rest = buf;
+        if !pending.is_empty() {
+            let take = (block - pending.len()).min(rest.len());
+            pending.extend_from_slice(&rest[..take]);
+            rest = &rest[take..];
+            if pending.len() == block {
+                levels.push(rms(&pending));
+                pending.clear();
             }
         }
-    }
+        let mut blocks = rest.chunks_exact(block);
+        levels.extend(blocks.by_ref().map(rms));
+        pending.extend_from_slice(blocks.remainder());
+    });
     if !pending.is_empty() {
         levels.push(rms(&pending));
     }
-    let lufs = meter.and_then(|m| m.loudness_global().ok()).filter(|l| l.is_finite());
+    (lufs, waveform(&levels, bars))
+}
+
+/// Block levels -> `bars` values (the largest level per bar), normalised to the 95th percentile of the bars.
+fn waveform(levels: &[f32], bars: usize) -> Vec<f32> {
     let bars = bars.max(1);
     let mut out: Vec<f32> = (0..bars)
         .map(|i| {
@@ -67,11 +78,13 @@ pub fn voice_scan(dec: &mut Decoder, bars: usize) -> (Option<f64>, Vec<f32>) {
             levels.get(a..b.min(levels.len())).map_or(0.0, |s| s.iter().copied().fold(0.0, f32::max))
         })
         .collect();
-    let top = out.iter().copied().fold(0.0, f32::max);
+    let mut sorted = out.clone();
+    sorted.sort_by(f32::total_cmp);
+    let top = sorted[((sorted.len() - 1) as f32 * 0.95).round() as usize];
     if top > 0.0 {
-        out.iter_mut().for_each(|v| *v /= top);
+        out.iter_mut().for_each(|v| *v = (*v / top).min(1.0));
     }
-    (lufs, out)
+    out
 }
 
 /// The web's `AnalyserNode` (fftSize 2048, Blackman window, smoothingTimeConstant 0.55,
@@ -140,6 +153,17 @@ impl Spectrum {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_click_does_not_flatten_the_waveform() {
+        let mut levels = vec![0.1f32; 400];
+        levels[200] = 1.0;
+        let bars = waveform(&levels, 40);
+        assert_eq!(bars.len(), 40);
+        // the click is clipped to the top, the speech stays at full height instead of 0.1
+        assert!(bars.iter().all(|b| (*b - 1.0).abs() < 1e-6), "{bars:?}");
+        assert_eq!(waveform(&[], 8), vec![0.0; 8]);
+    }
 
     #[test]
     fn sine_peak_where_the_web_analyser_puts_it() {
