@@ -189,9 +189,13 @@ fn copy_libmpv(manifest_dir: &str) {
         println!("cargo:warning=libmpv-2.dll missing ({}): run tools/fetch-libmpv.sh for the video player", src.display());
         return;
     }
-    // OUT_DIR = target/<profile>/build/<pkg>/out -> target/<profile>
+    // OUT_DIR = target/<profile>/build/<pkg>-<hash>/out (Rust 1.100 nests it one level deeper): the profile folder is the
+    // parent of the nearest `build` folder above it
     let out = std::env::var("OUT_DIR").unwrap();
-    let Some(profile_dir) = Path::new(&out).ancestors().nth(3) else { return };
+    let Some(profile_dir) = Path::new(&out).ancestors().find(|p| p.file_name().is_some_and(|n| n == "build")).and_then(Path::parent)
+    else {
+        return;
+    };
     let dest = profile_dir.join("libmpv-2.dll");
     let same = std::fs::metadata(&dest).ok().map(|m| m.len()) == std::fs::metadata(&src).ok().map(|m| m.len());
     if !same {

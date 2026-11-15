@@ -105,10 +105,12 @@ jobs:
       - name: Package and installer (windows)
         if: matrix.ext == 'zip'
         shell: pwsh
-        # libmpv-2.dll: the video player (vendor/libmpv/README.md)
+        # libmpv-2.dll: the video player (vendor/libmpv/README.md), taken from where fetch-libmpv.sh put it (where
+        # build.rs copies it for `cargo run` depends on Cargo's build folder layout, which changed in Rust 1.100)
         run: |
           New-Item -ItemType Directory -Force stage, out | Out-Null
-          Copy-Item target/release/naTiVeFS.exe, target/release/naTiVeFS-link.exe, target/release/naTiVeFS-cli.exe, target/release/libmpv-2.dll, LICENSE, packaging/THIRD-PARTY.txt stage/
+          $mpv = "vendor/libmpv/win-${{ contains(matrix.name, 'arm64') && 'aarch64' || 'x86_64' }}/libmpv-2.dll"
+          Copy-Item target/release/naTiVeFS.exe, target/release/naTiVeFS-link.exe, target/release/naTiVeFS-cli.exe, $mpv, LICENSE, packaging/THIRD-PARTY.txt stage/
           # short names for the CLI: work from cmd and PowerShell once the install folder is on PATH
           foreach ($alias in "nativefscli", "nativecli") { Set-Content -Path "stage/$alias.cmd" -Value '@"%~dp0naTiVeFS-cli.exe" %*' -Encoding ascii }
           Compress-Archive -Path stage/* -DestinationPath out/naTiVeFS-${{ matrix.name }}-portable.zip

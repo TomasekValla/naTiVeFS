@@ -4147,7 +4147,7 @@ dependencies = [
 
 [[package]]
 name = "nativefs-app"
-version = "1.1.0-pre.1"
+version = "1.1.0-pre.2"
 dependencies = [
  "arboard",
  "avif-decode",
@@ -4182,7 +4182,7 @@ dependencies = [
 
 [[package]]
 name = "nativefs-audio"
-version = "1.1.0-pre.1"
+version = "1.1.0-pre.2"
 dependencies = [
  "ebur128",
  "libloading 0.8.9",
@@ -4193,7 +4193,7 @@ dependencies = [
 
 [[package]]
 name = "nativefs-cli"
-version = "1.1.0-pre.1"
+version = "1.1.0-pre.2"
 dependencies = [
  "arboard",
  "directories",
@@ -4210,7 +4210,7 @@ dependencies = [
 
 [[package]]
 name = "nativefs-ipc"
-version = "1.1.0-pre.1"
+version = "1.1.0-pre.2"
 dependencies = [
  "interprocess",
  "libc",
@@ -4221,7 +4221,7 @@ dependencies = [
 
 [[package]]
 name = "nativefs-link"
-version = "1.1.0-pre.1"
+version = "1.1.0-pre.2"
 dependencies = [
  "nativefs-ipc",
  "opener",
@@ -7892,7 +7892,7 @@ dependencies = [
 
 [[package]]
 name = "tvfs-core"
-version = "1.1.0-pre.1"
+version = "1.1.0-pre.2"
 dependencies = [
  "bytes",
  "directories",
