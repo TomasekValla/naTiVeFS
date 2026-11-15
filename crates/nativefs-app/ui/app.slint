@@ -1230,15 +1230,21 @@ export component MainWindow inherits Window {
                                         background: Palette.glass;
                                         border-width: 1px;
                                         border-color: tn.has-focus ? Palette.accent : Palette.border;
-                                        tn := TextInput {
+                                        // clips a long text and its selection to the field (they drew past its edge)
+                                        Rectangle {
                                             x: 17px;
                                             width: parent.width - 34px;
-                                            text <=> root.text-name;
-                                            font-size: 14.08px;
-                                            font-weight: 600;
-                                            color: Palette.text;
-                                            vertical-alignment: center;
-                                            single-line: true;
+                                            clip: true;
+                                            tn := TextInput {
+                                                width: parent.width;
+                                                height: parent.height;
+                                                text <=> root.text-name;
+                                                font-size: 14.08px;
+                                                font-weight: 600;
+                                                color: Palette.text;
+                                                vertical-alignment: center;
+                                                single-line: true;
+                                            }
                                         }
                                         Text {
                                             x: 17px;
@@ -2730,17 +2736,23 @@ export component MainWindow inherits Window {
                                     background: Palette.glass;
                                     border-width: 1px;
                                     border-color: url-in.has-focus ? Palette.accent : Palette.border;
-                                    url-in := TextInput {
+                                    // clips a long text and its selection to the field (they drew past its edge)
+                                    Rectangle {
                                         x: 16px;
                                         width: parent.width - 32px;
                                         height: parent.height;
-                                        vertical-alignment: center;
-                                        single-line: true;
-                                        text <=> root.check-url;
-                                        color: Palette.text;
-                                        font-family: "JetBrains Mono";
-                                        font-size: 14.4px;
-                                        accepted => { root.check-probe(self.text); }
+                                        clip: true;
+                                        url-in := TextInput {
+                                            width: parent.width;
+                                            height: parent.height;
+                                            vertical-alignment: center;
+                                            single-line: true;
+                                            text <=> root.check-url;
+                                            color: Palette.text;
+                                            font-family: "JetBrains Mono";
+                                            font-size: 14.4px;
+                                            accepted => { root.check-probe(self.text); }
+                                        }
                                     }
                                     Text {
                                         x: 16px;

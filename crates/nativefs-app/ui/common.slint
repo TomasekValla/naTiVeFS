@@ -380,17 +380,23 @@ export component TextField inherits Rectangle {
         border-width: 3px;
         border-color: #b083ff26;
     }
-    inp := TextInput {
+    // clips a long text and its selection to the field (they drew past its edge)
+    Rectangle {
         x: 18px;
         width: parent.width - 36px;
         height: parent.height;
-        vertical-alignment: center;
-        text <=> root.value;
-        color: Palette.text;
-        font-size: 14.72px;
-        font-weight: 600;
-        input-type: root.secret ? InputType.password : InputType.text;
-        accepted => { root.accepted(); }
+        clip: true;
+        inp := TextInput {
+            width: parent.width;
+            height: parent.height;
+            vertical-alignment: center;
+            text <=> root.value;
+            color: Palette.text;
+            font-size: 14.72px;
+            font-weight: 600;
+            input-type: root.secret ? InputType.password : InputType.text;
+            accepted => { root.accepted(); }
+        }
     }
     Text {
         x: 18px;
@@ -618,8 +624,9 @@ export component RecentRow inherits Rectangle {
     callback forget();
     callback open();
     property <bool> unfinished: root.item.kind == 1 || root.item.kind == 2;
-    // the narrowest side column (three columns just above 1200 px): with the EXPIRED badge and three buttons the
-    // name had no room left and "Expired" broke letter by letter; the row is dimmed and says "Expired" anyway
+    // the narrowest side column (three columns just above 1200 px): with a badge and the buttons the name had no
+    // room left and its second line broke letter by letter. The badge goes there: the row is dimmed and its second
+    // line says the same ("Expired", "30% uploaded ...", "... from another device")
     property <bool> tight: root.width < 340px;
     height: max(Look.compact ? 56px : 62px, info.preferred-height + (Look.compact ? 14px : 20px));
     border-radius: 16px;
@@ -678,7 +685,7 @@ export component RecentRow inherits Rectangle {
             Text { text: root.item.name; font-size: 13.6px; font-weight: 700; color: Palette.text; overflow: elide; }
             Text { text: root.item.sub-text; font-size: 11.2px; color: Palette.dim; wrap: word-wrap; }
         }
-        if (root.item.expired && !root.tight) || root.unfinished : VerticalLayout {
+        if (root.item.expired || root.unfinished) && !root.tight : VerticalLayout {
             alignment: center;
             horizontal-stretch: 0;
             Rectangle {
@@ -1162,6 +1169,8 @@ export component QueueFileRow inherits Rectangle {
                 background: Palette.light ? #ffffff80 : #0f0c1c59;
                 border-width: 1px;
                 border-color: Palette.good;
+                // a long name and its selection stay inside the box
+                clip: true;
                 TextInput {
                     x: 10px;
                     width: parent.width - 20px;

@@ -537,20 +537,26 @@ export component ReaderWindow inherits Window {
                     border-width: 1px;
                     border-color: find-input.has-focus ? RP.hover : RP.btn-border;
                     background: RP.btn;
-                    find-input := TextInput {
+                    // clips a long text and its selection to the field (they drew past its edge)
+                    Rectangle {
                         x: 10px;
                         width: parent.width - 20px - (root.find-info != "" ? find-count.preferred-width + 8px : 0px);
                         height: parent.height;
-                        vertical-alignment: center;
-                        text <=> root.find-text;
-                        font-size: 13px;
-                        color: RP.fg;
-                        edited => { root.find-edited(self.text); }
-                        accepted => { root.find-step(1); }
-                        key-pressed(e) => {
-                            if (e.text == Key.Escape) { root.find-open = false; root.find-closed(); root.focus-page(); return accept; }
-                            if (e.text == Key.Return && e.modifiers.shift) { root.find-step(-1); return accept; }
-                            return reject;
+                        clip: true;
+                        find-input := TextInput {
+                            width: parent.width;
+                            height: parent.height;
+                            vertical-alignment: center;
+                            text <=> root.find-text;
+                            font-size: 13px;
+                            color: RP.fg;
+                            edited => { root.find-edited(self.text); }
+                            accepted => { root.find-step(1); }
+                            key-pressed(e) => {
+                                if (e.text == Key.Escape) { root.find-open = false; root.find-closed(); root.focus-page(); return accept; }
+                                if (e.text == Key.Return && e.modifiers.shift) { root.find-step(-1); return accept; }
+                                return reject;
+                            }
                         }
                     }
                     Text {
