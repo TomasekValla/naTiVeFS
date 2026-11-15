@@ -219,9 +219,12 @@ export component MainWindow inherits Window {
     in property <[QueueRow]> queue;
     in-out property <int> editing-index: -1;
     in property <string> queue-total;
-    // nested scroll of the queue list (max 180 px like the web), driven by the wheel from Rust
+    // nested scroll of the queue list (max min(320px, 45vh) like the web), driven by the wheel from Rust
     in-out property <length> queue-scroll: 0px;
-    property <length> queue-max: max(0px, root.queue.length * QueueMetrics.row + root.queue-audio-rows * (QueueMetrics.two-line - QueueMetrics.row) + max(0, root.queue.length - 1) * 4px - 180px);
+    property <length> queue-box: min(320px, root.height * 0.45);
+    // glide of the queue rows to `queue-scroll` (wheel line steps with Smooth scrolling on, like the page)
+    property <duration> queue-anim: 0ms;
+    property <length> queue-max: max(0px, root.queue.length * QueueMetrics.row + root.queue-audio-rows * (QueueMetrics.two-line - QueueMetrics.row) + max(0, root.queue.length - 1) * 4px - root.queue-box);
     // textarea of the Text mode: scroll position and how far it can go
     in-out property <length> text-scroll: 0px;
     in-out property <length> text-max: 0px;
@@ -261,7 +264,7 @@ export component MainWindow inherits Window {
         return false;
     }
     public function autoscroll-by(dy: length) {
-        if (root.autoscroll-target == 1) { root.queue-scroll = clamp(clamp(root.queue-scroll, 0px, root.queue-max) + dy, 0px, root.queue-max); return; }
+        if (root.autoscroll-target == 1) { root.queue-anim = 0ms; root.queue-scroll = clamp(clamp(root.queue-scroll, 0px, root.queue-max) + dy, 0px, root.queue-max); return; }
         if (root.autoscroll-target == 2) { root.text-scroll = clamp(clamp(root.text-scroll, 0px, root.text-max) + dy, 0px, root.text-max); return; }
         if (root.autoscroll-target == 3) { root.raw-scroll = clamp(clamp(root.raw-scroll, 0px, root.raw-max) + dy, 0px, root.raw-max); return; }
         root.scroll-by(dy, false);
@@ -270,6 +273,7 @@ export component MainWindow inherits Window {
         if (root.confirm-kind != 0) { return false; }
         if (which == 1) {
             if (clamp(root.queue-scroll + root.wheel-dy, 0px, root.queue-max) == clamp(root.queue-scroll, 0px, root.queue-max)) { return false; }
+            root.queue-anim = root.wheel-smooth && Look.smooth-scroll ? 230ms : 0ms;
             root.queue-scroll = clamp(root.queue-scroll + root.wheel-dy, 0px, root.queue-max);
             return true;
         }
@@ -1253,7 +1257,7 @@ export component MainWindow inherits Window {
                                 }
                                 queue-view := Rectangle {
                                     property <length> list-h: root.queue.length * QueueMetrics.row + root.queue-audio-rows * (QueueMetrics.two-line - QueueMetrics.row) + max(0, root.queue.length - 1) * 4px;
-                                    height: min(180px, self.list-h);
+                                    height: min(root.queue-box, self.list-h);
                                     clip: true;
                                     TouchArea {
                                         width: parent.width;
@@ -1269,8 +1273,11 @@ export component MainWindow inherits Window {
                                             if (root.nested-wheel(1)) { return accept; }
                                             return reject;
                                         }
-                                        VerticalLayout {
-                                            y: -clamp(root.queue-scroll, 0px, max(0px, queue-view.list-h - 180px));
+                                        queue-rows := VerticalLayout {
+                                            y: -clamp(root.queue-scroll, 0px, max(0px, queue-view.list-h - root.queue-box));
+                                            animate y { duration: root.queue-anim; easing: cubic-bezier(0.2, 0.7, 0.3, 1); }
+                                            // room for the scrollbar when the list scrolls
+                                            width: parent.width - (root.queue-max > 0px ? 12px : 0px);
                                             height: queue-view.list-h;
                                             spacing: 4px;
                                             for qr[i] in root.queue : QueueFileRow {
@@ -1285,6 +1292,57 @@ export component MainWindow inherits Window {
                                                 voice-picked(on) => { root.queue-voice(i, on); }
                                                 remove-clicked => { root.editing-index = -1; root.queue-remove(i); }
                                             }
+                                        }
+                                    }
+                                    // the list's own scrollbar: shows that more files are below, and can be dragged
+                                    if root.queue-max > 0px : Rectangle {
+                                        x: parent.width - self.width;
+                                        width: 10px;
+                                        height: parent.height;
+                                        property <length> thumb-h: max(28px, self.height * self.height / max(1px, queue-view.list-h));
+                                        property <length> thumb-y: (self.height - self.thumb-h) * clamp(-queue-rows.y / root.queue-max, 0, 1);
+                                        property <bool> dragging: false;
+                                        property <length> drag-from: 0px;
+                                        qsb := TouchArea {
+                                            mouse-cursor: MouseCursor.default;
+                                            scroll-event(e) => {
+                                                if (root.wheel-probe) {
+                                                    if (root.nested-can(1)) { root.autoscroll-target = 1; return accept; }
+                                                    return reject;
+                                                }
+                                                if (root.nested-wheel(1)) { return accept; }
+                                                return reject;
+                                            }
+                                            pointer-event(ev) => {
+                                                if (ev.button == PointerEventButton.left && ev.kind == PointerEventKind.down) {
+                                                    if (self.mouse-y >= parent.thumb-y && self.mouse-y <= parent.thumb-y + parent.thumb-h) {
+                                                        parent.dragging = true;
+                                                        parent.drag-from = clamp(root.queue-scroll, 0px, root.queue-max);
+                                                    } else {
+                                                        root.queue-anim = Look.smooth-scroll ? 230ms : 0ms;
+                                                        root.queue-scroll = clamp(clamp(root.queue-scroll, 0px, root.queue-max) + (self.mouse-y < parent.thumb-y ? -1 : 1) * parent.height * 0.85, 0px, root.queue-max);
+                                                    }
+                                                }
+                                                if (ev.button == PointerEventButton.left && ev.kind == PointerEventKind.up) {
+                                                    parent.dragging = false;
+                                                }
+                                            }
+                                            moved => {
+                                                if (parent.dragging) {
+                                                    root.queue-anim = 0ms;
+                                                    root.queue-scroll = clamp(parent.drag-from + (self.mouse-y - self.pressed-y) * root.queue-max / max(1px, parent.height - parent.thumb-h), 0px, root.queue-max);
+                                                }
+                                            }
+                                        }
+                                        Rectangle {
+                                            property <bool> lit: qsb.has-hover || parent.dragging;
+                                            x: parent.width - self.width - 1px;
+                                            y: parent.thumb-y;
+                                            width: self.lit ? 8px : 5px;
+                                            height: parent.thumb-h;
+                                            border-radius: self.width / 2;
+                                            background: Palette.text.with-alpha(self.lit ? 0.38 : 0.22);
+                                            animate width, background { duration: 120ms; }
                                         }
                                     }
                                 }
