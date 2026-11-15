@@ -1991,6 +1991,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     {
         let weak = weak.clone();
+        ui.on_voice_input_changed(move |level, auto| {
+            if let Some(ui) = weak.upgrade() {
+                voice::input_changed(&ui, level, auto);
+            }
+        });
+    }
+    {
+        let weak = weak.clone();
         ui.on_voice_seek(move |at| {
             if let Some(ui) = weak.upgrade() {
                 voice::seek(&ui, at);
@@ -2521,6 +2529,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         });
                     }
+                }
+            }
+            // debug builds: `NATIVEFS_VOICE_UI=1` shows the recorder's ready state with its level controls, without opening
+            // the microphone (screenshots)
+            #[cfg(debug_assertions)]
+            if crate::debug::flag("NATIVEFS_VOICE_UI") {
+                if let Some(ui) = weak.upgrade() {
+                    ui.set_mode(2);
+                    voice::preview_ui(&ui);
                 }
             }
             // a link on the command line (link router, "Open with") opens only its own window, like a browser tab
