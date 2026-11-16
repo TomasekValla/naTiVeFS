@@ -11,6 +11,9 @@ use symphonia::core::io::MediaSource;
 
 /// Size of one request.
 pub const CHUNK: u64 = 512 * 1024;
+/// The largest file the player accepts (TVFS allows 5 GB per file). A bigger size from the server is refused
+/// instead of reserving memory for it.
+pub const MAX_REMOTE_BYTES: u64 = 6 * 1024 * 1024 * 1024;
 
 /// First pause before a failed request is retried (doubles each time, 4 retries).
 #[cfg(not(test))]
@@ -103,6 +106,9 @@ impl RemoteSource {
     pub fn open(fetch: FetchFn) -> Result<(RemoteSource, RemoteHandle), String> {
         let first = fetch(0, CHUNK)?;
         let total = first.total.ok_or("the server did not say how big the file is")?;
+        if total == 0 || total > MAX_REMOTE_BYTES {
+            return Err(format!("the server reports an unusable file size ({total} bytes)"));
+        }
         let n = total.div_ceil(CHUNK) as usize;
         let mut chunks: Vec<Option<Arc<[u8]>>> = vec![None; n];
         store(&mut chunks, &first);
@@ -232,6 +238,14 @@ impl MediaSource for RemoteSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_huge_reported_size_is_refused_not_allocated() {
+        let fetch: FetchFn = Arc::new(|_, _| Ok(Fetched { offset: 0, total: Some(1u64 << 52), data: vec![0; 16] }));
+        assert!(RemoteSource::open(fetch).is_err());
+        let fetch: FetchFn = Arc::new(|_, _| Ok(Fetched { offset: 0, total: Some(0), data: vec![] }));
+        assert!(RemoteSource::open(fetch).is_err());
+    }
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn serve(body: Vec<u8>, calls: Arc<AtomicUsize>, ranged: bool) -> FetchFn {

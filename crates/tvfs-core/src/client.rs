@@ -199,11 +199,33 @@ impl Client {
             .and_then(|v| v.rsplit('/').next())
             .and_then(|t| t.parse::<u64>().ok());
         let full_len = resp.content_length();
-        let data = resp.bytes().await?;
+        // Never more than the asked piece in memory: a 206 longer than asked is refused, and from a 200 (the server
+        // ignored Range and sends the whole file) only the asked piece is kept and the rest is not even downloaded.
+        let want = len.max(1) as usize;
+        let mut resp = resp;
+        let mut data = Vec::with_capacity(want.min(8 * 1024 * 1024));
+        let mut skip = if partial { 0 } else { start };
+        while let Some(piece) = resp.chunk().await? {
+            let mut piece = &piece[..];
+            if skip > 0 {
+                let n = (skip as usize).min(piece.len());
+                piece = &piece[n..];
+                skip -= n as u64;
+            }
+            let room = want - data.len();
+            if partial && piece.len() > room {
+                return Err(Error::Server { status: 0, message: "the server sent more than was asked for".into() });
+            }
+            data.extend_from_slice(&piece[..piece.len().min(room)]);
+            if data.len() >= want {
+                break;
+            }
+        }
+        let data = Bytes::from(data);
         Ok(if partial {
             RangeData { offset: start, total, data }
         } else {
-            RangeData { offset: 0, total: full_len.or(Some(data.len() as u64)), data }
+            RangeData { offset: start, total: full_len, data }
         })
     }
 
@@ -474,9 +496,15 @@ mod download_tests {
         // past the end: the server trims the range
         let r = client.fetch_range("/files/audio/a.flac", 9_900, 500).await.unwrap();
         assert_eq!(&r.data[..], &body[9_900..]);
-        // a server without range support sends everything from 0
+        // a server without range support sends everything: only the asked piece is kept
         let r = client.fetch_range("/plain", 1000, 500).await.unwrap();
-        assert_eq!((r.offset, r.total, r.data.len()), (0, Some(10_000), 10_000));
+        assert_eq!((r.offset, r.total), (1000, Some(10_000)));
+        assert_eq!(&r.data[..], &body[1000..1500]);
+        // a 206 longer than asked is refused instead of filling memory
+        Mock::given(method("GET")).and(path("/liar")).respond_with(
+            ResponseTemplate::new(206).insert_header("Content-Range", "bytes 0-499/9999999999999").set_body_bytes(body.clone()),
+        ).mount(&server).await;
+        assert!(client.fetch_range("/liar", 0, 500).await.is_err());
     }
 
     #[tokio::test]
