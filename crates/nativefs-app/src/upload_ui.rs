@@ -268,11 +268,11 @@ pub fn paste(ui: &MainWindow) {
     }
 }
 
-/// A fresh folder under `%TEMP%/naTiVeFS/` for generated files (text mode, pasted images).
+/// A fresh folder for generated files (text mode, pasted images), inside the app's private temporary folder.
 fn temp_subdir() -> Option<PathBuf> {
-    let base = std::env::temp_dir().join("naTiVeFS");
+    let base = tvfs_core::config::private_dir("generated").ok()?;
     let dir = base.join(format!("{}-{}", std::process::id(), fastrand_u64()));
-    std::fs::create_dir_all(&dir).ok()?;
+    std::fs::create_dir(&dir).ok()?;
     Some(dir)
 }
 

@@ -79,8 +79,7 @@ pub fn how() -> How {
 /// A new folder for one download, inside the app's own data folder (not the shared temp folder), readable only by
 /// this user on Linux. An existing folder of that name is never reused.
 fn private_update_dir() -> Result<PathBuf, String> {
-    let base = tvfs_core::config::Config::data_dir().map_err(|e| e.to_string())?.join("updates");
-    std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+    let base = tvfs_core::config::private_dir("updates").map_err(|e| e.to_string())?;
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
     // earlier downloads (installed or abandoned) are not needed any more
     if let Ok(entries) = std::fs::read_dir(&base) {

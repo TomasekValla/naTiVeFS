@@ -217,6 +217,37 @@ fn dirs() -> Result<ProjectDirs> {
         .ok_or_else(|| Error::Config("no home directory".into()))
 }
 
+/// A folder for the app's own temporary files (camera and voice captures, text-mode files, update downloads) that
+/// only this user can read: the per-user cache folder (Linux `~/.cache/nativefs/<name>`, mode 0700; Windows
+/// `%LOCALAPPDATA%\TomasekValla\naTiVeFS\cache\<name>`), never the shared temp folder.
+pub fn private_dir(name: &str) -> Result<PathBuf> {
+    let dir = dirs()?.cache_dir().join(name);
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(&dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(dir)
+}
+
+/// Removes files and folders in `private_dir(name)` older than `max_age` (left behind by a crash or a closed app).
+pub fn sweep_private_dir(name: &str, max_age: std::time::Duration) {
+    let Ok(dir) = dirs().map(|d| d.cache_dir().join(name)) else { return };
+    let Ok(entries) = std::fs::read_dir(&dir) else { return };
+    for e in entries.flatten() {
+        let old = e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > max_age);
+        if old {
+            let p = e.path();
+            let _ = if p.is_dir() { std::fs::remove_dir_all(&p) } else { std::fs::remove_file(&p) };
+        }
+    }
+}
+
 impl Config {
     /// `NATIVEFS_CONFIG` (debug/testing) points at another file.
     pub fn path() -> Result<PathBuf> {

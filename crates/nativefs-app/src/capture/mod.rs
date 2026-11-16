@@ -196,11 +196,10 @@ pub fn encode_aac(samples: &[i16], rate: u32, ch: u16, kbps: u32, path: &Path) -
     }
 }
 
-/// Where captured files go before they are uploaded.
+/// Where captured files go before they are uploaded: a folder only this user can read (not the shared temp folder,
+/// where other users of the computer could read photos, videos and voice notes).
 pub fn capture_dir() -> PathBuf {
-    let dir = std::env::temp_dir().join("naTiVeFS-capture");
-    let _ = std::fs::create_dir_all(&dir);
-    dir
+    tvfs_core::config::private_dir("capture").unwrap_or_else(|_| std::env::temp_dir().join("naTiVeFS-capture"))
 }
 
 /// Peak level of 16-bit PCM samples, 0..1.

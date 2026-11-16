@@ -1694,6 +1694,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             desktop_entry::sync();
             router::tidy(on);
             shellmenu::sync(menus);
+            // captures and generated files a closed or crashed app left behind
+            for name in ["capture", "generated"] {
+                tvfs_core::config::sweep_private_dir(name, Duration::from_secs(3 * 24 * 3600));
+            }
         });
     }
     let client = Client::new()?;
