@@ -548,7 +548,8 @@ fn download_all(shared: &Arc<Shared>, st: &Rc<RefCell<ListState>>) {
 
 /// `dir/name`, or `name (2).ext` ... when it exists.
 fn unique_path(dir: &Path, name: &str) -> PathBuf {
-    let safe: String = name.chars().map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c }).collect();
+    // names come from other users (batch page, share): never `..`, a device name or a path separator
+    let safe = tvfs_core::fmt::safe_file_name(name);
     let p = dir.join(&safe);
     if !p.exists() {
         return p;

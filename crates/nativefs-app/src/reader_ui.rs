@@ -56,6 +56,8 @@ const TXT_LINE_ROWS_MAX: usize = 8000;
 const TXT_CHUNK_LINES: usize = 60;
 const MAX_TEXT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_IMAGE_BYTES: u64 = 24 * 1024 * 1024;
+/// Markdown images downloaded and decoded at the same time.
+static IMAGE_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(3);
 
 fn font_index(id: &str) -> usize {
     let id = match id {
@@ -497,13 +499,33 @@ fn load_images(shared: &Arc<Shared>, r: &Rc<RefCell<Reader>>) {
     for src in srcs {
         // web pictures; local ones only for a local document (a TVFS file never reads this computer's files)
         let local_doc = base.as_ref().is_some_and(|b| b.scheme() == "file");
-        let Some(abs) = base.as_ref().and_then(|b| b.join(&src).ok()).filter(|u| matches!(u.scheme(), "http" | "https") || (local_doc && u.scheme() == "file")) else { continue };
+        // and never an address on this computer or its local network (a shared document must not probe the LAN)
+        let Some(abs) = base
+            .as_ref()
+            .and_then(|b| b.join(&src).ok())
+            .filter(|u| {
+                let web = matches!(u.scheme(), "http" | "https")
+                    && (!tvfs_core::hosts::is_local_network(u)
+                        || tvfs_core::hosts::TrustedUrl::from_url(u.clone(), tvfs_core::hosts::Allow::AnyPath).is_some());
+                web || (local_doc && u.scheme() == "file")
+            })
+        else {
+            continue;
+        };
         let (shared2, weak) = (shared.clone(), weak.clone());
         shared.rt.spawn(async move {
             let decoded = async {
+                // a few downloads and decodes at a time, each with a size limit (a 24 MB file can decode to gigabytes)
+                let _permit = IMAGE_SLOTS.acquire().await.ok()?;
                 let bytes = shared2.client.fetch_bytes(abs.as_str(), MAX_IMAGE_BYTES).await.ok()?;
                 tokio::task::spawn_blocking(move || {
-                    let img = image::load_from_memory(&bytes).ok()?.into_rgba8();
+                    let mut reader = image::ImageReader::new(std::io::Cursor::new(&bytes[..])).with_guessed_format().ok()?;
+                    let mut limits = image::Limits::default();
+                    limits.max_image_width = Some(16_384);
+                    limits.max_image_height = Some(16_384);
+                    limits.max_alloc = Some(256 * 1024 * 1024);
+                    reader.limits(limits);
+                    let img = reader.decode().ok()?.into_rgba8();
                     let (w, h) = img.dimensions();
                     Some(SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(img.as_raw(), w, h))
                 })

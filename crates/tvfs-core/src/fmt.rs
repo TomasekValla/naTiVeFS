@@ -183,9 +183,52 @@ pub fn truncate_filename(name: &str, max_len: usize) -> String {
     format!("{}...{}", base[..keep].iter().collect::<String>(), ext.iter().collect::<String>())
 }
 
+/// A file name from someone else (batch page, share) made safe to create in a folder the user picked: no path
+/// separators or characters Windows forbids, no control characters, no `.`/`..`, no trailing dot or space, no
+/// Windows device name (CON, NUL, COM1, ... with any extension), at most 200 characters.
+pub fn safe_file_name(name: &str) -> String {
+    let mut s: String = name
+        .chars()
+        .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control() { '_' } else { c })
+        .collect();
+    s = s.trim_start().trim_end_matches(['.', ' ']).to_owned();
+    if s.chars().count() > 200 {
+        s = s.chars().take(200).collect::<String>().trim_end_matches(['.', ' ']).to_owned();
+    }
+    if s.is_empty() || s.chars().all(|c| c == '.') {
+        return "file".to_owned();
+    }
+    let stem = s.split('.').next().unwrap_or("").trim_end().to_ascii_uppercase();
+    let device = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+        || (stem.len() == 4
+            && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.as_bytes()[3].is_ascii_digit()
+            && stem.as_bytes()[3] != b'0');
+    if device {
+        s.insert(0, '_');
+    }
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn safe_file_names() {
+        assert_eq!(safe_file_name(".."), "file");
+        assert_eq!(safe_file_name("."), "file");
+        assert_eq!(safe_file_name(""), "file");
+        assert_eq!(safe_file_name("../../evil.exe"), ".._.._evil.exe");
+        assert_eq!(safe_file_name("CON"), "_CON");
+        assert_eq!(safe_file_name("nul.txt"), "_nul.txt");
+        assert_eq!(safe_file_name("COM1.flac"), "_COM1.flac");
+        assert_eq!(safe_file_name("COM0.flac"), "COM0.flac");
+        assert_eq!(safe_file_name("name. "), "name");
+        assert_eq!(safe_file_name("a\u{0}b\nc.txt"), "a_b_c.txt");
+        assert_eq!(safe_file_name("photo (1).jpg"), "photo (1).jpg");
+        assert_eq!(safe_file_name(&"x".repeat(300)).len(), 200);
+    }
 
     #[test]
     fn web_formats() {

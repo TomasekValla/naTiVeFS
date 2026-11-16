@@ -210,6 +210,27 @@ impl std::fmt::Display for TrustedUrl {
     }
 }
 
+/// True for an address on this computer or the local network (localhost, loopback, private, link-local and similar
+/// IP addresses): a remote document must not make the app reach into the network it runs in.
+pub fn is_local_network(url: &Url) -> bool {
+    match url.host() {
+        Some(url::Host::Domain(d)) => {
+            let d = d.to_ascii_lowercase();
+            d == "localhost" || d.ends_with(".localhost") || d.ends_with(".local") || d.ends_with(".internal") || !d.contains('.')
+        }
+        Some(url::Host::Ipv4(ip)) => {
+            ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified() || ip.is_broadcast()
+                || ip.octets()[0] == 100 && (ip.octets()[1] & 0xc0) == 64 // shared address space (CGNAT)
+        }
+        Some(url::Host::Ipv6(ip)) => {
+            let seg0 = ip.segments()[0];
+            ip.is_loopback() || ip.is_unspecified() || (seg0 & 0xfe00) == 0xfc00 || (seg0 & 0xffc0) == 0xfe80
+                || ip.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback() || v4.is_private() || v4.is_link_local())
+        }
+        None => true,
+    }
+}
+
 fn is_file_path(path: &str) -> bool {
     (path.starts_with("/files/") || path.starts_with("/api/protected/")) && !path.contains("/../")
 }
@@ -257,6 +278,19 @@ mod tests {
         let rel = TrustedUrl::file("/files/text/notes.md", Some(&page)).unwrap();
         assert_eq!(rel.as_str(), "https://tvfs.tomasekvalla.cz/files/text/notes.md");
         assert!(TrustedUrl::file("https://tvfs.tomasekvalla.cz/api/protected/ab/file/0", None).unwrap().is_protected());
+    }
+
+    #[test]
+    fn local_network_addresses() {
+        for local in ["http://localhost/a.png", "http://127.0.0.1/a.png", "http://192.168.1.5/a.png", "http://10.0.0.1/a.png",
+            "http://172.16.3.4/a.png", "http://169.254.1.1/a.png", "http://[::1]/a.png", "http://[fe80::1]/a.png",
+            "http://[fd00::1]/a.png", "http://router/a.png", "http://printer.local/a.png", "http://100.64.0.1/a.png",
+            "http://[::ffff:192.168.0.1]/a.png"] {
+            assert!(is_local_network(&Url::parse(local).unwrap()), "{local}");
+        }
+        for public in ["https://i.imgur.com/a.png", "https://8.8.8.8/a.png", "https://tvfs.tomasekvalla.cz/files/pictures/a.png"] {
+            assert!(!is_local_network(&Url::parse(public).unwrap()), "{public}");
+        }
     }
 
     #[test]
