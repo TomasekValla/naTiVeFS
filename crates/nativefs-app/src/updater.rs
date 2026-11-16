@@ -21,6 +21,10 @@ pub enum How {
 /// A verified update waiting for a moment when restarting bothers nobody.
 static READY: Mutex<Option<PathBuf>> = Mutex::new(None);
 
+/// What each downloaded file was verified against (signature text and release), so it is checked again right before
+/// it runs: the file on disk could have been swapped in the meantime.
+static VERIFIED: Mutex<Option<(PathBuf, String, ReleaseInfo)>> = Mutex::new(None);
+
 pub fn set_ready(file: PathBuf) {
     *READY.lock().unwrap() = Some(file);
 }
@@ -72,14 +76,48 @@ pub fn how() -> How {
     How::Manual("Download the new version from the release page.")
 }
 
+/// A new folder for one download, inside the app's own data folder (not the shared temp folder), readable only by
+/// this user on Linux. An existing folder of that name is never reused.
+fn private_update_dir() -> Result<PathBuf, String> {
+    let base = tvfs_core::config::Config::data_dir().map_err(|e| e.to_string())?.join("updates");
+    std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
+    // earlier downloads (installed or abandoned) are not needed any more
+    if let Ok(entries) = std::fs::read_dir(&base) {
+        for e in entries.flatten() {
+            let _ = std::fs::remove_dir_all(e.path());
+        }
+    }
+    let dir = base.join(format!("{}-{nanos:09}", std::process::id()));
+    #[cfg_attr(not(unix), allow(unused_mut))]
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
 /// Download and verify the pending update.
 pub async fn download(progress: impl FnMut(u64, Option<u64>)) -> Result<PathBuf, String> {
     let info = PENDING.lock().unwrap().clone().ok_or("no update to install")?;
-    let dir = std::env::temp_dir().join(format!("nativefs-update-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let dir = private_update_dir()?;
     let file = dir.join(&info.asset_name);
-    update::download_verified(&info, &file, progress).await.map_err(|e| e.to_string())?;
+    let sig = update::download_verified(&info, &file, env!("CARGO_PKG_VERSION"), progress).await.map_err(|e| {
+        let _ = std::fs::remove_dir_all(&dir);
+        e.to_string()
+    })?;
+    *VERIFIED.lock().unwrap() = Some((file.clone(), sig, info));
     Ok(file)
+}
+
+/// The file must be the one that was verified, and still carry a valid signature for that release.
+fn check_again(file: &Path) -> Result<(), String> {
+    let verified = VERIFIED.lock().unwrap().clone();
+    match verified {
+        Some((path, sig, info)) if path == file => update::reverify_file(file, &sig, &info, env!("CARGO_PKG_VERSION"))
+            .map_err(|e| format!("The downloaded update no longer passes its check ({e}); it was not installed.")),
+        _ => Err("This update was not verified; it was not installed.".into()),
+    }
 }
 
 /// Start the installer or replace the binaries. `Ok` means the app should quit now. `hidden`: nobody is looking, so
@@ -87,7 +125,10 @@ pub async fn download(progress: impl FnMut(u64, Option<u64>)) -> Result<PathBuf,
 pub fn install(file: &Path, hidden: bool) -> Result<(), String> {
     match how() {
         How::Manual(text) => Err(text.into()),
-        how => apply(how, file, hidden),
+        how => {
+            check_again(file)?;
+            apply(how, file, hidden)
+        }
     }
 }
 

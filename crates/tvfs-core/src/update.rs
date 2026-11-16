@@ -155,17 +155,58 @@ pub async fn check_latest(current: &str) -> Result<Option<ReleaseInfo>> {
 }
 
 pub fn verify_signature(data: &[u8], signature_text: &str, public_key_b64: &str) -> Result<()> {
+    verify_signed(data, signature_text, public_key_b64).map(|_| ())
+}
+
+/// Checks the signature and returns the signed (trusted) comment.
+fn verify_signed(data: &[u8], signature_text: &str, public_key_b64: &str) -> Result<String> {
     if public_key_b64.is_empty() {
         return Err(Error::Update("no update public key configured; refusing to install".into()));
     }
     let pk = PublicKey::from_base64(public_key_b64).map_err(|e| Error::Update(format!("bad public key: {e}")))?;
     let sig = Signature::decode(signature_text).map_err(|e| Error::Update(format!("bad signature file: {e}")))?;
-    pk.verify(data, &sig, false).map_err(|e| Error::Update(format!("signature check failed: {e}")))
+    pk.verify(data, &sig, false).map_err(|e| Error::Update(format!("signature check failed: {e}")))?;
+    Ok(sig.trusted_comment().to_owned())
 }
 
-/// Download the release file and its signature, verify, then write `dest`. `progress` gets the bytes so far and the
-/// total size when the server tells it. Nothing is written unless the signature is valid.
-pub async fn download_verified(info: &ReleaseInfo, dest: &Path, mut progress: impl FnMut(u64, Option<u64>)) -> Result<()> {
+/// The signed comment must name this exact file and the offered version, and that version must be newer than the
+/// running one: a genuinely signed older build or another signed file cannot be installed as an update.
+/// (Releases sign with `-t "timestamp:<t> file:<asset> version:<tag>"`, see release.yml.)
+pub fn check_signed_comment(comment: &str, asset_name: &str, offered: &Version, current: &Version) -> Result<()> {
+    let tokens: Vec<&str> = comment.split_whitespace().collect();
+    if !tokens.contains(&format!("file:{asset_name}").as_str()) {
+        return Err(Error::Update("the signature is for a different file".into()));
+    }
+    let signed = tokens
+        .iter()
+        .find_map(|t| t.strip_prefix("version:"))
+        .and_then(parse_tag)
+        .ok_or_else(|| Error::Update("the signature does not name a version".into()))?;
+    if signed != *offered {
+        return Err(Error::Update(format!("the signature is for version {signed}, not {offered}")));
+    }
+    if signed <= *current {
+        return Err(Error::Update(format!("version {signed} is not newer than this one ({current})")));
+    }
+    Ok(())
+}
+
+/// Signature + signed comment of a release file (see [`check_signed_comment`]).
+pub fn verify_release(data: &[u8], signature_text: &str, info: &ReleaseInfo, current: &str) -> Result<()> {
+    let current = parse_tag(current).ok_or_else(|| Error::Update(format!("bad current version {current}")))?;
+    let comment = verify_signed(data, signature_text, UPDATE_PUBLIC_KEY)?;
+    check_signed_comment(&comment, &info.asset_name, &info.version, &current)
+}
+
+/// Download the release file and its signature, verify both (see [`verify_release`]), then write `dest` as a new file
+/// (an existing file or link there is an error). Returns the signature text, so the file can be checked again right
+/// before it runs. `progress` gets the bytes so far and the total size when the server tells it.
+pub async fn download_verified(
+    info: &ReleaseInfo,
+    dest: &Path,
+    current: &str,
+    mut progress: impl FnMut(u64, Option<u64>),
+) -> Result<String> {
     // no overall time limit here (a large file on a slow line), only for a connection that stops answering
     let client = reqwest::Client::builder()
         .user_agent(concat!("naTiVeFS/", env!("CARGO_PKG_VERSION")))
@@ -180,9 +221,17 @@ pub async fn download_verified(info: &ReleaseInfo, dest: &Path, mut progress: im
         progress(data.len() as u64, total);
     }
     let sig = client.get(&info.signature_url).send().await?.error_for_status()?.text().await?;
-    verify_signature(&data, &sig, UPDATE_PUBLIC_KEY)?;
-    tokio::fs::write(dest, &data).await?;
-    Ok(())
+    verify_release(&data, &sig, info, current)?;
+    let mut f = tokio::fs::OpenOptions::new().write(true).create_new(true).open(dest).await?;
+    tokio::io::AsyncWriteExt::write_all(&mut f, &data).await?;
+    tokio::io::AsyncWriteExt::flush(&mut f).await?;
+    Ok(sig)
+}
+
+/// The downloaded file again, right before it is run or unpacked: what lies on disk now must still be the signed file.
+pub fn reverify_file(path: &Path, signature_text: &str, info: &ReleaseInfo, current: &str) -> Result<()> {
+    let data = std::fs::read(path)?;
+    verify_release(&data, signature_text, info, current)
 }
 
 #[cfg(test)]
@@ -229,6 +278,26 @@ mod tests {
         assert!(matches!(decide(unsigned, &cur, false, a), CheckOutcome::NoBuild { .. }));
         let same = vec![rel("v0.1.0", false, &[a, sig])];
         assert!(matches!(decide(same, &cur, false, a), CheckOutcome::UpToDate { .. }));
+    }
+
+    #[test]
+    fn signed_comment_must_name_file_and_a_newer_offered_version() {
+        let v = |s: &str| parse_tag(s).unwrap();
+        let ok = "timestamp:1700000000	file:naTiVeFS-windows-x64-setup.exe	version:v1.2.0";
+        assert!(check_signed_comment(ok, "naTiVeFS-windows-x64-setup.exe", &v("v1.2.0"), &v("v1.1.0")).is_ok());
+        // another file signed with the same key
+        assert!(check_signed_comment(ok, "naTiVeFS-linux-x64-portable.tar.gz", &v("v1.2.0"), &v("v1.1.0")).is_err());
+        // an old genuinely signed build under a newer tag (downgrade)
+        let old = "timestamp:1	file:naTiVeFS-windows-x64-setup.exe	version:v1.0.0";
+        assert!(check_signed_comment(old, "naTiVeFS-windows-x64-setup.exe", &v("v1.3.0"), &v("v1.1.0")).is_err());
+        // not newer than the running version
+        assert!(check_signed_comment(ok, "naTiVeFS-windows-x64-setup.exe", &v("v1.2.0"), &v("v1.2.0")).is_err());
+        // old signatures without a version
+        let legacy = "timestamp:1	file:naTiVeFS-windows-x64-setup.exe	hashed";
+        assert!(check_signed_comment(legacy, "naTiVeFS-windows-x64-setup.exe", &v("v1.2.0"), &v("v1.1.0")).is_err());
+        // a prefix of the file name is not the file
+        let pre = "file:naTiVeFS-windows-x64-setup.exe.bak version:v1.2.0";
+        assert!(check_signed_comment(pre, "naTiVeFS-windows-x64-setup.exe", &v("v1.2.0"), &v("v1.1.0")).is_err());
     }
 
     #[test]

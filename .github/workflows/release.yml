@@ -204,8 +204,12 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y minisign
           printf '%s\n' "$MINISIGN_KEY" > "$RUNNER_TEMP/minisign.key"
+          # the signed comment names the file and the release version (tab separated): the app installs a file only
+          # when it names that exact asset and a version newer than its own (no downgrade to an older signed build);
+          # the install scripts check the file name
           for f in dist/naTiVeFS-*; do
-            printf '%s\n' "$MINISIGN_PASSWORD" | minisign -S -s "$RUNNER_TEMP/minisign.key" -m "$f"
+            comment=$(printf 'timestamp:%s\tfile:%s\tversion:%s' "$(date +%s)" "$(basename "$f")" "$GITHUB_REF_NAME")
+            printf '%s\n' "$MINISIGN_PASSWORD" | minisign -S -s "$RUNNER_TEMP/minisign.key" -m "$f" -t "$comment"
           done
           rm -f "$RUNNER_TEMP/minisign.key"
 
