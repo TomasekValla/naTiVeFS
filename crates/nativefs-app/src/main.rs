@@ -851,11 +851,17 @@ fn delete_recent(shared: &Arc<Shared>, weak: &Weak<MainWindow>, handle: &tokio::
 
 /// A link in the browser: the one chosen in Settings > Links, else the system's default. A TVFS page is marked
 /// (`inbrowser=1`) so the web page does not hand it straight back to this app.
+/// Only real web links (http, https) and mailto leave the app: a link in a document must never start a program, open a
+/// network share or reach another URI handler (the system "open" would do any of that for an arbitrary string).
 fn open_external(url: &str, cfg: &Config) {
-    let url = match url::Url::parse(url) {
-        Ok(u) if tvfs_core::link::is_tvfs_host(&u) => nativefs_ipc::in_browser_url(url),
-        _ => url.to_owned(),
+    let parsed = match url::Url::parse(url.trim()) {
+        Ok(u) if matches!(u.scheme(), "http" | "https" | "mailto") && (u.scheme() == "mailto" || u.host_str().is_some()) => u,
+        _ => {
+            eprintln!("naTiVeFS: not opening a link that is not a web address");
+            return;
+        }
     };
+    let url = if tvfs_core::link::is_tvfs_host(&parsed) { nativefs_ipc::in_browser_url(parsed.as_str()) } else { parsed.to_string() };
     let chosen = cfg.browser.as_deref().map(str::trim).filter(|b| !b.is_empty());
     let spawned = chosen.and_then(|cmd| {
         let (program, args) = tvfs_core::config::browser_argv(cmd, &url).ok()?;

@@ -7,6 +7,7 @@ pub mod config;
 pub mod content;
 pub mod error;
 pub mod fmt;
+pub mod hosts;
 pub mod link;
 pub mod markdown;
 pub mod models;

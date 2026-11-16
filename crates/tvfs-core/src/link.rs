@@ -1,5 +1,5 @@
-//! Decide what a link means. Accepts `https://files.tomasekvalla.cz/files/<dir>/<name>`
-//! and `tvfs://open?url=<percent-encoded https link>`.
+//! Decide what a link means. Accepts links on any TVFS host (`files.`, `tvfs.`, `tvfs-usercontent.`
+//! tomasekvalla.cz, see [`crate::hosts`]) and `tvfs://open?url=<percent-encoded https link>`.
 
 use percent_encoding::percent_decode_str;
 use url::Url;
@@ -42,8 +42,7 @@ pub struct OpenRequest {
 }
 
 pub fn is_tvfs_host(url: &Url) -> bool {
-    let Ok(base) = Url::parse(crate::base_url()) else { return false };
-    url.host_str().is_some_and(|h| Some(h) == base.host_str())
+    url.host_str().is_some_and(crate::hosts::is_tvfs_host_name)
 }
 
 /// `None` = not a TVFS link (the link router should hand it to the browser).
@@ -57,9 +56,8 @@ pub fn parse_open_request(raw: &str) -> Option<OpenRequest> {
         "https" | "http" => parsed,
         _ => return None,
     };
-    if !is_tvfs_host(&https) || !matches!(https.scheme(), "https" | "http") {
-        return None;
-    }
+    // https on a TVFS host, default port, no user info (http is upgraded); everything else is not TVFS
+    let https = crate::hosts::TrustedUrl::from_url(https, crate::hosts::Allow::AnyPath)?.into_url();
     let segments: Vec<&str> = https.path_segments()?.filter(|s| !s.is_empty()).collect();
     let (kind, file_name) = match segments.as_slice() {
         ["files", dir, .., last] => (LinkKind::from_dir(dir), Some(decode(last))),
@@ -76,6 +74,19 @@ fn decode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_hosts_and_safe_normalisation() {
+        let r = parse_open_request("https://tvfs-usercontent.tomasekvalla.cz/files/audio/a.flac").unwrap();
+        assert_eq!(r.kind, LinkKind::Audio);
+        let r = parse_open_request("https://tvfs.tomasekvalla.cz/files/players/t.html").unwrap();
+        assert_eq!(r.kind, LinkKind::Player);
+        let r = parse_open_request("http://files.tomasekvalla.cz/files/videos/a.mp4").unwrap();
+        assert_eq!(r.url.as_str(), "https://files.tomasekvalla.cz/files/videos/a.mp4");
+        assert!(parse_open_request("http://files.tomasekvalla.cz:81/api/protected/x/file/0").is_none());
+        assert!(parse_open_request("tvfs://open?url=http%3A%2F%2Ffiles.tomasekvalla.cz%3A81%2Fx").is_none());
+        assert!(parse_open_request("https://a:b@tvfs.tomasekvalla.cz/files/x/y").is_none());
+    }
 
     #[test]
     fn https_video() {

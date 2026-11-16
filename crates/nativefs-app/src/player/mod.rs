@@ -247,8 +247,14 @@ pub fn open(shared: &Arc<Shared>, content: Content) {
             let _ = player_mpv.set_str(k, v);
         }
     }
-    // "TVFS Users Only" videos need the session cookie (only sent to the TVFS server)
-    if content.protected {
+    // "TVFS Users Only" videos need the session cookie: only over https, only to the TVFS page/API host and only
+    // for a Users Only file (mpv sends a raw header, so the checks the HTTP client does for cookies are done here)
+    let cookie_ok = tvfs_core::hosts::TrustedUrl::file(&content.url, None)
+        .is_some_and(|u| {
+            u.is_protected()
+                && tvfs_core::hosts::session_origins(shared.client.base()).iter().any(|o| o.host_str() == u.as_url().host_str())
+        });
+    if content.protected && cookie_ok {
         if let Some(token) = shared.client.session_token() {
             let _ = player_mpv.set_str("http-header-fields", &format!("Cookie: tvfs_token={token}"));
         }

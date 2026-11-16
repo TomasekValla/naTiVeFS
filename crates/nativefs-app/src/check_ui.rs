@@ -11,8 +11,6 @@ use tvfs_core::Error;
 use crate::{on_ui, Shared};
 use crate::{CheckStat, CheckStatPair, CheckStream, MainWindow};
 
-/// Links the paste shortcut accepts (check.html: `text.startsWith('https://files.tomasekvalla.cz/')`).
-const LINK_PREFIX: &str = "https://files.tomasekvalla.cz/";
 
 /// Bumped every time the page opens; a probe that started before is ignored when it returns.
 static VISIT: AtomicU64 = AtomicU64::new(0);
@@ -114,7 +112,8 @@ pub fn paste(ui: &MainWindow) {
     let Ok(mut cb) = arboard::Clipboard::new() else { return };
     let Ok(text) = cb.get_text() else { return };
     let text = text.trim();
-    if text.starts_with(LINK_PREFIX) {
+    // a TVFS file on any of its hosts (files., tvfs., tvfs-usercontent.)
+    if tvfs_core::hosts::TrustedUrl::file(text, None).is_some() {
         ui.set_check_url(text.into());
     }
 }

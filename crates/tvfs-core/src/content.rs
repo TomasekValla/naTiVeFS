@@ -4,6 +4,7 @@
 //! or the older `var AUDIO_URL = <url>`, `const files = [...]`), which is what is read here. Nothing on the server changes for this.
 
 use std::path::Path;
+use crate::hosts::TrustedUrl;
 
 use serde::Deserialize;
 use url::Url;
@@ -272,7 +273,7 @@ pub async fn resolve(client: &Client, link: &Url) -> Result<Resolved> {
     match seg.as_slice() {
         ["files", "batch", ..] if html_page => {
             let html = fetch_page(client, link).await?;
-            parse_batch_page(&html).map(Resolved::Batch).ok_or_else(|| not_understood("batch page"))
+            parse_batch_page(&html).map(|b| Resolved::Batch(trusted_batch(b, link))).ok_or_else(|| not_understood("batch page"))
         }
         ["files", "protected", "pages", file] => {
             let id = file.trim_end_matches(".html");
@@ -280,10 +281,10 @@ pub async fn resolve(client: &Client, link: &Url) -> Result<Resolved> {
         }
         ["files", "protected", "tools", _] | ["files", "players", ..] | ["files", "text", ..] if html_page => {
             let html = fetch_page(client, link).await?;
-            parse_audio_page(&html, page)
+            let c = parse_audio_page(&html, page)
                 .or_else(|| parse_reader_page(&html, page))
-                .map(Resolved::Content)
-                .ok_or_else(|| not_understood("player page"))
+                .ok_or_else(|| not_understood("player page"))?;
+            trusted_content(c, link).map(Resolved::Content)
         }
         ["api", "protected", id, "file", index] => {
             let meta = share_meta(client, id).await?;
@@ -294,6 +295,35 @@ pub async fn resolve(client: &Client, link: &Url) -> Result<Resolved> {
         ["files", _, .., name] if !html_page => Ok(Resolved::Content(file_content(link, page, false, (*name).to_owned()))),
         _ => Ok(Resolved::Browser(page.to_owned())),
     }
+}
+
+/// The file URL a page names must itself be a TVFS file (https, TVFS host, `/files/` or `/api/protected/`):
+/// a page anyone can upload must not make the app read local files, UNC paths or the local network.
+fn trusted_content(mut c: Content, page: &Url) -> Result<Content> {
+    let url = TrustedUrl::file(&c.url, Some(page)).ok_or_else(|| not_understood("file address on this page"))?;
+    c.protected = url.is_protected();
+    c.url = url.to_string();
+    Ok(c)
+}
+
+/// Same for every file of a batch page; files with another address are left out.
+fn trusted_batch(mut b: BatchPage, page: &Url) -> BatchPage {
+    // sizes belong to the files by position: drop them together
+    let sizes = std::mem::take(&mut b.sizes);
+    let (files, sizes): (Vec<BatchFile>, Vec<Option<String>>) = std::mem::take(&mut b.files)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, mut f)| {
+            f.url = TrustedUrl::file(&f.url, Some(page))?.to_string();
+            Some((f, sizes.get(i).cloned()))
+        })
+        .unzip();
+    b.files = files;
+    b.sizes = sizes.into_iter().flatten().collect();
+    if TrustedUrl::link(&b.page_link).is_none() {
+        b.page_link = page.to_string();
+    }
+    b
 }
 
 fn not_understood(what: &str) -> Error {
@@ -324,6 +354,36 @@ impl ShareMeta {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hostile_pages_cannot_point_at_local_files_or_the_network() {
+        let page = Url::parse("https://tvfs.tomasekvalla.cz/files/text/x_md_tvfsreader.html").unwrap();
+        for target in ["file:///C:/Windows/win.ini", "file://attacker/share/x.md", "http://192.168.1.10/x.md",
+            "http://127.0.0.1:9000/files/text/a.md", "https://files.tomasekvalla.cz:8443/files/text/a.md",
+            "https://evil.example/files/text/a.md", "https://tvfs.tomasekvalla.cz/admin.html"] {
+            let html = format!("<title>x.md — TVFS MD Reader</title><script>fetch({:?})</script>", target);
+            let c = parse_reader_page(&html, page.as_str()).unwrap();
+            assert!(trusted_content(c, &page).is_err(), "{target}");
+        }
+        let html = "<title>x.md — TVFS MD Reader</title><script>fetch(\"/files/text/x.md\")</script>";
+        let c = trusted_content(parse_reader_page(html, page.as_str()).unwrap(), &page).unwrap();
+        assert_eq!(c.url, "https://tvfs.tomasekvalla.cz/files/text/x.md");
+        assert!(!c.protected);
+    }
+
+    #[test]
+    fn batch_pages_keep_only_tvfs_files() {
+        let page = Url::parse("https://files.tomasekvalla.cz/files/batch/b.html").unwrap();
+        let b = BatchPage { id: "b".into(), page_link: "file:///x".into(), page_styled: String::new(), subtitle: String::new(),
+            expire_note: String::new(), sizes: vec!["1 MB".into(), "2 MB".into()], files: vec![
+                BatchFile { url: "https://tvfs-usercontent.tomasekvalla.cz/files/pictures/a.png".into(), name: "a".into(), styled: String::new() },
+                BatchFile { url: "file:///etc/passwd".into(), name: "b".into(), styled: String::new() },
+            ] };
+        let b = trusted_batch(b, &page);
+        assert_eq!(b.files.len(), 1);
+        assert_eq!(b.sizes, vec!["1 MB".to_string()]);
+        assert_eq!(b.page_link, page.as_str());
+    }
 
     const MD_PAGE: &str = r#"<!DOCTYPE html><html><head><title>notes &amp; ideas.md — TVFS MD Reader</title></head><body>
 <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>

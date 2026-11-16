@@ -62,11 +62,21 @@ impl Client {
             .find_map(|kv| kv.strip_prefix("tvfs_token=").map(str::to_owned))
     }
 
-    /// Re-install a previously saved session token into the cookie jar.
+    /// Re-install a previously saved session token into the cookie jar (for every TVFS page host, see
+    /// [`crate::hosts::session_origins`]; never for the user-content host).
     pub fn restore_session(&self, token: &str) {
-        let secure = if self.base.scheme() == "https" { "; Secure" } else { "" };
-        let cookie = format!("{SESSION_COOKIE}={token}; Path=/{secure}");
-        self.jar.add_cookie_str(&cookie, &self.base);
+        for origin in crate::hosts::session_origins(&self.base) {
+            let secure = if origin.scheme() == "https" { "; Secure" } else { "" };
+            let cookie = format!("{SESSION_COOKIE}={token}; Path=/{secure}");
+            self.jar.add_cookie_str(&cookie, &origin);
+        }
+    }
+
+    /// Drop the session cookie on every page host (after a logout).
+    fn forget_session(&self) {
+        for origin in crate::hosts::session_origins(&self.base) {
+            self.jar.add_cookie_str(&format!("{SESSION_COOKIE}=; Path=/; Max-Age=0"), &origin);
+        }
     }
 
     async fn check(resp: Response) -> Result<Response> {
@@ -109,6 +119,10 @@ impl Client {
         }
         let auth: AuthResponse = Self::check(resp).await?.json().await?;
         if auth.valid {
+            // the server set the cookie for the API host; links on the other TVFS page host need it too
+            if let Some(token) = self.session_token() {
+                self.restore_session(&token);
+            }
             Ok(auth)
         } else {
             Err(Error::BadCredentials)
@@ -116,7 +130,9 @@ impl Client {
     }
 
     pub async fn logout(&self) -> Result<()> {
-        let _ = Self::check(self.http.post(self.endpoint("api/logout")?).send().await?).await?;
+        let result = Self::check(self.http.post(self.endpoint("api/logout")?).send().await?).await;
+        self.forget_session();
+        let _ = result?;
         Ok(())
     }
 
@@ -360,6 +376,19 @@ mod download_tests {
     use tokio_util::sync::CancellationToken;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn session_cookie_on_both_page_hosts_never_on_user_content() {
+        let client = Client::with_base("https://files.tomasekvalla.cz").unwrap();
+        client.restore_session("tok123");
+        let has = |u: &str| client.jar.cookies(&Url::parse(u).unwrap()).is_some_and(|h| h.to_str().unwrap().contains("tok123"));
+        assert!(has("https://files.tomasekvalla.cz/api/protected/x/file/0"));
+        assert!(has("https://tvfs.tomasekvalla.cz/api/protected/x/file/0"));
+        assert!(!has("https://tvfs-usercontent.tomasekvalla.cz/files/audio/a.flac"));
+        assert!(!has("https://example.com/"));
+        client.forget_session();
+        assert!(!has("https://tvfs.tomasekvalla.cz/"));
+    }
 
     #[tokio::test]
     async fn download_writes_the_file_and_reports_progress() {
