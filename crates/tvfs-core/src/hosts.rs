@@ -6,7 +6,10 @@
 //! TVFS host, default port, no user info. Anything else is not TVFS and is never fetched with the
 //! session or treated as a TVFS file.
 
+use std::path::PathBuf;
 use std::sync::RwLock;
+
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 /// Every host TVFS has used: the old address, the page/API host and the user-content host.
@@ -53,6 +56,56 @@ pub fn set_server_hosts<S: AsRef<str>>(hosts: &[S]) {
     if let Ok(mut w) = SERVER_HOSTS.write() {
         *w = clean;
     }
+}
+
+/// What `GET /api/hosts` says: `page` = upload page, generated pages and API; `content` = uploaded files;
+/// `known` = every TVFS host, old and new.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct HostsInfo {
+    pub page: String,
+    #[serde(default)]
+    pub content: String,
+    #[serde(default)]
+    pub known: Vec<String>,
+}
+
+fn cache_file() -> Option<PathBuf> {
+    crate::config::Config::data_dir().ok().map(|d| d.join("hosts.json"))
+}
+
+/// `https://<host>` when `page` is a TVFS page host the app may use as its API address (a known page host or one the
+/// server announced under the TVFS domain); never anything else, so the server cannot send the app elsewhere.
+/// Does not call [`crate::base_url`] (it runs while that is being set up).
+fn accepted_page(page: &str) -> Option<String> {
+    let u = Url::parse(page.trim()).ok()?;
+    let host = u.host_str()?.to_ascii_lowercase();
+    let ok_host = PAGE_HOSTS.contains(&host.as_str()) || SERVER_HOSTS.read().is_ok_and(|v| v.contains(&host));
+    let clean = u.scheme() == "https" && u.port().is_none() && u.username().is_empty() && u.password().is_none();
+    (ok_host && clean && host != KNOWN_HOSTS[2]).then(|| format!("https://{host}"))
+}
+
+/// The API address remembered from the last [`refresh`] (read once at start).
+pub(crate) fn cached_page_base() -> Option<String> {
+    let text = std::fs::read_to_string(cache_file()?).ok()?;
+    let info: HostsInfo = serde_json::from_str(&text).ok()?;
+    set_server_hosts(&info.known);
+    accepted_page(&info.page)
+}
+
+/// Asks the server where TVFS lives now, learns its hosts and remembers the page/API address for the next start
+/// (the running process keeps its address, so a session is never split between two hosts). Returns true when the
+/// next start will use a different address.
+pub async fn refresh(client: &crate::Client) -> crate::Result<bool> {
+    let info = client.hosts().await?;
+    set_server_hosts(&info.known);
+    let Some(page) = accepted_page(&info.page) else { return Ok(false) };
+    if let Some(path) = cache_file() {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(&path, serde_json::to_string(&info).unwrap_or_default());
+    }
+    Ok(page.trim_end_matches('/') != crate::base_url().trim_end_matches('/'))
 }
 
 /// The host of the build-time base address (only differs from the known hosts in test builds).
@@ -204,6 +257,16 @@ mod tests {
         let rel = TrustedUrl::file("/files/text/notes.md", Some(&page)).unwrap();
         assert_eq!(rel.as_str(), "https://tvfs.tomasekvalla.cz/files/text/notes.md");
         assert!(TrustedUrl::file("https://tvfs.tomasekvalla.cz/api/protected/ab/file/0", None).unwrap().is_protected());
+    }
+
+    #[test]
+    fn the_api_address_is_only_ever_a_tvfs_page_host() {
+        assert_eq!(accepted_page("https://tvfs.tomasekvalla.cz").as_deref(), Some("https://tvfs.tomasekvalla.cz"));
+        assert_eq!(accepted_page("https://files.tomasekvalla.cz/").as_deref(), Some("https://files.tomasekvalla.cz"));
+        for bad in ["https://tvfs-usercontent.tomasekvalla.cz", "https://evil.com", "http://tvfs.tomasekvalla.cz",
+            "https://tvfs.tomasekvalla.cz:8443", "https://u:p@tvfs.tomasekvalla.cz", "garbage"] {
+            assert!(accepted_page(bad).is_none(), "{bad}");
+        }
     }
 
     #[test]

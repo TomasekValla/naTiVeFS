@@ -24,8 +24,15 @@ pub use error::{Error, Result};
 /// `NATIVEFS_BASE_URL` environment variable (useful for local testing).
 pub const DEFAULT_BASE_URL: &str = "https://files.tomasekvalla.cz";
 
+static BASE_URL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// The TVFS page/API address: a build-time override (local testing), else the address the server announced last
+/// time (`hosts.json`, see [`hosts::refresh`]), else [`DEFAULT_BASE_URL`]. Fixed for the life of the process.
 pub fn base_url() -> &'static str {
-    option_env!("NATIVEFS_BASE_URL").unwrap_or(DEFAULT_BASE_URL)
+    if let Some(b) = option_env!("NATIVEFS_BASE_URL") {
+        return b;
+    }
+    BASE_URL.get_or_init(|| hosts::cached_page_base().unwrap_or_else(|| DEFAULT_BASE_URL.to_owned()))
 }
 
 pub const APP_NAME: &str = "naTiVeFS";

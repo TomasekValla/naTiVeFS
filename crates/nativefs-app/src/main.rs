@@ -1697,6 +1697,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
     let client = Client::new()?;
+    {
+        // where TVFS lives now (new hosts are used from the next start; errors just keep the current address)
+        let c = client.clone();
+        handle.spawn(async move {
+            if let Ok(true) = tvfs_core::hosts::refresh(&c).await {
+                eprintln!("naTiVeFS: TVFS has a new address; it is used from the next start");
+            }
+        });
+    }
     let data_dir = Config::data_dir().ok();
     let resume = match &data_dir {
         Some(d) => ResumeStore::open(d.join("upload-resume.json")),

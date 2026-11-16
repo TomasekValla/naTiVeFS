@@ -138,6 +138,11 @@ impl Client {
 
     // ── read ──────────────────────────────────────────────────────────────
 
+    /// `GET /api/hosts`: where TVFS lives now (public, no login needed).
+    pub async fn hosts(&self) -> Result<crate::hosts::HostsInfo> {
+        Self::json(self.http.get(self.endpoint("api/hosts")?)).await
+    }
+
     pub async fn status(&self) -> Result<Status> {
         Self::json(self.http.get(self.endpoint("api/status")?)).await
     }
