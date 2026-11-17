@@ -40,15 +40,17 @@ jobs:
           echo 'set(CMAKE_INSTALL_LIBDIR lib CACHE PATH "")' > /tmp/libdir.cmake
           echo "CMAKE_TOOLCHAIN_FILE=/tmp/libdir.cmake" >> "$GITHUB_ENV"
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: libmpv for the video player (Windows)
         if: runner.os == 'Windows'
         shell: bash
         run: bash tools/fetch-libmpv.sh ${{ contains(matrix.name, 'arm64') && 'aarch64' || 'x86_64' }}
 
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable branch
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
       - run: cargo build --release --locked -p nativefs-app -p nativefs-link -p nativefs-cli
 
@@ -79,7 +81,13 @@ jobs:
         if: runner.os == 'Linux'
         # video and camera use the system's libmpv and ffmpeg; without them the rest of the app works
         run: |
-          curl -fsSL -o appimagetool "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${{ matrix.appimage }}.AppImage"
+          curl -fsSL -o appimagetool "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-${{ matrix.appimage }}.AppImage"
+          # digests of the 1.9.1 release assets
+          case "${{ matrix.appimage }}" in
+            x86_64) sum=ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0 ;;
+            aarch64) sum=f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158 ;;
+          esac
+          echo "$sum  appimagetool" | sha256sum -c -
           chmod +x appimagetool
           mkdir -p AppDir/usr/bin AppDir/usr/share/licenses/nativefs AppDir/usr/share/metainfo
           cp packaging/linux/nativefs.metainfo.xml AppDir/usr/share/metainfo/nativefs.appdata.xml
@@ -156,27 +164,31 @@ jobs:
           if (Test-Path $key) { throw "uninstall key left behind" }
           if ([Environment]::GetEnvironmentVariable("Path", "User") -split ";" -contains $dir) { throw "install folder left on the user PATH" }
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: naTiVeFS-${{ matrix.name }}
           path: out/*
 
-  publish:
+  # Linux packages from the portable archives (no secrets in this job)
+  package:
     needs: build
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
+      contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           path: dist
           merge-multiple: true
 
       - name: Linux packages (.deb, .rpm, Arch)
         run: |
-          curl -fsSL https://github.com/goreleaser/nfpm/releases/download/v2.41.0/nfpm_2.41.0_Linux_x86_64.tar.gz | tar -xz nfpm
+          curl -fsSL -o nfpm.tar.gz https://github.com/goreleaser/nfpm/releases/download/v2.41.0/nfpm_2.41.0_Linux_x86_64.tar.gz
+          # from nfpm's checksums.txt of v2.41.0
+          echo "2fec509cc508fd7688b03f1426747725e93e024ff3c94a7f02022a50ddaa6c04  nfpm.tar.gz" | sha256sum -c -
+          tar -xzf nfpm.tar.gz nfpm
           export VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           for name in x64:amd64 arm64:arm64; do
             short=${name%%:*}
@@ -189,15 +201,26 @@ jobs:
           done
           ls -la dist
 
-      - name: Keep the test result
-        if: github.ref_type != 'tag'
-        uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: all-packages
           path: dist/*
 
+  # The only job that sees the signing key: no checkout, no third-party action or tool, only the packages and the
+  # distribution's minisign. It hands back the signatures alone.
+  sign:
+    needs: package
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: all-packages
+          path: dist
+
       - name: Sign everything with minisign
-        if: github.ref_type == 'tag'
         env:
           MINISIGN_KEY: ${{ secrets.MINISIGN_KEY }}
           MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
@@ -212,9 +235,27 @@ jobs:
             printf '%s\n' "$MINISIGN_PASSWORD" | minisign -S -s "$RUNNER_TEMP/minisign.key" -m "$f" -t "$comment"
           done
           rm -f "$RUNNER_TEMP/minisign.key"
+          mkdir sigs && mv dist/*.minisig sigs/
 
-      - uses: softprops/action-gh-release@v2
-        if: github.ref_type == 'tag'
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: signatures
+          path: sigs/*
+
+  # Publishes the packages and their signatures (no key here)
+  publish:
+    needs: sign
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          path: dist
+          merge-multiple: true
+          pattern: "{all-packages,signatures}"
+
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: dist/*
           generate_release_notes: true
