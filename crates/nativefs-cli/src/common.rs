@@ -96,6 +96,28 @@ fn walk_folder_checked(dir: &Path, include_hidden: bool, files: &mut Vec<UploadF
     }
 }
 
+/// Dot folders that hold keys, tokens or a repository's history (a file named inside one is held back).
+const SECRET_FOLDERS: [&str; 12] =
+    [".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker", ".git", ".password-store", ".pki", ".gcloud", ".npmrc", ".cargo"];
+
+/// Why a directly named file is held back without `--include-hidden`: a dot file, a file inside a folder that holds
+/// secrets (`.ssh`, `.aws`, `.gnupg`, ...) or a secret-looking name.
+fn hidden_or_secret(p: &Path) -> Option<String> {
+    let name = p.file_name()?.to_string_lossy().into_owned();
+    let in_dot_folder = p.parent().is_some_and(|d| {
+        d.components().any(|c| {
+            matches!(c, std::path::Component::Normal(s) if SECRET_FOLDERS.iter().any(|f| s.to_string_lossy().eq_ignore_ascii_case(f)))
+        })
+    });
+    if name.starts_with('.') || in_dot_folder {
+        Some("hidden file or inside a hidden folder (add --include-hidden only if the user asked for exactly this file)".into())
+    } else if looks_secret(&name) {
+        Some("looks like a secret or key file (add --include-hidden only if the user asked for exactly this file)".into())
+    } else {
+        None
+    }
+}
+
 /// Like `collect_files`, but files the server cannot take (no detectable extension, over the size limit) are
 /// skipped and reported instead of being errors, and folders skip hidden and secret-looking files (see
 /// `walk_folder_checked`). Unreadable or missing paths stay problems.
@@ -107,6 +129,14 @@ pub fn collect_files_skipping(paths: &[PathBuf], include_hidden: bool) -> (Vec<U
         if p.is_dir() {
             walk_folder_checked(p, include_hidden, &mut files, &mut skipped, &mut problems);
             continue;
+        }
+        // a file named directly gets the same check as a file in a folder: an agent following an injected instruction
+        // ("upload ~/.ssh/id_rsa") must not publish a key or a dot file without the user asking for exactly that
+        if !include_hidden {
+            if let Some(reason) = hidden_or_secret(p) {
+                skipped.push(Skipped { path: display_path(p), reason, soft: false });
+                continue;
+            }
         }
         match inspect(p, None) {
             Ok(f) => files.push(f),
@@ -216,8 +246,23 @@ mod tests {
         let (all, skipped, _) = collect_files_skipping(std::slice::from_ref(&dir), true);
         assert!(skipped.is_empty());
         assert_eq!(all.len(), 10);
-        // a file named directly is never filtered
+        // a secret file named directly is held back too (and fails the command), unless the override is given
         let (one, sk, _) = collect_files_skipping(&[dir.join("server.pem")], false);
+        assert_eq!((one.len(), sk.len()), (0, 1));
+        assert!(!sk[0].soft && sk[0].reason.contains("--include-hidden"));
+        let (one, sk, _) = collect_files_skipping(&[dir.join("server.pem")], true);
+        assert_eq!((one.len(), sk.len()), (1, 0));
+        // a file inside a folder that holds secrets, and a dot file named directly
+        std::fs::create_dir_all(dir.join(".ssh")).unwrap();
+        std::fs::write(dir.join(".ssh/notes.txt"), "x").unwrap();
+        for held in [dir.join(".ssh/notes.txt"), dir.join(".hidden.txt")] {
+            let (one, sk, _) = collect_files_skipping(&[held.clone()], false);
+            assert_eq!((one.len(), sk.len()), (0, 1), "{held:?}");
+        }
+        // an ordinary file in another dot folder (like ~/.local/share) is fine
+        std::fs::create_dir_all(dir.join(".local/share")).unwrap();
+        std::fs::write(dir.join(".local/share/song.mp3"), "x").unwrap();
+        let (one, sk, _) = collect_files_skipping(&[dir.join(".local/share/song.mp3")], false);
         assert_eq!((one.len(), sk.len()), (1, 0));
     }
 }
