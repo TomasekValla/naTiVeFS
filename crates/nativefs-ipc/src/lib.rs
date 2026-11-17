@@ -94,11 +94,12 @@ fn peer_is_same_user(stream: &Stream) -> bool {
             Stream::NamedPipe(s) => s.inner().peer_session_id(),
             _ => return true,
         };
-        let Ok(theirs) = theirs else { return true };
+        // fail closed: a pipe whose owner cannot be checked is not trusted
+        let Ok(theirs) = theirs else { return false };
         let mut ours = 0u32;
         // SAFETY: plain Win32 call writing one u32
         if unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &mut ours) }.is_err() {
-            return true;
+            return false;
         }
         theirs == ours
     }
@@ -191,11 +192,20 @@ impl Reply {
     }
 }
 
-/// Start handling messages on a claimed socket. The handler runs on the IPC thread.
+/// The longest message line accepted (a list of many file paths fits easily).
+const MAX_MESSAGE_BYTES: u64 = 1024 * 1024;
+
+/// Start handling messages on a claimed socket. The handler runs on one IPC thread, one message at a time; each
+/// connection is read on its own short-lived thread with a size limit, so a connection that never finishes its line
+/// (or sends gigabytes) cannot block the hand-overs behind it.
+///
+/// Windows: the pipe keeps the default security of a named pipe (only this user, administrators and SYSTEM may
+/// write; other users may only read), so other users cannot send messages; clients check the server's session.
 pub fn serve<F>(listener: Listener, handler: F) -> JoinHandle<()>
 where
     F: Fn(Message, Reply) + Send + 'static,
 {
+    let (tx, rx) = mpsc::channel::<(Message, Stream)>();
     std::thread::spawn(move || {
         for conn in listener.0.incoming().filter_map(Result::ok) {
             // Linux / macOS: the socket name is guessable and has no file permissions; only this user may drive the app
@@ -203,13 +213,22 @@ where
             if !peer_is_same_user(&conn) {
                 continue;
             }
-            let mut line = String::new();
-            let mut reader = BufReader::new(conn);
-            if reader.read_line(&mut line).is_ok() {
-                if let Ok(msg) = serde_json::from_str::<Message>(line.trim()) {
-                    handler(msg, Reply(Some(reader.into_inner())));
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                use std::io::Read;
+                let mut line = String::new();
+                let mut reader = BufReader::new(conn.take(MAX_MESSAGE_BYTES));
+                if reader.read_line(&mut line).is_ok() && line.ends_with('\n') {
+                    if let Ok(msg) = serde_json::from_str::<Message>(line.trim()) {
+                        let _ = tx.send((msg, reader.into_inner().into_inner()));
+                    }
                 }
-            }
+            });
+        }
+    });
+    std::thread::spawn(move || {
+        for (msg, stream) in rx {
+            handler(msg, Reply(Some(stream)));
         }
     })
 }
@@ -256,5 +275,16 @@ mod tests {
         assert_eq!(send_ack(&Message::Show, Duration::from_secs(5)).unwrap(), Delivery::Unconfirmed);
         let stuck = send_ack(&Message::Quit, Duration::from_millis(300)).unwrap_err();
         assert_eq!(stuck.kind(), io::ErrorKind::TimedOut);
+
+        // a connection that never finishes its line must not block the next hand-over
+        let mut silent = Stream::connect(socket_name().to_ns_name::<GenericNamespaced>().unwrap()).unwrap();
+        silent.write_all(b"{\"Open\":\"https://files.tomasekvalla.cz/files/aud").unwrap();
+        silent.flush().unwrap();
+        send(&Message::Upload(vec!["a.txt".into()])).unwrap();
+        // (the earlier messages of this test are still queued before it)
+        let upload = Message::Upload(vec!["a.txt".into()]);
+        let arrived = std::iter::from_fn(|| rx.recv_timeout(Duration::from_secs(5)).ok()).any(|m| m == upload);
+        assert!(arrived, "the hand-over behind a silent connection did not arrive");
+        drop(silent);
     }
 }
