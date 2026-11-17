@@ -91,6 +91,67 @@ pub struct SyncEntry {
     /// Recorded with the voice recorder (absent on older servers = false).
     #[serde(default)]
     pub voice_note: bool,
+    /// The file is gone; its link shows a "this file has expired" page (kept in the list until the owner removes it).
+    #[serde(default)]
+    pub expired: bool,
+    /// The server ran out of space and removed the file before its time.
+    #[serde(default)]
+    pub removed_early: bool,
+}
+
+/// Opens / plays of one own file (each address counted once per hour), `bytes` = about how much was sent.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize)]
+pub struct FileStats {
+    #[serde(default)]
+    pub opens: u64,
+    #[serde(default)]
+    pub plays: u64,
+    #[serde(default)]
+    pub bytes: u64,
+}
+
+/// Totals of the whole TVFS since `since` (ms).
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalStats {
+    #[serde(default)]
+    pub since: i64,
+    #[serde(default)]
+    pub uploads: u64,
+    #[serde(default)]
+    pub uploaded_bytes: u64,
+    #[serde(default)]
+    pub downloaded_bytes: u64,
+    #[serde(default)]
+    pub opens: u64,
+    #[serde(default)]
+    pub plays: u64,
+}
+
+/// `GET /api/stats`
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct StatsResponse {
+    #[serde(default)]
+    pub global: GlobalStats,
+    #[serde(default)]
+    pub files: std::collections::HashMap<String, FileStats>,
+}
+
+/// `GET` / `PUT /api/settings`: settings kept with the account (not for the host).
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountSettings {
+    /// How many months the "this file has expired" page of an expired upload stays (0 = none).
+    #[serde(default)]
+    pub expired_page_months: u32,
+}
+
+/// `POST /api/file/:id/keep-max`
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeepMaxResponse {
+    #[serde(default, deserialize_with = "lenient_i64")]
+    pub expires_at: Option<i64>,
 }
 
 /// `GET /api/user/sync[?since=N]`

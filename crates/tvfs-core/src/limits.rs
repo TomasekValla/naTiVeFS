@@ -115,6 +115,16 @@ pub fn usable_index(states: &[PillState], wanted: usize) -> usize {
     states.iter().rposition(|s| *s == PillState::Normal).unwrap_or(0)
 }
 
+/// "Keep for the maximum length": the longest expiry (minutes from the upload) when the rules allow noticeably more
+/// than the file has now (same test as the web), else `None`. Never for the host.
+pub fn keep_max_minutes(c: &UploadConfig, size: u64, uploaded_at: i64, expires_at: i64, now_ms: u64) -> Option<u32> {
+    if c.tier < 1 || uploaded_at <= 0 || expires_at as u64 <= now_ms {
+        return None;
+    }
+    let max = allowed_minutes(c, size, now_ms);
+    (max > 0 && uploaded_at + max as i64 * 60_000 > expires_at + 60_000).then_some(max)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,6 +197,20 @@ mod tests {
         let mut c = tier(3);
         c.available_bytes = Some(GB);
         assert_eq!(allowed_minutes(&c, 2 * GB, 0), 0);
+    }
+
+    #[test]
+    fn keep_max_only_when_the_rules_allow_more() {
+        let now = 10_000_000u64;
+        let up = now as i64 - 60_000;
+        // tier 1, small file uploaded for 1 day: can be kept for 7 days
+        assert_eq!(keep_max_minutes(&tier(1), 1000, up, up + 1440 * 60_000, now), Some(10_080));
+        // already at the maximum
+        assert_eq!(keep_max_minutes(&tier(1), 1000, up, up + 10_080 * 60_000, now), None);
+        // the host never
+        assert_eq!(keep_max_minutes(&tier(0), 1000, up, up + 30 * 60_000, now), None);
+        // already expired
+        assert_eq!(keep_max_minutes(&tier(3), 1000, up, now as i64 - 1, now), None);
     }
 
     #[test]

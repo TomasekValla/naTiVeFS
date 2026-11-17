@@ -144,7 +144,7 @@ pub(super) mod tests {
         app.up = Some(app::UploadState { run, control: Default::default(), confirm_cancel: false });
         let r = UploadCompleteResponse { link: "https://files.example/files/text/notes.md".into(), size: 5, styled_link: Some("[notes.md](https://files.example/files/text/notes.md)".into()), ..Default::default() };
         app.result.fin = Finished { files: vec![FileOut { name: "notes.md".into(), result: Ok(r) }, FileOut { name: "bad.bin".into(), result: Err("Server busy".into()) }], ..Default::default() };
-        app.recent.entries = vec![tvfs_core::models::SyncEntry { id: "1".into(), name: "photo.png".into(), link: "https://x/p.png".into(), category: "image".into(), size: 1234567, uploaded_at: None, expires_at: Some(crate::common::now_ms() + 86_400_000), thumbnail: None, voice_note: false }];
+        app.recent.entries = vec![tvfs_core::models::SyncEntry { id: "1".into(), name: "photo.png".into(), link: "https://x/p.png".into(), category: "image".into(), size: 1234567, uploaded_at: None, expires_at: Some(crate::common::now_ms() + 86_400_000), thumbnail: None, voice_note: false, expired: false, removed_early: false }];
         let one = tvfs_core::upload::inspect(&app.picker.entries.iter().find(|e| e.name == "clip.mp4").unwrap().path, None).unwrap();
         app.opts.files = vec![one; 12];
         app.opts.files[0].mime = "audio/ogg".into();
@@ -211,7 +211,7 @@ pub(super) mod tests {
         app.screen = app::Screen::Result;
         all.push_str(&dump(&mut app, 100, 30));
         assert!(all.contains("(default)") && all.contains("FAILED") && all.contains("Link expires after") && all.contains("Uploading"), "{all}");
-        app.recent.entries = vec![tvfs_core::models::SyncEntry { id: "1".into(), name: "photo.png".into(), link: "https://x/p.png".into(), category: "image".into(), size: 1234567, uploaded_at: None, expires_at: Some(crate::common::now_ms() + 86_400_000), thumbnail: None, voice_note: false }];
+        app.recent.entries = vec![tvfs_core::models::SyncEntry { id: "1".into(), name: "photo.png".into(), link: "https://x/p.png".into(), category: "image".into(), size: 1234567, uploaded_at: None, expires_at: Some(crate::common::now_ms() + 86_400_000), thumbnail: None, voice_note: false, expired: false, removed_early: false }];
         app.screen = app::Screen::Recent;
         all.push_str(&dump(&mut app, 100, 30));
         app.cli.theme = ThemeMode::Light;
@@ -226,7 +226,7 @@ pub(super) mod tests {
     fn recent_delete_prompt() {
         let (mut app, _rt) = test_app();
         app.user = Some("demo".into());
-        let entry = |id: &str, name: &str| tvfs_core::models::SyncEntry { id: id.into(), name: name.into(), link: "https://x/p".into(), category: "image".into(), size: 10, uploaded_at: None, expires_at: None, thumbnail: None, voice_note: false };
+        let entry = |id: &str, name: &str| tvfs_core::models::SyncEntry { id: id.into(), name: name.into(), link: "https://x/p".into(), category: "image".into(), size: 10, uploaded_at: None, expires_at: None, thumbnail: None, voice_note: false, expired: false, removed_early: false };
         app.recent.entries = vec![entry("1", "first.png"), entry("2", "second.png")];
         app.screen = app::Screen::Recent;
         assert!(dump(&mut app, 100, 30).contains("d delete"));

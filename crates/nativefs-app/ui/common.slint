@@ -24,6 +24,13 @@ export struct RecentItem {
     tool-link: string,
     // 1 = reader, 2 = audio player
     tool-kind: int,
+    // opens / plays of the file (each address once per hour; web "👁 3 · ▶ 1")
+    opens: int,
+    plays: int,
+    // the server ran out of space and removed the file before its time (badge "REMOVED EARLY")
+    removed-early: bool,
+    // "Keep for the maximum length (7 days from the upload)": the button's tooltip; empty = no button
+    keep-max: string,
 }
 
 // One file in the upload queue (the web's `.file-row`).
@@ -634,11 +641,14 @@ export component RecentRow inherits Rectangle {
     callback remove(bool);
     callback forget();
     callback open();
+    callback keep-max();
     property <bool> unfinished: root.item.kind == 1 || root.item.kind == 2;
     // the narrowest side column (three columns just above 1200 px): with a badge and the buttons the name had no
     // room left and its second line broke letter by letter. The badge goes there: the row is dimmed and its second
     // line says the same ("Expired", "30% uploaded ...", "... from another device")
     property <bool> tight: root.width < 340px;
+    // the action buttons give up a little width in the narrow column, so the name keeps some room
+    property <length> btn-w: root.tight ? 30px : 35px;
     height: max(Look.compact ? 56px : 62px, info.preferred-height + (Look.compact ? 14px : 20px));
     border-radius: 16px;
     background: Palette.glass;
@@ -694,7 +704,31 @@ export component RecentRow inherits Rectangle {
             spacing: 2px;
             horizontal-stretch: 1;
             Text { text: root.item.name; font-size: 13.6px; font-weight: 700; color: Palette.text; overflow: elide; }
-            Text { text: root.item.sub-text; font-size: 11.2px; color: Palette.dim; wrap: word-wrap; }
+            // the narrow column has no badge: its line says it ("Removed early")
+            Text {
+                text: root.tight && root.item.expired && root.item.removed-early ? "Removed early" : root.item.sub-text;
+                font-size: 11.2px;
+                color: Palette.dim;
+                wrap: word-wrap;
+            }
+            // the web's .recent-stats: 0.66rem, dim, 0.85
+            if root.item.opens > 0 || root.item.plays > 0 : HorizontalLayout {
+                spacing: 3px;
+                alignment: start;
+                opacity: 0.85;
+                Ico { src: @image-url("../../../assets/img/emoji-eye.png"); size: 11px; y: 1px; }
+                Text { text: root.item.opens; font-size: 10.56px; color: Palette.dim; vertical-alignment: center; }
+                if root.item.plays > 0 : HorizontalLayout {
+                    spacing: 3px;
+                    Text { text: "·"; font-size: 10.56px; color: Palette.dim; vertical-alignment: center; }
+                    Path {
+                        width: 7px; height: 8px; y: 3px;
+                        commands: "M 0 0 L 7 4 L 0 8 Z";
+                        fill: Palette.dim;
+                    }
+                    Text { text: root.item.plays; font-size: 10.56px; color: Palette.dim; vertical-alignment: center; }
+                }
+            }
         }
         if (root.item.expired || root.unfinished) && !root.tight : VerticalLayout {
             alignment: center;
@@ -706,7 +740,7 @@ export component RecentRow inherits Rectangle {
                 border-radius: 8px;
                 background: root.item.expired ? #ff636329 : #ffc10729;
                 badge := Text {
-                    text: root.item.expired ? "EXPIRED" : (root.item.kind == 1 ? "NOT FINISHED" : "OTHER DEVICE");
+                    text: root.item.expired ? (root.item.removed-early ? "REMOVED EARLY" : "EXPIRED") : (root.item.kind == 1 ? "NOT FINISHED" : "OTHER DEVICE");
                     font-size: 9.92px;
                     font-weight: 800;
                     letter-spacing: 0.5px;
@@ -723,7 +757,7 @@ export component RecentRow inherits Rectangle {
             if !root.unfinished : VerticalLayout {
                 alignment: center;
                 Rectangle {
-                    width: 35px;
+                    width: root.btn-w;
                     height: 32px;
                     border-radius: 8px;
                     background: c1.hover && !root.item.expired ? #ffffff14 : transparent;
@@ -741,7 +775,7 @@ export component RecentRow inherits Rectangle {
             if !root.unfinished : VerticalLayout {
                 alignment: center;
                 Rectangle {
-                    width: 35px;
+                    width: root.btn-w;
                     height: 32px;
                     border-radius: 8px;
                     background: c2.hover && !root.item.expired ? #ffffff14 : transparent;
@@ -756,11 +790,28 @@ export component RecentRow inherits Rectangle {
                     }
                 }
             }
+            // "Keep for the maximum length" (web ⏳): only when the rules allow more than the file has now
+            if !root.unfinished && !root.item.expired && root.item.keep-max != "" : VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: root.btn-w;
+                    height: 32px;
+                    border-radius: 8px;
+                    background: km.hover ? #ffffff14 : transparent;
+                    km := EmojiBtn {
+                        width: parent.width;
+                        height: parent.height;
+                        src: @image-url("../../../assets/img/emoji-hourglass.png");
+                        icon: 17px;
+                        clicked => { root.keep-max(); }
+                    }
+                }
+            }
             // NOT FINISHED: forget locally
             if root.item.kind == 1 : VerticalLayout {
                 alignment: center;
                 Rectangle {
-                    width: 35px;
+                    width: root.btn-w;
                     height: 32px;
                     border-radius: 8px;
                     background: fg.has-hover ? #ffffff14 : transparent;
@@ -773,13 +824,13 @@ export component RecentRow inherits Rectangle {
                 alignment: center;
                 Rectangle {
                     property <bool> shift-down;
-                    width: 35px;
+                    width: root.btn-w;
                     height: 32px;
                     border-radius: 8px;
                     background: dl.has-hover ? #ff63631f : transparent;
                     animate background { duration: Anim.fast; }
                     opacity: root.item.kind == 2 && root.item.key == "" ? 0.3 : 1.0;
-                    Ico { x: 9px; src: @image-url("../../../assets/img/emoji-trash.png"); size: 17px; }
+                    Ico { x: (parent.width - 17px) / 2; src: @image-url("../../../assets/img/emoji-trash.png"); size: 17px; }
                     dl := TouchArea {
                         enabled: !(root.item.kind == 2 && root.item.key == "");
                         mouse-cursor: MouseCursor.pointer;

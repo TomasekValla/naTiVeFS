@@ -56,7 +56,7 @@ use tvfs_core::config::{Config, Motion, UpdateChannel};
 use serde::{Deserialize, Serialize};
 use tvfs_core::fmt::{fmt_countdown, truncate_filename};
 use tvfs_core::link::parse_open_request;
-use tvfs_core::models::{PendingUpload, RecentFiles, SyncEntry, UploadCompleteResponse};
+use tvfs_core::models::{FileStats, GlobalStats, PendingUpload, RecentFiles, SyncEntry, UploadCompleteResponse};
 use tvfs_core::upload::{HistoryStore, ResumeStore, Run, Uploader};
 use tvfs_core::session::{self, StoredSession};
 use tvfs_core::update::{self, CheckOutcome};
@@ -100,6 +100,12 @@ struct Shared {
     tier: AtomicU8,
     /// When the upload rules (`/api/config`) were last fetched, and for which tier.
     config_at: Mutex<Option<(Instant, u8)>>,
+    /// The upload rules of this login (Keep max needs them off the UI thread).
+    upload_cfg: Mutex<Option<tvfs_core::limits::UploadConfig>>,
+    /// Opens / plays of own files and the TVFS totals (`/api/stats`, accounts only), and when they were fetched.
+    file_stats: Mutex<HashMap<String, FileStats>>,
+    global_stats: Mutex<Option<GlobalStats>>,
+    stats_at: Mutex<Option<Instant>>,
     /// The upload running right now (its files are not shown as NOT FINISHED).
     active_run: Mutex<Option<Arc<Run>>>,
     /// Unfinished uploads of this account on any device (`/api/status`).
@@ -135,8 +141,36 @@ struct LocalData {
     shares: Vec<LocalShare>,
 }
 
-/// Recent entries live at most 14 days (files cannot outlive that anyway).
-const RECENT_MAX_AGE_MS: i64 = 14 * 24 * 60 * 60 * 1000;
+/// Recent entries live at most 31 days (the longest expiry is 30 days; expired pages stay listed until then).
+const RECENT_MAX_AGE_MS: i64 = 31 * 24 * 60 * 60 * 1000;
+
+/// Settings > TVFS in numbers (the web's `renderGlobalStats`).
+fn global_stats_text(g: &GlobalStats) -> String {
+    let since = chrono::DateTime::from_timestamp_millis(g.since).map(|d| d.with_timezone(&chrono::Local).format("%b %-d, %Y").to_string()).unwrap_or_default();
+    let n = |v: u64| tvfs_core::fmt::thousands(v);
+    format!(
+        "{} uploads, {} uploaded and about {} downloaded or played, {} opens and {} plays since {}.",
+        n(g.uploads),
+        tvfs_core::fmt::fmt_bytes(g.uploaded_bytes),
+        tvfs_core::fmt::fmt_bytes(g.downloaded_bytes),
+        n(g.opens),
+        n(g.plays),
+        since
+    )
+}
+
+/// The web's `fmtMinutes`: "7 days", "1.5 days", "12 h", "30 min".
+fn fmt_minutes(m: u32) -> String {
+    if m >= 1440 {
+        let d = (m as f64 / 144.0).round() / 10.0;
+        format!("{} {}", tvfs_core::fmt::to_fixed(d, if d.fract() == 0.0 { 0 } else { 1 }), if d == 1.0 { "day" } else { "days" })
+    } else if m >= 60 {
+        let h = (m as f64 / 6.0).round() / 10.0;
+        format!("{} h", tvfs_core::fmt::to_fixed(h, if h.fract() == 0.0 { 0 } else { 1 }))
+    } else {
+        format!("{m} min")
+    }
+}
 
 impl Shared {
     fn save_local(&self, data: &LocalData) {
@@ -313,6 +347,10 @@ struct Row {
     tool_link: String,
     tool_kind: i32,
     sort_at: i64,
+    opens: i32,
+    plays: i32,
+    removed_early: bool,
+    keep_max: String,
 }
 
 fn thumb_key(f: &SyncEntry, expired: bool) -> Option<String> {
@@ -343,12 +381,24 @@ fn to_rows(shared: &Shared) -> Vec<Row> {
     let cutoff = now - RECENT_MAX_AGE_MS;
     let mut rows = Vec::new();
     let local = shared.local.lock().unwrap().clone();
+    let stats = shared.file_stats.lock().unwrap().clone();
+    let cfg = shared.upload_cfg.lock().unwrap().clone();
     for f in shared.recent.lock().unwrap().files.iter() {
         if f.uploaded_at.is_some_and(|t| t <= cutoff) {
             continue;
         }
-        let (expired, sub_text) = expiry_sub(f.expires_at, now);
+        let (mut expired, mut sub_text) = expiry_sub(f.expires_at, now);
+        if f.expired && !expired {
+            (expired, sub_text) = (true, "Expired".to_string());
+        }
         let (tool_link, tool_kind) = local.tool_links.get(&f.id).map_or((String::new(), 0), |t| (t.0.clone(), t.1));
+        let st = stats.get(&f.id).copied().unwrap_or_default();
+        let keep_max = match (&cfg, f.uploaded_at, f.expires_at) {
+            (Some(c), Some(up), Some(exp)) if !expired => tvfs_core::limits::keep_max_minutes(c, f.size, up, exp, now as u64)
+                .map(|m| format!("Keep for the maximum length ({} from the upload)", fmt_minutes(m)))
+                .unwrap_or_default(),
+            _ => String::new(),
+        };
         rows.push(Row {
             id: f.id.clone(),
             name: truncate_filename(&f.name, 26),
@@ -362,6 +412,10 @@ fn to_rows(shared: &Shared) -> Vec<Row> {
             tool_link,
             tool_kind,
             sort_at: f.uploaded_at.unwrap_or(0),
+            opens: st.opens.min(i32::MAX as u64) as i32,
+            plays: st.plays.min(i32::MAX as u64) as i32,
+            removed_early: f.removed_early,
+            keep_max,
         });
     }
     for sh in local.shares.iter().filter(|s| s.uploaded_at > cutoff) {
@@ -379,6 +433,10 @@ fn to_rows(shared: &Shared) -> Vec<Row> {
             tool_link: String::new(),
             tool_kind: 0,
             sort_at: sh.uploaded_at,
+            opens: 0,
+            plays: 0,
+            removed_early: false,
+            keep_max: String::new(),
         });
     }
     let active = shared.active_run.lock().unwrap().clone();
@@ -409,6 +467,10 @@ fn to_rows(shared: &Shared) -> Vec<Row> {
             tool_link: String::new(),
             tool_kind: 0,
             sort_at: rec.saved_at,
+            opens: 0,
+            plays: 0,
+            removed_early: false,
+            keep_max: String::new(),
         });
     }
     let finished = {
@@ -441,6 +503,10 @@ fn to_rows(shared: &Shared) -> Vec<Row> {
             tool_link: String::new(),
             tool_kind: 0,
             sort_at: p.created_at.unwrap_or(0),
+            opens: 0,
+            plays: 0,
+            removed_early: false,
+            keep_max: String::new(),
         });
     }
     rows.sort_by_key(|r| std::cmp::Reverse(r.sort_at));
@@ -531,6 +597,10 @@ fn apply_recent(ui: &MainWindow, rows: Vec<Row>, ready: Vec<(String, SharedPixel
                     key: r.key.into(),
                     tool_link: r.tool_link.into(),
                     tool_kind: r.tool_kind,
+                    opens: r.opens,
+                    plays: r.plays,
+                    removed_early: r.removed_early,
+                    keep_max: r.keep_max.into(),
                 }
             })
             .collect()
@@ -782,6 +852,10 @@ fn quit_if_idle(shared: &Shared) {
 fn show_login(weak: &Weak<MainWindow>, shared: &Shared, message: String) {
     shared.logged_in.store(false, Ordering::Relaxed);
     *shared.config_at.lock().unwrap() = None;
+    *shared.upload_cfg.lock().unwrap() = None;
+    shared.file_stats.lock().unwrap().clear();
+    *shared.global_stats.lock().unwrap() = None;
+    *shared.stats_at.lock().unwrap() = None;
     on_ui(weak, move |ui| {
         expiry_ui::set_config(ui, None);
         ui.set_logged_in(false);
@@ -821,6 +895,7 @@ async fn refresh(shared: &Arc<Shared>, weak: &Weak<MainWindow>) -> Result<(), Er
         match shared.client.upload_config().await {
             Ok(c) => {
                 *shared.config_at.lock().unwrap() = Some((Instant::now(), status.tier));
+                *shared.upload_cfg.lock().unwrap() = Some(c.clone());
                 Some(c)
             }
             Err(_) => None,
@@ -829,6 +904,18 @@ async fn refresh(shared: &Arc<Shared>, weak: &Weak<MainWindow>) -> Result<(), Er
         None
     };
     *shared.pending.lock().unwrap() = status.pending_uploads.clone();
+    // opens / plays of own files and the TVFS totals: accounts only, at most once a minute (like the web)
+    let stats_due = status.tier > 0 && shared.stats_at.lock().unwrap().is_none_or(|at| at.elapsed() > Duration::from_secs(60));
+    if stats_due {
+        *shared.stats_at.lock().unwrap() = Some(Instant::now());
+        if let Ok(st) = shared.client.stats().await {
+            *shared.file_stats.lock().unwrap() = st.files;
+            *shared.global_stats.lock().unwrap() = Some(st.global);
+        }
+    }
+    let global_text = shared.global_stats.lock().unwrap().as_ref().filter(|_| status.tier > 0).map(global_stats_text).unwrap_or_default();
+    // the settings kept with the account, with the upload rules (after a login, then once a minute)
+    let expired_months = if stale && status.tier > 0 { shared.client.account_settings().await.ok().map(|a| a.expired_page_months as i32) } else { None };
     push_recent(shared, weak);
     on_ui(weak, move |ui| {
         ui.set_backend_online(true);
@@ -837,6 +924,10 @@ async fn refresh(shared: &Arc<Shared>, weak: &Weak<MainWindow>) -> Result<(), Er
         ui.set_used_text(used.into());
         ui.set_used_level(used_level);
         ui.set_tier(tier);
+        ui.set_global_stats_text(global_text.into());
+        if let Some(m) = expired_months {
+            ui.set_expired_months(m);
+        }
         // new rules, or only the clock moved on (greyed options, the "Files expire on" date)
         match config {
             Some(c) => expiry_ui::set_config(ui, Some(c)),
@@ -1579,11 +1670,17 @@ fn apply_demo(ui: &MainWindow) {
         key: "k".into(),
         tool_link: if cat == "text" { "https://files.tomasekvalla.cz/files/text/r.html".into() } else { "".into() },
         tool_kind: 1,
+        // the demo shows the 1.2 additions too: stats, Keep max, REMOVED EARLY
+        opens: if cat == "audio" { 12 } else if cat == "video" { 3 } else { 0 },
+        plays: if cat == "audio" { 5 } else { 0 },
+        removed_early: expired && cat == "image",
+        keep_max: if cat == "video" { "Keep for the maximum length (30 days from the upload)".into() } else { "".into() },
     };
     ui.set_backend_online(true);
     ui.set_latency_text("23ms".into());
     ui.set_used_text("12.4 GB".into());
     ui.set_tier(3);
+    ui.set_global_stats_text("1,234 uploads, 56.7 GB uploaded and about 210.3 GB downloaded or played, 8,901 opens and 2,345 plays since Sep 1, 2026.".into());
     if mode != "0" {
         let items = vec![
             item("1", "sample-video.mkv", "video", "Will expire in 06:23:59:59", false),
@@ -1764,6 +1861,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         fetch_limit: Semaphore::new(4),
         tier: AtomicU8::new(0),
         config_at: Mutex::new(None),
+        upload_cfg: Mutex::new(None),
+        file_stats: Mutex::new(HashMap::new()),
+        global_stats: Mutex::new(None),
+        stats_at: Mutex::new(None),
         active_run: Mutex::new(None),
         finished_ids: Mutex::new(Vec::new()),
         pending: Mutex::new(Vec::new()),
@@ -1903,11 +2004,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ui.on_delete_file(move |id| delete_recent(&shared, &weak, &handle, id.to_string()));
     }
     {
+        let (shared, handle) = (shared.clone(), handle.clone());
+        ui.on_expired_months_changed(move |m| {
+            let shared = shared.clone();
+            handle.spawn(async move {
+                let _ = shared.client.set_expired_page_months(m.max(0) as u32).await;
+            });
+        });
+    }
+    {
+        // "Keep for the maximum length": the server extends the file as far as the rules allow
+        let (shared, weak, handle) = (shared.clone(), weak.clone(), handle.clone());
+        ui.on_keep_max_file(move |id| {
+            let (shared, weak, id) = (shared.clone(), weak.clone(), id.to_string());
+            handle.spawn(async move {
+                if let Ok(Some(exp)) = shared.client.keep_max(&id).await {
+                    if let Some(f) = shared.recent.lock().unwrap().files.iter_mut().find(|f| f.id == id) {
+                        f.expires_at = Some(exp);
+                    }
+                    push_recent(&shared, &weak);
+                }
+            });
+        });
+    }
+    {
         let (shared, weak, handle) = (shared.clone(), weak.clone(), handle.clone());
         ui.on_confirm_answer(move |kind, id, yes| {
             let id = id.to_string();
             match kind {
                 1 if yes => delete_recent(&shared, &weak, &handle, id),
+                // an expired file: remove its "this file has expired" page and the list item (all devices)
+                4 if yes => {
+                    shared.recent.lock().unwrap().files.retain(|f| f.id != id);
+                    push_recent(&shared, &weak);
+                    let shared = shared.clone();
+                    handle.spawn(async move {
+                        let _ = shared.client.delete_expired_page(&id).await;
+                    });
+                }
                 2 if yes => {
                     // a local resume key looks like "size|mtime"; anything else is another device's upload id
                     let upload_id = if id.contains('|') {

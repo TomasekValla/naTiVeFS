@@ -183,6 +183,19 @@ pub fn truncate_filename(name: &str, max_len: usize) -> String {
     format!("{}...{}", base[..keep].iter().collect::<String>(), ext.iter().collect::<String>())
 }
 
+/// `1234567` -> `"1,234,567"` (the web's `toLocaleString('en-US')`).
+pub fn thousands(v: u64) -> String {
+    let s = v.to_string();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// A file name from someone else (batch page, share) made safe to create in a folder the user picked: no path
 /// separators or characters Windows forbids, no control characters, no `.`/`..`, no trailing dot or space, no
 /// Windows device name (CON, NUL, COM1, ... with any extension), at most 200 characters.
@@ -213,6 +226,14 @@ pub fn safe_file_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn thousands_separator() {
+        assert_eq!(thousands(0), "0");
+        assert_eq!(thousands(999), "999");
+        assert_eq!(thousands(1000), "1,000");
+        assert_eq!(thousands(1234567), "1,234,567");
+    }
 
     #[test]
     fn safe_file_names() {

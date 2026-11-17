@@ -138,6 +138,36 @@ impl Client {
 
     // ── read ──────────────────────────────────────────────────────────────
 
+    /// `GET /api/settings`: the settings kept with the account.
+    pub async fn account_settings(&self) -> Result<AccountSettings> {
+        Self::json(self.http.get(self.endpoint("api/settings")?)).await
+    }
+
+    /// `PUT /api/settings`: how long expired pages stay (0, 1, 3, 6 or 12 months).
+    pub async fn set_expired_page_months(&self, months: u32) -> Result<AccountSettings> {
+        let body = serde_json::json!({ "expiredPageMonths": months });
+        Self::json(self.http.put(self.endpoint("api/settings")?).json(&body)).await
+    }
+
+    /// `GET /api/stats`: opens / plays of this account's files and the TVFS totals (accounts only, not the host).
+    pub async fn stats(&self) -> Result<StatsResponse> {
+        Self::json(self.http.get(self.endpoint("api/stats")?)).await
+    }
+
+    /// `POST /api/file/:id/keep-max`: keep the file as long as the rules allow from its upload; returns the new expiry.
+    pub async fn keep_max(&self, file_id: &str) -> Result<Option<i64>> {
+        let url = self.endpoint(&format!("api/file/{}/keep-max", path_segment(file_id)))?;
+        let r: KeepMaxResponse = Self::json(self.http.post(url)).await?;
+        Ok(r.expires_at)
+    }
+
+    /// `DELETE /api/expired/:id`: remove the "this file has expired" page of a gone file.
+    pub async fn delete_expired_page(&self, file_id: &str) -> Result<()> {
+        let url = self.endpoint(&format!("api/expired/{}", path_segment(file_id)))?;
+        let _ = Self::check(self.http.delete(url).send().await?).await?;
+        Ok(())
+    }
+
     /// `GET /api/config`: the upload rules of this login (tier, longest expiry, size and space steps).
     pub async fn upload_config(&self) -> Result<crate::limits::UploadConfig> {
         Self::json(self.http.get(self.endpoint("api/config")?)).await
