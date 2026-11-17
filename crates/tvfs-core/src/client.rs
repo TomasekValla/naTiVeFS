@@ -138,6 +138,11 @@ impl Client {
 
     // ── read ──────────────────────────────────────────────────────────────
 
+    /// `GET /api/config`: the upload rules of this login (tier, longest expiry, size and space steps).
+    pub async fn upload_config(&self) -> Result<crate::limits::UploadConfig> {
+        Self::json(self.http.get(self.endpoint("api/config")?)).await
+    }
+
     /// `GET /api/hosts`: where TVFS lives now (public, no login needed).
     pub async fn hosts(&self) -> Result<crate::hosts::HostsInfo> {
         Self::json(self.http.get(self.endpoint("api/hosts")?)).await

@@ -37,7 +37,9 @@ content, write it to a temporary file first and upload that.
 
 ## Options (upload)
 
-- `--expire <5m|30m|1h|6h|12h|1d|2d|3d|5d|7d|10d|14d>`: how long the link stays alive (default 7d).
+- `--expire <5m|30m|1h|6h|12h|1d|2d|3d|5d|7d|10d|14d|30d>`: how long the link stays alive (default 7d). The
+  account decides the longest (tier 1: 7d, tier 2: 14d, tier 3: 30d; bigger files and a fuller server get less);
+  a longer choice is shortened by the server.
 - `--anonymize`: random file names, extension kept.
 - `--users-only` / `--public`: per upload, only logged-in TVFS users can open the link / anyone can. Mutually
   exclusive; without either, the user's "TVFS Users Only" setting decides (the step 1 output shows which). A Users

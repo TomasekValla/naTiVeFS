@@ -1,6 +1,6 @@
 import { QueueMetrics } from "common.slint";
 import { DeviceItem } from "camera.slint";
-import { RecentItem, QueueRow, FileProgressRow, BatchRow, MetricTile, PillState, LibInfo, BrowserRow, CheckStat, CheckStatPair, CheckStream, Palette, Look, GlassCard, Ico, StatusChip, ModeCell, Pill, Eyebrow, TextField, ActionBtn, SmallBtn, Seg, SettingCard, Explain, ClampExplain, InfoCard, XMark, EmojiBtn, RecentRow, IconBtn, SettingRow, LibRow, CheckLabel, CheckStatCell, CheckGrid, CheckStreamCard, ProbeBtn, DashedOutline, QueueFileRow, CopyPill, PillPair, LinkBox, BatchFileRow, MetricCol, StatsTile, NumBox, Anim } from "common.slint";
+import { RecentItem, QueueRow, FileProgressRow, BatchRow, MetricTile, PillState, ExpiryPill, LibInfo, BrowserRow, CheckStat, CheckStatPair, CheckStream, Palette, Look, GlassCard, Ico, StatusChip, ModeCell, Pill, Eyebrow, TextField, ActionBtn, SmallBtn, Seg, SettingCard, Explain, ClampExplain, InfoCard, XMark, EmojiBtn, RecentRow, IconBtn, SettingRow, LibRow, CheckLabel, CheckStatCell, CheckGrid, CheckStreamCard, ProbeBtn, DashedOutline, QueueFileRow, CopyPill, PillPair, LinkBox, BatchFileRow, MetricCol, StatsTile, NumBox, Anim } from "common.slint";
 // re-exported for the Rust side (structs used in callbacks / models, globals set from Rust)
 export { ReaderWindow, ReaderBlock, ReaderRow, ReaderChunk } from "reader.slint";
 export { FileWindow, ListWindow, ListFile } from "files.slint";
@@ -9,7 +9,7 @@ export { PlayerWindow, TrackItem, StatRow } from "player.slint";
 export { CameraWindow, DeviceItem } from "camera.slint";
 export { AudioWindow, OutputDevice, BufferedRange, KnobData, PresetChip, PresetLine, EqTick, EqCurve, EqPoint, EqCol, EqMenuItem } from "audio.slint";
 export { VoicePlayerWindow } from "voice_player.slint";
-export { RecentItem, QueueRow, FileProgressRow, BatchRow, MetricTile, PillState, LibInfo, CheckStat, CheckStatPair, CheckStream, Palette, Look }
+export { RecentItem, QueueRow, FileProgressRow, BatchRow, MetricTile, PillState, ExpiryPill, LibInfo, CheckStat, CheckStatPair, CheckStream, Palette, Look }
 
 // the voice recorder's buttons (web: 14 px radius, 12 x 16 padding, red primary)
 component VoiceBtn inherits Rectangle {
@@ -443,6 +443,8 @@ export component MainWindow inherits Window {
     in property <string> text-size: "0 B";
     // TVFS settings card
     in-out property <bool> users-only;
+    // "Who can open" of the next upload (starts with the Users Only default from Settings): true = TVFS users only
+    in-out property <bool> access-users;
     in-out property <bool> chunk-auto: true;
     in-out property <string> chunk-count-text: "3";
     in-out property <string> chunk-size-text: "30";
@@ -560,8 +562,13 @@ export component MainWindow inherits Window {
     // in-out like `username`: as a private property, the two-way binding from the TextField inside `if !logged-in`
     // never updated it (Slint 1.16), so the Log In button stayed disabled
     in-out property <string> password;
-    property <[string]> pills-a: ["5m", "30m", "1h", "6h", "12h", "1d"];
-    property <[string]> pills-b: ["2d", "3d", "5d", "7d", "10d", "14d"];
+    // expiry options in two rows, set from Rust (`expiry_ui.rs`) per login: options it can never use are left out
+    in property <[ExpiryPill]> pills-a: [
+        { label: "5m", idx: 0 }, { label: "30m", idx: 1 }, { label: "1h", idx: 2 }, { label: "6h", idx: 3 },
+        { label: "12h", idx: 4 }, { label: "1d", idx: 5 }];
+    in property <[ExpiryPill]> pills-b: [
+        { label: "2d", idx: 6 }, { label: "3d", idx: 7 }, { label: "5d", idx: 8 }, { label: "7d", idx: 9 },
+        { label: "10d", idx: 10 }, { label: "14d", idx: 11 }, { label: "30d", idx: 12 }];
     // ── desktop layout (the web's "Desktop layout"): computed in Rust (`layout.rs`) on every resize and set here as
     // plain values, so a resize that does not change a card's width re-wraps none of its text.
     // 0 = one column, 1 = two columns, 2 = three columns (set in `set-layout`, so a switch can glide)
@@ -607,7 +614,9 @@ export component MainWindow inherits Window {
     property <length> recent-y: root.lay == 0 ? root.page-pad + card-main.height + root.stack-gap : root.page-pad;
     property <length> info-y: root.page-pad + card-main.height + root.stack-gap + (root.lay == 0 ? card-recent.height + root.stack-gap : 0px);
     property <length> check-y: root.lay == 0 ? root.page-pad : root.recent-y + card-recent.height + root.stack-gap;
-    property <length> links-y: root.check-y + card-chk.height + root.stack-gap;
+    // File Check is for TVFS accounts (tier 1+): not shown to the host or when logged out (as on the web)
+    property <bool> can-check: root.logged-in && root.tier > 0;
+    property <length> links-y: root.can-check ? root.check-y + card-chk.height + root.stack-gap : root.check-y;
     // where the lowest shown card ends
     property <length> content-bottom:
         root.page == 1 && root.lay < 2 ? root.page-pad + card-set.height
@@ -649,6 +658,7 @@ export component MainWindow inherits Window {
     }
     // "Check files": a page below 900 px, an always open card above
     function open-check() {
+        if (!root.can-check) { return; }
         if (root.lay == 0) { root.go-page(2); } else { root.pulse-chk = true; url-in.focus(); }
     }
     // Rust (`layout.rs`) picks the layout for the window width; a switch makes the cards glide to their new places
@@ -672,7 +682,9 @@ export component MainWindow inherits Window {
     changed page => {
         if (root.page == 1 && root.lay == 2) { root.page = 0; root.pulse-set = true; }
         if (root.page == 2 && root.lay >= 1) { root.page = 0; root.pulse-chk = true; }
+        if (root.page == 2 && !root.can-check) { root.page = 0; }
     }
+    changed can-check => { if (!root.can-check && root.page == 2) { root.page = 0; } }
     Timer {
         // a little longer than the slowest of the two (the fade), then the cards follow a resize at once again
         interval: Anim.fade + 120ms;
@@ -1484,15 +1496,34 @@ export component MainWindow inherits Window {
                                         HorizontalLayout {
                                             spacing: 6px;
                                             alignment: center;
-                                            for lab[i] in root.pills-a : Pill { label: lab; active: root.expiry == i; clicked => { root.pick-expiry(i); } }
+                                            for p in root.pills-a : Pill { label: p.label; grey: p.grey; active: root.expiry == p.idx; clicked => { root.pick-expiry(p.idx); } }
                                         }
                                         HorizontalLayout {
                                             spacing: 6px;
                                             alignment: center;
-                                            for lab[i] in root.pills-b : Pill { label: lab; active: root.expiry == i + 6; clicked => { root.pick-expiry(i + 6); } }
+                                            for p in root.pills-b : Pill { label: p.label; grey: p.grey; active: root.expiry == p.idx; clicked => { root.pick-expiry(p.idx); } }
                                         }
                                     }
                                     Text { text: root.expiry-date-text; font-size: 10.88px; color: Palette.dim; opacity: 0.8; horizontal-alignment: center; }
+                                }
+                                // the web's "Who can open" (.access-section, 14 px below the expiry): accounts only, not the host
+                                if root.logged-in && root.tier > 0 : VerticalLayout {
+                                    padding-top: 6px;
+                                    spacing: 8px;
+                                    Text { text: "Who can open:"; font-size: 11.52px; font-weight: 600; color: Palette.dim; horizontal-alignment: center; }
+                                    HorizontalLayout {
+                                        alignment: center;
+                                        Seg {
+                                            controlled: true;
+                                            options: ["Anyone with the link", "TVFS users only"];
+                                            selected: root.access-users ? 1 : 0;
+                                            picked(i) => { root.access-users = i == 1; }
+                                        }
+                                    }
+                                    Text {
+                                        text: root.access-users ? "Only people logged in to TVFS can open it (they can log in on the link’s page)." : "Anyone who has the link can open it.";
+                                        font-size: 10.88px; color: Palette.dim; opacity: 0.8; horizontal-alignment: center; wrap: word-wrap;
+                                    }
                                 }
                             }
 
@@ -1521,7 +1552,7 @@ export component MainWindow inherits Window {
                                         alignment: center;
                                         spacing: 8px;
                                         Ico { src: @image-url("../../../assets/img/emoji-check.png"); size: 14px; }
-                                        Text { text: "Authenticated (Tier " + root.tier + ")"; font-size: 13.12px; font-weight: 600; color: Palette.good; vertical-alignment: center; }
+                                        Text { text: root.tier == 0 ? "Host (until midnight)" : "Authenticated (Tier " + root.tier + (root.tier == 3 ? ", admin)" : ")"); font-size: 13.12px; font-weight: 600; color: Palette.good; vertical-alignment: center; }
                                         Rectangle { width: 69px; SmallBtn { y: (parent.height - self.height) / 2; label: "Logout"; clicked => { root.logout(); } } }
                                     }
                                 }
@@ -1919,6 +1950,7 @@ export component MainWindow inherits Window {
                             // the links (in their own card on the right in wider windows)
                             if root.lay == 0 : LinkCards {
                                 inner-w: root.inner-w;
+                                show-check: root.can-check;
                                 open-link(url) => { root.open-link(url); }
                                 check => { root.open-check(); }
                             }
@@ -2319,16 +2351,16 @@ export component MainWindow inherits Window {
                                         padding-right: Look.compact ? 14px : 18px;
                                         spacing: Look.compact ? 6px : 8px;
                                         HorizontalLayout {
-                                            Text { text: "TVFS Users Only"; font-size: 13.12px; font-weight: 700; color: Palette.text; vertical-alignment: center; }
+                                            Text { text: "TVFS Users Only by default"; font-size: 13.12px; font-weight: 700; color: Palette.text; vertical-alignment: center; }
                                             Rectangle { }
                                             Seg {
                                                 controlled: true;
                                                 options: ["Off", "On"];
                                                 selected: root.users-only ? 1 : 0;
-                                                picked(i) => { root.users-only = i == 1; root.users-only-changed(root.users-only); }
+                                                picked(i) => { root.users-only = i == 1; root.access-users = root.users-only; root.users-only-changed(root.users-only); }
                                             }
                                         }
-                                        Explain { text: "Reveals a standalone sharing mode — files are shared as-is (no client-side encryption), and the server refuses to hand out the file bytes to anyone who isn't logged in to TVFS. Off by default."; }
+                                        Explain { text: "What “Who can open” starts with. TVFS users only: the server hands the files only to people logged in to TVFS (they log in right on the link’s page). You can switch it for every upload under Options."; }
                                     }
                                 }
                             }
@@ -2673,7 +2705,7 @@ export component MainWindow inherits Window {
                     y: root.check-y;
                     width: root.lay == 0 ? root.mid-w : root.side-w;
                     height: card-chk.height;
-                    shown: root.lay == 0 ? root.page == 2 : root.page == 0;
+                    shown: root.can-check && (root.lay == 0 ? root.page == 2 : root.page == 0);
                     glide: root.glide;
                     pulse: root.pulse-chk;
                     animate x, y { duration: self.opacity > 0.01 ? root.glide : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }

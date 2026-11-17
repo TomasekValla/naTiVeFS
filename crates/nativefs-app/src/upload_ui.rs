@@ -90,7 +90,13 @@ fn is_audio(f: &UploadFile) -> bool {
     f.mime.starts_with("audio/") || EXTS.contains(&ext.as_str())
 }
 
+/// Size of the largest selected file (the expiry picker's limits depend on it).
+pub fn biggest_selected() -> u64 {
+    with_state(|s| s.queue.iter().map(|f| f.size).max().unwrap_or(0))
+}
+
 pub fn push_queue(ui: &MainWindow) {
+    crate::expiry_ui::apply(ui);
     with_state(|s| {
         let rows: Vec<QueueRow> = s
             .queue
@@ -390,12 +396,13 @@ pub fn start_upload(ui: &MainWindow, shared: &Arc<Shared>) {
         ui.set_upload_error("Select files first".into());
         return;
     }
-    let protected = shared.config.lock().unwrap().tvfs_users_only;
+    // "Who can open" of this upload (accounts only; the host never makes Users Only shares)
+    let protected = ui.get_access_users() && shared.tier.load(Ordering::Relaxed) > 0;
     let expiration_minutes = tvfs_core::EXPIRATION_OPTIONS_MIN.get(ui.get_expiry().max(0) as usize).copied().unwrap_or(tvfs_core::DEFAULT_EXPIRATION_MIN);
     let req = UploadRequest {
         files: files.clone(),
         expiration_minutes,
-        remove_timestamp: shared.tier.load(Ordering::Relaxed) == 2,
+        remove_timestamp: shared.tier.load(Ordering::Relaxed) >= 2,
         chunking: chunk_mode(shared),
         protected,
     };
@@ -493,7 +500,7 @@ fn render(weak: &Weak<MainWindow>, shared: &Arc<Shared>, run: &Arc<Run>) {
     let n = s.files.len();
     let frac = if s.total > 0 { s.done as f64 / s.total as f64 } else { 0.0 };
     let pct = (frac * 100.0).round() as u32;
-    let protected = shared.config.lock().unwrap().tvfs_users_only && n > 0;
+    let protected = ui.get_access_users() && shared.tier.load(Ordering::Relaxed) > 0 && n > 0;
     let (status, dots) = if s.cancelled {
         ("Cancelled".to_string(), false)
     } else if s.paused {

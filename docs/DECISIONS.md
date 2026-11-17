@@ -52,3 +52,19 @@ The short, public list of why naTiVeFS works the way it does. "Owner" = the proj
   in `app-prefs.json` beside the config.
 - Pages that naTiVeFS or the link router hands to the browser carry `inbrowser=1`, so the web page does not send them straight
   back to the app. The foreground right (Windows) is passed only to the process that receives the hand-over.
+
+## TVFS hosts and trusted URLs (1.2)
+- TVFS serves pages and the API from `tvfs.tomasekvalla.cz` and uploaded files from `tvfs-usercontent.tomasekvalla.cz`; the
+  old `files.tomasekvalla.cz` keeps working. The app treats all three as TVFS and takes the current API address from the
+  server (`GET /api/hosts`, cached in `hosts.json`, used from the next start). Only a TVFS page host can become the API
+  address, so the server cannot point the app elsewhere. The login cookie is kept for both page hosts, never for the
+  user-content host.
+- Every URL from outside (a link, a generated page, the sync list, a share) goes through one check (`hosts::TrustedUrl`):
+  https on a TVFS host, default port, no user info; a file URL read from a page must be a TVFS file (`/files/`,
+  `/api/protected/`). Links that leave the app are only http, https and mailto.
+- Updates: the signed comment of a release file names the file and the version; the app installs only a file signed for
+  that asset and a version newer than its own, keeps the download in a private folder and checks it again right before
+  running it. Camera and voice captures, generated files and downloads use a private per-user folder, not the shared temp.
+- The expiry picker follows the account's rules from `GET /api/config` exactly like the web: options a login can never use
+  are not shown, options blocked only for now (file size, free space, the host's time to midnight) are greyed out; the
+  server applies the same rules itself.

@@ -11,6 +11,7 @@ mod autostart;
 mod check_ui;
 mod debug;
 mod desktop_entry;
+mod expiry_ui;
 mod files_ui;
 mod image_ui;
 mod layout;
@@ -95,8 +96,10 @@ struct Shared {
     thumb_px: AtomicU32,
     fetch_limit: Semaphore,
     uploader: Uploader,
-    /// Account tier from `/api/status` (tier 2 gets links without a timestamp).
+    /// Account tier from `/api/status` (tier 2 and up get links without a timestamp).
     tier: AtomicU8,
+    /// When the upload rules (`/api/config`) were last fetched, and for which tier.
+    config_at: Mutex<Option<(Instant, u8)>>,
     /// The upload running right now (its files are not shown as NOT FINISHED).
     active_run: Mutex<Option<Arc<Run>>>,
     /// Unfinished uploads of this account on any device (`/api/status`).
@@ -778,7 +781,9 @@ fn quit_if_idle(shared: &Shared) {
 
 fn show_login(weak: &Weak<MainWindow>, shared: &Shared, message: String) {
     shared.logged_in.store(false, Ordering::Relaxed);
+    *shared.config_at.lock().unwrap() = None;
     on_ui(weak, move |ui| {
+        expiry_ui::set_config(ui, None);
         ui.set_logged_in(false);
         ui.set_busy(false);
         ui.set_error_text(message.into());
@@ -810,6 +815,19 @@ async fn refresh(shared: &Arc<Shared>, weak: &Weak<MainWindow>) -> Result<(), Er
     let level = if ms < 150 { 0 } else if ms < 400 { 1 } else { 2 };
     let tier = status.tier as i32;
     shared.tier.store(status.tier, Ordering::Relaxed);
+    // the upload rules: after a login or a tier change, and once a minute (free space, the host's midnight)
+    let stale = shared.config_at.lock().unwrap().is_none_or(|(at, t)| t != status.tier || at.elapsed() > Duration::from_secs(60));
+    let config = if stale {
+        match shared.client.upload_config().await {
+            Ok(c) => {
+                *shared.config_at.lock().unwrap() = Some((Instant::now(), status.tier));
+                Some(c)
+            }
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
     *shared.pending.lock().unwrap() = status.pending_uploads.clone();
     push_recent(shared, weak);
     on_ui(weak, move |ui| {
@@ -819,6 +837,11 @@ async fn refresh(shared: &Arc<Shared>, weak: &Weak<MainWindow>) -> Result<(), Er
         ui.set_used_text(used.into());
         ui.set_used_level(used_level);
         ui.set_tier(tier);
+        // new rules, or only the clock moved on (greyed options, the "Files expire on" date)
+        match config {
+            Some(c) => expiry_ui::set_config(ui, Some(c)),
+            None => expiry_ui::apply(ui),
+        }
     });
     Ok(())
 }
@@ -1740,6 +1763,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         thumb_px: AtomicU32::new(84),
         fetch_limit: Semaphore::new(4),
         tier: AtomicU8::new(0),
+        config_at: Mutex::new(None),
         active_run: Mutex::new(None),
         finished_ids: Mutex::new(Vec::new()),
         pending: Mutex::new(Vec::new()),
@@ -1789,6 +1813,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.set_expiry_date_text(expiry_date_text(ui.get_expiry()).into());
     // TVFS settings card
     ui.set_users_only(config.tvfs_users_only);
+    ui.set_access_users(config.tvfs_users_only);
     ui.set_chunk_auto(config.chunk_auto);
     ui.set_chunk_count_text(config.chunk_count.to_string().into());
     ui.set_chunk_size_text(config.chunk_size_mb.to_string().into());
@@ -1869,8 +1894,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let weak = weak.clone();
         ui.on_pick_expiry(move |i| {
             if let Some(ui) = weak.upgrade() {
-                ui.set_expiry(i);
-                ui.set_expiry_date_text(expiry_date_text(i).into());
+                expiry_ui::pick(&ui, i);
             }
         });
     }

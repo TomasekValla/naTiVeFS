@@ -2,7 +2,7 @@
 
 use tvfs_core::EXPIRATION_OPTIONS_MIN;
 
-pub const LABELS: [&str; 12] = ["5m", "30m", "1h", "6h", "12h", "1d", "2d", "3d", "5d", "7d", "10d", "14d"];
+pub const LABELS: [&str; 13] = ["5m", "30m", "1h", "6h", "12h", "1d", "2d", "3d", "5d", "7d", "10d", "14d", "30d"];
 
 pub fn parse(s: &str) -> Option<u32> {
     let s = s.trim().to_ascii_lowercase();

@@ -67,6 +67,14 @@ export struct MetricTile {
 }
 
 // A copy pill of the result box. icon: 0 doc, 1 sparkles, 2 book, 3 note, 4 check, 5 hourglass
+/// One option of the expiry picker (`idx` into the expiry presets). `grey`: not possible right now (file size, free
+/// space, the host's time to midnight); options a login can never use are left out of the model by Rust.
+export struct ExpiryPill {
+    label: string,
+    idx: int,
+    grey: bool,
+}
+
 export struct PillState {
     show: bool,
     icon: int,
@@ -330,7 +338,10 @@ export component ModeCell inherits Rectangle {
 export component Pill inherits Rectangle {
     in property <string> label;
     in property <bool> active;
+    // the web's .expiry-pill.off: faded and not clickable
+    in property <bool> grey;
     callback clicked();
+    opacity: root.grey ? 0.32 : 1;
     height: 30px;
     width: t.preferred-width + 30px;
     border-radius: 12px;
@@ -347,7 +358,7 @@ export component Pill inherits Rectangle {
         color: root.active ? Palette.text : (ta.has-hover ? Palette.accent : Palette.dim);
         animate color { duration: Anim.fast; }
     }
-    ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.clicked(); } }
+    ta := TouchArea { enabled: !root.grey; mouse-cursor: root.grey ? MouseCursor.not-allowed : MouseCursor.pointer; clicked => { root.clicked(); } }
 }
 
 export component Eyebrow inherits Text {

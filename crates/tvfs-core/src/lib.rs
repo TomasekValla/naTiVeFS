@@ -8,6 +8,7 @@ pub mod content;
 pub mod error;
 pub mod fmt;
 pub mod hosts;
+pub mod limits;
 pub mod link;
 pub mod markdown;
 pub mod models;
@@ -39,6 +40,8 @@ pub const APP_NAME: &str = "naTiVeFS";
 /// Custom URL scheme handled by the app, e.g. `tvfs://open?url=<https link>`.
 pub const URL_SCHEME: &str = "tvfs";
 /// Upload expiry presets accepted by the server (minutes).
-pub const EXPIRATION_OPTIONS_MIN: [u32; 12] =
-    [5, 30, 60, 360, 720, 1440, 2880, 4320, 7200, 10080, 14400, 20160];
+/// Which of them an account may use comes from `GET /api/config` (see [`limits`]): tier 1 up to 7 days, tier 2 up to
+/// 14, tier 3 up to 30, the host until midnight.
+pub const EXPIRATION_OPTIONS_MIN: [u32; 13] =
+    [5, 30, 60, 360, 720, 1440, 2880, 4320, 7200, 10080, 14400, 20160, 43200];
 pub const DEFAULT_EXPIRATION_MIN: u32 = 10080;
