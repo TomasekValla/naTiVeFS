@@ -39,7 +39,7 @@ check_signature() {
         break
     done
     [ -n "$ossl" ] || { echo "neither minisign nor OpenSSL 3 is installed"; return 0; }
-    v=$(mktemp -d) || { echo "no temporary folder"; return 0; }
+    v=$(mktemp -d) || { echo error; return 0; }
     printf '%s' "$KEY" | b64d > "$v/pk" || :
     sed -n 2p "$2" | tr -d '\r' | b64d > "$v/sg" || :
     if [ "$(wc -c < "$v/pk")" -ne 42 ] || [ "$(wc -c < "$v/sg")" -ne 74 ]; then rm -rf "$v"; echo mismatch; return 0; fi
@@ -127,6 +127,7 @@ result=$(check_signature "$tmp/$file" "$tmp/$file.minisig" "$file") || result=mi
 case "$result" in
     verified) say "Signature verified." ;;
     mismatch) die "the signature does NOT match: this file is not the published naTiVeFS. Nothing was installed." ;;
+    error) die "the signature could not be checked (no temporary folder could be created). Nothing was installed." ;;
     *) warn_unverified "$result" "e.g. sudo apt install minisign / sudo dnf install minisign / sudo pacman -S minisign" ;;
 esac
 

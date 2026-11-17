@@ -32,7 +32,7 @@ check_signature() {
         break
     done
     [ -n "$ossl" ] || { echo "neither minisign nor OpenSSL 3 is installed"; return 0; }
-    v=$(mktemp -d) || { echo "no temporary folder"; return 0; }
+    v=$(mktemp -d) || { echo error; return 0; }
     printf '%s' "$KEY" | b64d > "$v/pk" || :
     sed -n 2p "$2" | tr -d '\r' | b64d > "$v/sg" || :
     if [ "$(wc -c < "$v/pk")" -ne 42 ] || [ "$(wc -c < "$v/sg")" -ne 74 ]; then rm -rf "$v"; echo mismatch; return 0; fi
@@ -96,6 +96,7 @@ result=$(check_signature "$tmp/naTiVeFS.dmg" "$tmp/naTiVeFS.dmg.minisig" naTiVeF
 case "$result" in
     verified) echo "Signature verified." ;;
     mismatch) echo "naTiVeFS: the signature does NOT match: this file is not the published naTiVeFS. Nothing was installed." >&2; exit 1 ;;
+    error) echo "naTiVeFS: the signature could not be checked (no temporary folder could be created). Nothing was installed." >&2; exit 1 ;;
     *) warn_unverified "$result" "brew install minisign" ;;
 esac
 mkdir "$tmp/mnt"
@@ -106,8 +107,15 @@ if [ -x "$APP/Contents/MacOS/nativefs" ]; then
     sleep 2
 fi
 pkill -x nativefs 2>/dev/null || true
+# copied next to the old app first, then swapped in: a failed copy never leaves the user without naTiVeFS
+rm -rf "$APP.new"
+if ! cp -R "$tmp/mnt/naTiVeFS.app" "$APP.new"; then
+    rm -rf "$APP.new"
+    echo "naTiVeFS: the new version could not be copied to Applications. The old one is still there." >&2
+    exit 1
+fi
 rm -rf "$APP"
-cp -R "$tmp/mnt/naTiVeFS.app" /Applications/
+mv "$APP.new" "$APP"
 # the app is not signed by Apple: this says you chose to run it
 xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
 echo "naTiVeFS $tag is in Applications. Starting it."
