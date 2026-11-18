@@ -48,11 +48,13 @@ The short, public list of why naTiVeFS works the way it does. "Owner" = the proj
 - The Markdown / text reader groups its blocks into runs of 32 (`ReaderChunk`) and hides the runs more than a screen away from
   the view (their place in the layout stays). Measured on a ~3,900-line document: a scroll frame went from ~5.6 ms to ~2.4 ms
   of rendering; Slint's own clipping did not skip the off-screen blocks.
-- Big documents (64 runs and more) are virtualized: only the runs near the view (one screen above, two below, plus the run of
-  the current search match) get their blocks; the others keep an estimated height, replaced by the measured one once a run has
+- Big documents (64 runs and more) are virtualized: Slint gets only the runs near the view (one screen above, two below); the
+  rest of the page is two empty spaces above and below them (a search match outside moves the view there first). Runs keep an
+  estimated height, replaced by the measured one once a run has
   been shown (the view is shifted when a run above it changes height, so nothing jumps). Display rows are built on all cores
   (rayon), off the UI thread for big documents; a loading bar shows while the file is read and the page is built. Measured on
-  an 8 MB / 273,441-block file (debug build): content after ~3 s instead of > 60 s frozen, worst UI pause 184 ms.
+  an 8 MB / 273,441-block file (debug build): content after ~3 s instead of > 60 s frozen, worst UI pause 184 ms; scrolling
+  40 x 800 px: worst pause 72 ms, p90 36 ms (139 / 74 ms while every run was still in the model as an empty box).
 - App-only preferences without a field in the shared config (compact layout, the recorder's input level / auto level) are kept
   in `app-prefs.json` beside the config.
 - Pages that naTiVeFS or the link router hands to the browser carry `inbrowser=1`, so the web page does not send them straight

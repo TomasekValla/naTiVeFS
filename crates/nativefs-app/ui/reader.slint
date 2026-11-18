@@ -229,6 +229,10 @@ export component ReaderWindow inherits Window {
     out property <length> view-top: root.scroll-pos;
     out property <length> view-height: root.view-h;
     out property <length> column-w: root.col-w;
+    out property <length> page-pad: root.pad-y;
+    // big documents: the height of the runs not drawn above and below the drawn ones
+    in property <length> virt-above;
+    in property <length> virt-below;
     callback viewport-changed();
     callback layout-changed();
     // a run that just got its blocks reports its real height (index of its first block, height)
@@ -358,6 +362,8 @@ export component ReaderWindow inherits Window {
                 width: root.col-w;
                 // a short document keeps its spacing (without this the blocks share the window's height)
                 height: self.preferred-height;
+                padding-top: root.virt-above;
+                padding-bottom: root.virt-below;
                 for ch in root.chunks : chunk := VerticalLayout {
                 // a run without its blocks keeps its (estimated / measured) place
                 min-height: ch.blocks.length == 0 ? ch.est-h : 0px;

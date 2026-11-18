@@ -669,57 +669,117 @@ fn rebuild(rd: &Reader) {
 /// From this many rows on, the page is virtual: only the runs near the view get their blocks.
 const VIRTUAL_MIN: usize = CHUNK * 64;
 
-/// The virtual page of a big document. Slint lays out only the runs that have blocks; the others are empty boxes of
-/// their height, so opening and scrolling an 8 MB document no longer makes Slint measure all its text (measured: over a
-/// minute of a frozen UI thread in a debug build, under one second with blocks near the view only).
+/// The virtual page of a big document. Slint gets only the runs near the view (`a..b`); the rest of the page is two empty
+/// spaces of the runs' heights above and below them. Opening and scrolling an 8 MB document so no longer makes Slint
+/// measure all its text (measured: over a minute of a frozen UI thread in a debug build), and a scroll step no longer
+/// lays out thousands of empty runs either.
 #[derive(Default)]
 struct Virtual {
     on: bool,
     /// font size, font, column width (8 px steps): measured heights belong to these
     key: (usize, usize, i32),
     rows: Vec<Vec<ReaderBlock>>,
+    /// estimated, or measured once the run was shown
     heights: Vec<f32>,
-    live: Vec<bool>,
+    /// the runs in the window's model
+    a: usize,
+    b: usize,
+    /// the run of the search match the view was last brought to
+    revealed: Option<usize>,
 }
 
 fn chunk_row(v: &Virtual, c: usize) -> ReaderChunk {
     ReaderChunk {
         first: (c * CHUNK) as i32,
         est_h: v.heights[c].max(1.0),
-        blocks: if v.live[c] { ModelRc::new(VecModel::from(v.rows[c].clone())) } else { ModelRc::default() },
+        blocks: ModelRc::new(VecModel::from(v.rows[c].clone())),
     }
 }
 
-/// Give blocks to the runs from one screen above the view to two below (and to the run of the current search match),
-/// take them from the others.
+/// Top of the view in column coordinates (the column starts below the page padding).
+fn view_top(rd: &Reader) -> f32 {
+    rd.window.get_view_top() - rd.window.get_page_pad()
+}
+
+/// Put the runs from one screen above the view to two below into the window; a search match outside them then moves
+/// the view there (its reveal element places it exactly once its run is drawn).
 fn update_live(rd: &Reader) {
-    let mut v = rd.virt.borrow_mut();
-    if !v.on {
+    if !rd.virt.borrow().on || rd.virt.borrow().heights.is_empty() {
         return;
     }
-    let top = rd.window.get_view_top() - 40.0; // the column starts below the page padding
     let vh = rd.window.get_view_height().max(200.0);
-    let (lo, hi) = (top - vh, top + 2.0 * vh);
+    fill_window(rd, vh);
     let cur = rd.current.and_then(|i| rd.hits.get(i)).map(|h| h.block / CHUNK);
-    let model = rd.window.get_chunks();
-    let mut y = 0.0;
-    for c in 0..v.heights.len() {
-        let h = v.heights[c];
-        let want = (y + h >= lo && y <= hi) || cur == Some(c);
-        y += h;
-        if want != v.live[c] {
-            v.live[c] = want;
-            model.set_row_data(c, chunk_row(&v, c));
+    let target = {
+        let mut v = rd.virt.borrow_mut();
+        if cur == v.revealed {
+            return;
         }
+        v.revealed = cur;
+        // the spaces are set first: the page has its full height, so the scroll is not cut short
+        cur.filter(|&c| c < v.a || c >= v.b).map(|c| v.heights[..c].iter().sum::<f32>())
+    };
+    if let Some(y) = target {
+        rd.window.invoke_scroll_to(y + rd.window.get_page_pad() - vh / 3.0, false);
+        fill_window(rd, vh);
     }
 }
 
-/// A run that just got its blocks has its real height: remember it, and when the run is above the view, scroll by the
+fn fill_window(rd: &Reader, vh: f32) {
+    let mut v = rd.virt.borrow_mut();
+    let top = view_top(rd);
+    let (lo, hi) = (top - vh, top + 2.0 * vh);
+    let n = v.heights.len();
+    let (mut a, mut b, mut y, mut above) = (n - 1, n, 0.0f32, 0.0f32);
+    let mut found = false;
+    for c in 0..n {
+        let h = v.heights[c];
+        if !found && (y + h >= lo || c == n - 1) {
+            (a, above, found) = (c, y, true);
+        }
+        if found && y > hi {
+            b = c;
+            break;
+        }
+        y += h;
+    }
+    let below: f32 = v.heights[b..].iter().sum();
+    if (a, b) != (v.a, v.b) {
+        let model = rd.window.get_chunks();
+        let vm = model.as_any().downcast_ref::<VecModel<ReaderChunk>>();
+        match vm {
+            // the window moved a little: runs leave at one end and come in at the other, the rest stays drawn
+            Some(vm) if a < v.b && v.a < b => {
+                for _ in b..v.b {
+                    vm.remove(vm.row_count() - 1);
+                }
+                for _ in v.a..a {
+                    vm.remove(0);
+                }
+                for c in (a..v.a).rev() {
+                    vm.insert(0, chunk_row(&v, c));
+                }
+                for c in v.b..b {
+                    vm.push(chunk_row(&v, c));
+                }
+            }
+            _ => {
+                let rows: Vec<ReaderChunk> = (a..b).map(|c| chunk_row(&v, c)).collect();
+                rd.window.set_chunks(ModelRc::new(VecModel::from(rows)));
+            }
+        }
+        (v.a, v.b) = (a, b);
+    }
+    rd.window.set_virt_above(above);
+    rd.window.set_virt_below(below);
+}
+
+/// A run that just got drawn has its real height: remember it, and when the run is above the view, scroll by the
 /// difference so the text being read stays where it was.
 fn chunk_measured(rd: &Reader, first: i32, h: f32) {
     let mut v = rd.virt.borrow_mut();
     let c = first.max(0) as usize / CHUNK;
-    if !v.on || c >= v.heights.len() || !v.live[c] {
+    if !v.on || c >= v.heights.len() || c < v.a || c >= v.b {
         return;
     }
     let old = v.heights[c];
@@ -729,7 +789,7 @@ fn chunk_measured(rd: &Reader, first: i32, h: f32) {
     v.heights[c] = h;
     let y: f32 = v.heights[..c].iter().sum();
     drop(v);
-    if y + old <= rd.window.get_view_top() - 40.0 {
+    if y + old <= view_top(rd) {
         rd.window.invoke_scroll_by(h - old, false);
     }
 }
@@ -743,6 +803,8 @@ fn apply_rows(rd: &Reader, out: Vec<ReaderBlock>, est: Vec<f32>) {
         return;
     }
     rd.virt.borrow_mut().on = false;
+    rd.window.set_virt_above(0.0);
+    rd.window.set_virt_below(0.0);
     let model = rd.window.get_chunks();
     let same_shape = model.row_count() == out.len().div_ceil(CHUNK)
         && (0..model.row_count()).all(|c| model.row_data(c).is_some_and(|ch| ch.blocks.row_count() == out[c * CHUNK..].len().min(CHUNK)));
@@ -780,14 +842,14 @@ fn apply_virtual(rd: &Reader, out: Vec<ReaderBlock>, est: Vec<f32>) {
     let mut v = rd.virt.borrow_mut();
     let same = v.on && v.key == key && v.rows.len() == n && v.rows.iter().zip(&rows).all(|(a, b)| a.len() == b.len());
     if same {
-        // the same page (search marks, theme, a task ticked): only changed rows, live runs updated in place
+        // the same page (search marks, theme, a task ticked): only changed rows, drawn runs updated in place
         let model = rd.window.get_chunks();
         for (c, new) in rows.into_iter().enumerate() {
             if v.rows[c] == new {
                 continue;
             }
-            if v.live[c] {
-                if let Some(ch) = model.row_data(c) {
+            if c >= v.a && c < v.b {
+                if let Some(ch) = model.row_data(c - v.a) {
                     for (j, b) in new.iter().enumerate() {
                         if ch.blocks.row_data(j).as_ref() != Some(b) {
                             ch.blocks.set_row_data(j, b.clone());
@@ -799,9 +861,9 @@ fn apply_virtual(rd: &Reader, out: Vec<ReaderBlock>, est: Vec<f32>) {
         }
     } else {
         let heights: Vec<f32> = est.chunks(CHUNK).map(|p| p.iter().sum()).collect();
-        *v = Virtual { on: true, key, rows, heights, live: vec![false; n] };
-        let chunks: Vec<ReaderChunk> = (0..n).map(|c| chunk_row(&v, c)).collect();
-        rd.window.set_chunks(ModelRc::new(VecModel::from(chunks)));
+        // a new page: the window is filled by update_live below (a, b = 0 means nothing drawn yet)
+        *v = Virtual { on: true, key, rows, heights, ..Default::default() };
+        rd.window.set_chunks(ModelRc::new(VecModel::from(Vec::<ReaderChunk>::new())));
     }
     drop(v);
     update_live(rd);
