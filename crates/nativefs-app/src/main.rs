@@ -12,6 +12,7 @@ mod check_ui;
 mod debug;
 mod desktop_entry;
 mod expiry_ui;
+mod notify;
 mod files_ui;
 mod image_ui;
 mod layout;
@@ -1741,6 +1742,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let _ = nativefs_ipc::send(&Message::Quit);
         shellmenu::uninstall();
         router::cleanup();
+        notify::register(false);
         desktop_entry::remove();
         let _ = autostart::set(false);
         return Ok(());
@@ -1891,6 +1893,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     // debug builds: `NATIVEFS_UPDATE_OFFER=1` shows the restart offer (screenshots)
     ui.set_update_offer(crate::debug::flag("NATIVEFS_UPDATE_OFFER"));
+    // debug builds: `NATIVEFS_NOTIFY_TEST=1` shows one "upload finished" notification at start
+    if crate::debug::flag("NATIVEFS_NOTIFY_TEST") {
+        notify::register(true);
+        notify::uploads_done(1, 0, Some("notification-test.mp4"));
+    }
     ui.set_file_menus(config.file_menus);
     ui.set_file_menus_available(cfg!(any(windows, target_os = "linux")));
     ui.set_autostart(autostart::enabled());
@@ -1915,6 +1922,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // TVFS settings card
     ui.set_users_only(config.tvfs_users_only);
     ui.set_access_users(config.tvfs_users_only);
+    ui.set_notify_done(config.notify_done);
+    if config.notify_done {
+        notify::register(true); // keeps the Windows toast identity and its icon current
+    }
     ui.set_chunk_auto(config.chunk_auto);
     ui.set_chunk_count_text(config.chunk_count.to_string().into());
     ui.set_chunk_size_text(config.chunk_size_mb.to_string().into());
@@ -2349,6 +2360,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut cfg = shared.config.lock().unwrap();
             cfg.tvfs_users_only = on;
             let _ = cfg.save();
+        });
+    }
+    {
+        let shared = shared.clone();
+        ui.on_notify_done_changed(move |on| {
+            let mut cfg = shared.config.lock().unwrap();
+            cfg.notify_done = on;
+            let _ = cfg.save();
+            notify::register(on);
         });
     }
     {

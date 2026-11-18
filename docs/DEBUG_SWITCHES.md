@@ -23,6 +23,7 @@ Debug builds only:
 | `NATIVEFS_PAGE=settings\|check` | Opens that page of the main window. |
 | `NATIVEFS_SCROLL=<px>` | Scrolls the main page (screenshots of its lower parts). |
 | `NATIVEFS_UPDATE_OFFER=1` | Shows the "restart to update" offer. |
+| `NATIVEFS_NOTIFY_TEST=1` | Shows one "Upload finished" notification at start (registers the Windows toast identity). |
 | `NATIVEFS_STARTUP=a,b` | Sets "Start with the computer" / "Start in the background" (`1` = on). |
 | `NATIVEFS_ROUTER=0\|1` | Switches the link router like the settings toggle. |
 | `NATIVEFS_NO_SETTINGS=1` | The link router never opens the system's default-apps settings. |

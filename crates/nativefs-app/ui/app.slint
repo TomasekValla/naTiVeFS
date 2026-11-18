@@ -449,6 +449,9 @@ export component MainWindow inherits Window {
     in property <string> global-stats-text;
     // Settings > Expired pages: how many months an expired link says "This file has expired" (0, 1, 3, 6, 12)
     in-out property <int> expired-months: 3;
+    // Settings > Uploads > Notify when done
+    in-out property <bool> notify-done;
+    callback notify-done-changed(bool);
     callback expired-months-changed(int);
     in-out property <bool> chunk-auto: true;
     in-out property <string> chunk-count-text: "3";
@@ -2475,6 +2478,27 @@ export component MainWindow inherits Window {
                                             }
                                         }
                                         if !root.chunk-auto : ClampExplain { text: "EXPERIENCED USERS ONLY: Configure the sizes of chunks uploaded to the server and the amount of parallel connections held to the server. Due to browser technology, we are not able to achieve a perfect parallel upload in the way that we would like to, however, setting more parallel connections means less time spent between chunks on handshakes with the server. Keep in mind that the connection to our server does not allow more than 100 MB to be sent at once, and based on our testing, it is better if connections times size stays comfortably under that number too. We recommend keeping the size under 50 MB under any conditions. The default, tested setting we recommend is 3 × 30, and if you're on a weak connection, you may want to lower the size so that you have more backup if the connection drops — try lowering to as low as 1, for example 3 × 1 on hotel wifis. Keep in mind that switching takes time though, so if it's not that bad, 5 or 10 would be a better choice."; }
+                                    }
+                                }
+                                SettingCard {
+                                    height: lay-ntf.preferred-height;
+                                    lay-ntf := VerticalLayout {
+                                        padding-top: Look.compact ? 11px : 16px;
+                                        padding-bottom: Look.compact ? 11px : 16px;
+                                        padding-left: Look.compact ? 14px : 18px;
+                                        padding-right: Look.compact ? 14px : 18px;
+                                        spacing: Look.compact ? 6px : 8px;
+                                        HorizontalLayout {
+                                            Text { text: "Notify when done"; font-size: 13.12px; font-weight: 700; color: Palette.text; vertical-alignment: center; }
+                                            Rectangle { }
+                                            Seg {
+                                                controlled: true;
+                                                options: ["Off", "On"];
+                                                selected: root.notify-done ? 1 : 0;
+                                                picked(i) => { root.notify-done = i == 1; root.notify-done-changed(root.notify-done); }
+                                            }
+                                        }
+                                        Explain { text: "A system notification when uploads finish or fail while naTiVeFS is not in front."; }
                                     }
                                 }
                             }

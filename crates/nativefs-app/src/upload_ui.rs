@@ -90,6 +90,32 @@ fn is_audio(f: &UploadFile) -> bool {
     f.mime.starts_with("audio/") || EXTS.contains(&ext.as_str())
 }
 
+/// Settings > Notify when done: a system notification when a run ends while naTiVeFS is not in front (hidden, minimized
+/// or another window focused), as the web does for a background tab. Not after Cancel.
+fn notify_if_away(ui: &MainWindow, shared: &Arc<Shared>, report: &RunReport) {
+    if !shared.config.lock().unwrap().notify_done {
+        return;
+    }
+    let cancelled = shared.active_run.lock().unwrap().as_ref().is_some_and(|r| r.control.is_cancelled());
+    let in_front = shared.window_visible.load(Ordering::Relaxed) && {
+        use slint::winit_030::WinitWindowAccessor;
+        ui.window().with_winit_window(|w| w.has_focus()).unwrap_or(true)
+    };
+    if cancelled || in_front {
+        return;
+    }
+    let (ok, failed, name) = match &report.outcome {
+        Outcome::Single(f) => (usize::from(f.result.is_ok()), usize::from(f.result.is_err()), Some(f.name.clone())),
+        Outcome::Batch { files, batch } => {
+            let ok = if batch.is_ok() { files.iter().filter(|f| f.result.is_ok()).count() } else { 0 };
+            (ok, files.len().saturating_sub(ok).max(usize::from(ok == 0)), files.first().map(|f| f.name.clone()))
+        }
+        Outcome::Protected(r) => (usize::from(r.is_ok()), usize::from(r.is_err()), None),
+        Outcome::Failed(_) => (0, 1, None),
+    };
+    crate::notify::uploads_done(ok, failed, name.as_deref());
+}
+
 /// Size of the largest selected file (the expiry picker's limits depend on it).
 pub fn biggest_selected() -> u64 {
     with_state(|s| s.queue.iter().map(|f| f.size).max().unwrap_or(0))
@@ -590,6 +616,7 @@ fn finish(ui: &MainWindow, shared: &Arc<Shared>, report: RunReport) {
         s.timer = None;
         s.run = None;
     });
+    notify_if_away(ui, shared, &report);
     if let Some(run) = shared.active_run.lock().unwrap().take() {
         let ids = run.upload_ids();
         shared.pending.lock().unwrap().retain(|p| !ids.contains(&p.upload_id));

@@ -42,6 +42,9 @@ bytes = "1"
 ogg = "0.9"
 flacenc = "0.4"
 
+# "upload finished" notifications (Windows toast, Linux D-Bus via zbus as already used by mpris-server, macOS)
+notify-rust = { version = ">=4.18, <4.19", default-features = false, features = ["z"] }  # 4.19 needs zbus 6 (a third copy next to 4 and 5)
+
 [target.'cfg(target_os = "linux")'.dependencies]
 ksni = { version = "0.3", features = ["blocking"] }
 # media keys / the desktop's media controls (MPRIS over D-Bus)

@@ -93,6 +93,8 @@ pub struct Config {
     pub check_updates: bool,
     /// "TVFS Users Only": uploads become login-gated shares instead of public links.
     pub tvfs_users_only: bool,
+    /// Settings > Uploads > Notify when done: a system notification when uploads finish or fail in the background.
+    pub notify_done: bool,
     /// Chunk configuration: "Manage automatically" (true) or "Fixed".
     pub chunk_auto: bool,
     /// Fixed mode: parallel connections.
@@ -176,6 +178,7 @@ impl Default for Config {
             update_channel: UpdateChannel::Stable,
             check_updates: true,
             tvfs_users_only: false,
+            notify_done: false,
             chunk_auto: true,
             chunk_count: 3,
             chunk_size_mb: 30,
