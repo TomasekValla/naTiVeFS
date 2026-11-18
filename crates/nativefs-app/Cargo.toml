@@ -13,6 +13,8 @@ name = "naTiVeFS"
 path = "src/main.rs"
 
 [dependencies]
+# the reader builds the rows of big documents on all CPU cores (already in the tree through image)
+rayon = "1"
 # unstable-winit-030: raw winit events for wheel / middle-button autoscroll and the monitor refresh rate
 slint = { version = "1", features = ["unstable-winit-030"] }
 tvfs-core.workspace = true

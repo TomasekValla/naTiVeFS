@@ -94,6 +94,9 @@ export struct ReaderChunk {
     // index of the first block (search / reveal count blocks over the whole page)
     first: int,
     blocks: [ReaderBlock],
+    // big documents: a run far from the view has no blocks, only this height (estimated, or measured while it had
+    // blocks), so Slint never lays out the text of the whole document
+    est-h: length,
 }
 
 global RP {
@@ -222,6 +225,14 @@ export component ReaderWindow inherits Window {
     in-out property <bool> wheel-smooth;
     in property <bool> smooth-scroll: true;
     in property <string> toast;
+    // big documents: what is in view, for Rust to give blocks only to the runs near it
+    out property <length> view-top: root.scroll-pos;
+    out property <length> view-height: root.view-h;
+    out property <length> column-w: root.col-w;
+    callback viewport-changed();
+    callback layout-changed();
+    // a run that just got its blocks reports its real height (index of its first block, height)
+    callback chunk-measured(int, length);
     callback cycle-font();
     callback cycle-size();
     callback toggle-theme();
@@ -260,6 +271,9 @@ export component ReaderWindow inherits Window {
     property <duration> scroll-anim: 0ms;
     property <length> scroll-pos: clamp(root.scroll-target, 0px, root.max-scroll);
     animate scroll-pos { duration: root.scroll-anim; easing: cubic-bezier(0.2, 0.7, 0.3, 1); }
+    changed scroll-pos => { root.viewport-changed(); }
+    changed view-h => { root.viewport-changed(); }
+    changed col-w => { root.layout-changed(); }
     public function scroll-by(dy: length, smooth: bool) {
         root.scroll-anim = smooth && root.smooth-scroll ? 230ms : 0ms;
         root.scroll-target = clamp(clamp(root.scroll-target, 0px, root.max-scroll) + dy, 0px, root.max-scroll);
@@ -317,6 +331,26 @@ export component ReaderWindow inherits Window {
                 color: root.status-error ? #ff6b6b : RP.dim;
                 wrap: word-wrap;
             }
+            // loading bar while the file downloads, is read and the page is built (that work runs off the UI thread,
+            // so the bar keeps moving)
+            if root.status != "" && !root.status-error : Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: 120px;
+                width: min(260px, parent.width - 48px);
+                height: 4px;
+                border-radius: 2px;
+                background: RP.btn;
+                clip: true;
+                Rectangle {
+                    // a highlight sliding across, one pass every 1.4 s
+                    property <float> t: mod(animation-tick() / 1400ms, 1.0);
+                    width: parent.width * 0.35;
+                    x: -self.width + (parent.width + self.width) * self.t;
+                    height: parent.height;
+                    border-radius: 2px;
+                    background: @linear-gradient(90deg, RP.accent 0%, RP.accent2 100%);
+                }
+            }
             body := VerticalLayout {
                 visible: root.status == "";
                 x: (parent.width - root.col-w) / 2;
@@ -325,10 +359,26 @@ export component ReaderWindow inherits Window {
                 // a short document keeps its spacing (without this the blocks share the window's height)
                 height: self.preferred-height;
                 for ch in root.chunks : chunk := VerticalLayout {
+                // a run without its blocks keeps its (estimated / measured) place
+                min-height: ch.blocks.length == 0 ? ch.est-h : 0px;
                 // runs well outside the view are not drawn at all (their place in the layout stays). The run holding the
                 // current search match is always drawn: drawing creates its reveal element, which scrolls to it.
                 visible: (self.y + self.height >= root.scroll-pos - root.view-h && self.y <= root.scroll-pos + 2 * root.view-h)
                     || (root.current-block >= ch.first && root.current-block < ch.first + ch.blocks.length);
+                // created when the run gets its blocks: tells Rust the run's real height
+                if ch.blocks.length > 0 && ch.est-h > 0px : Rectangle {
+                    width: 0px;
+                    height: 0px;
+                    // read a moment later: reading the run's height while Slint lays it out recursed
+                    Timer {
+                        interval: 1ms;
+                        running: true;
+                        triggered => {
+                            self.running = false;
+                            root.chunk-measured(ch.first, chunk.height);
+                        }
+                    }
+                }
                 for b[j] in ch.blocks : brow := VerticalLayout {
                     padding-top: b.quote && !b.quote-first ? 0px : b.gap;
                     // the quote box spans the gap between two of its blocks too

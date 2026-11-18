@@ -88,9 +88,9 @@ struct Reader {
     markdown: bool,
     raw: Vec<u8>,
     text: String,
-    blocks: Vec<Block>,
+    blocks: Arc<Vec<Block>>,
     /// TXT: the rows (one line, or a chunk of lines in big files) and the byte offset of each in `text`.
-    chunks: Vec<(usize, String)>,
+    chunks: Arc<Vec<(usize, String)>>,
     txt_line_rows: bool,
     font: usize,
     size: usize,
@@ -101,6 +101,12 @@ struct Reader {
     /// Task ticks changed by the user (task index -> checked), remembered per file.
     ticks: HashMap<usize, bool>,
     images: HashMap<String, Option<Image>>,
+    /// Increases with every rebuild; a background build of an older one stops.
+    build_gen: std::cell::Cell<u64>,
+    /// Big documents: which runs have their blocks, and the height of every run.
+    virt: RefCell<Virtual>,
+    /// A viewport update is already queued for this event-loop turn.
+    live_pending: std::cell::Cell<bool>,
     zoom: f32,
 }
 
@@ -172,8 +178,8 @@ pub fn open(shared: &Arc<Shared>, content: Content) {
         markdown,
         raw: Vec::new(),
         text: String::new(),
-        blocks: Vec::new(),
-        chunks: Vec::new(),
+        blocks: Arc::new(Vec::new()),
+        chunks: Arc::new(Vec::new()),
         txt_line_rows: true,
         font: font_index(&cfg.reader_font),
         size: (cfg.reader_size as usize).min(SIZES.len() - 1),
@@ -182,6 +188,9 @@ pub fn open(shared: &Arc<Shared>, content: Content) {
         hits: Vec::new(),
         current: None,
         images: HashMap::new(),
+        build_gen: std::cell::Cell::new(0),
+        virt: RefCell::new(Virtual::default()),
+        live_pending: std::cell::Cell::new(false),
         zoom: cfg.reader_zoom,
     }));
     apply_look(&reader.borrow());
@@ -205,9 +214,17 @@ pub fn open(shared: &Arc<Shared>, content: Content) {
         // decoding, Markdown parsing and splitting run off the UI thread (a big file took seconds and froze the window);
         // the window only gets the finished result
         let result = match shared2.client.fetch_bytes(&url, MAX_TEXT_BYTES).await {
-            Ok(bytes) => tokio::task::spawn_blocking(move || prepare(bytes.to_vec(), markdown))
+            Ok(bytes) => {
+                let w3 = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = w3.upgrade() {
+                        w.set_status("Reading the document…".into());
+                    }
+                });
+                tokio::task::spawn_blocking(move || prepare(bytes.to_vec(), markdown))
                 .await
-                .map_err(|_| tvfs_core::Error::Server { status: 0, message: "the file could not be read".into() }),
+                .map_err(|_| tvfs_core::Error::Server { status: 0, message: "the file could not be read".into() })
+            }
             Err(e) => Err(e),
         };
         let _ = slint::invoke_from_event_loop(move || {
@@ -286,10 +303,11 @@ fn loaded(r: &Rc<RefCell<Reader>>, p: Prepared) {
     let mut rd = r.borrow_mut();
     rd.raw = p.raw;
     rd.text = p.text;
-    rd.blocks = p.blocks;
-    rd.chunks = p.chunks;
+    rd.blocks = Arc::new(p.blocks);
+    rd.chunks = Arc::new(p.chunks);
     rd.txt_line_rows = p.txt_line_rows;
-    rd.window.set_status("".into());
+    // cleared when the rows are in the window (big documents are built in the background)
+    rd.window.set_status("Building the page…".into());
     // debug builds: `NATIVEFS_READER_FIND=<text>` opens Find with that text (synthetic typing does not reach winit windows)
     #[cfg(debug_assertions)]
     if let Some(q) = crate::debug::var("NATIVEFS_READER_FIND") {
@@ -325,58 +343,138 @@ fn rgb_mix(a: u32, b: u32, t: f32) -> u32 {
 }
 
 /// Rebuild the whole block model (after loading, a size / theme change, or a search).
-fn rebuild(rd: &Reader) {
-    let base = 16.0 * SIZES[rd.size];
-    let (fg, bg) = if rd.light { (0x1a1a1a, 0xfafafa) } else { (0xe8e8e8, 0x111111) };
-    let colors = Colors { strong: Some(if rd.light { 0x000000 } else { 0xffffff }), em: Some(rgb_mix(bg, fg, 0.85)) };
-    let current = rd.current.and_then(|i| rd.hits.get(i)).copied();
-    let marks_for = |block: usize, cell: Option<(usize, usize)>| -> Vec<Mark> {
-        rd.hits
-            .iter()
-            .filter(|h| h.block == block && h.cell == cell)
-            .map(|h| {
-                let cur = Some(*h) == current;
-                Mark { start: h.start, end: h.end, color: if cur { MATCH_CURRENT } else { MATCH }, underline: cur }
-            })
-            .collect()
-    };
-    let mut out: Vec<ReaderBlock> = Vec::new();
-    if !rd.markdown {
-        for (i, (_, chunk)) in rd.chunks.iter().enumerate() {
-            let marks = marks_for(i, None);
-            let lh = if rd.txt_line_rows { 1.8 } else { 0.0 };
-            if marks.is_empty() {
-                out.push(ReaderBlock { kind: 6, plain: chunk.as_str().into(), lh, font_size: base, task: -1, sel_start: -1, sel_end: -1, ..Default::default() });
-            } else {
-                // a row with search matches: styled text, so every match can be coloured
-                let spans = [markdown::Span { text: chunk.clone(), style: 0, link: None }];
-                let markup = markdown::to_markup(&spans, &marks, None, Colors::default());
-                out.push(ReaderBlock { kind: 0, text: styled(&markup, chunk), lh, font_size: base, task: -1, sel_start: -1, sel_end: -1, ..Default::default() });
-            }
+/// Above this many rows the page is built in the background (a big document froze every window of the app for
+/// seconds: they all share the UI thread).
+const ASYNC_ROWS: usize = 4_000;
+
+/// One display row, made off the UI thread: everything except the table models and the image, which must be made on
+/// the UI thread (`StyledText` and strings may cross threads, Slint models and images may not).
+#[derive(Default)]
+struct RowSpec {
+    kind: i32,
+    text: StyledText,
+    plain: slint::SharedString,
+    level: i32,
+    font_size: f32,
+    gap: f32,
+    indent: f32,
+    marker: slint::SharedString,
+    task: i32,
+    task_index: i32,
+    quote: bool,
+    quote_first: bool,
+    quote_last: bool,
+    col_w: Vec<f32>,
+    rows: Vec<(Vec<StyledText>, bool, bool)>,
+    img_src: String,
+    alt: slint::SharedString,
+    sel_start: i32,
+    sel_end: i32,
+    lh: f32,
+    code_styled: bool,
+    /// Estimated height including the gap above (a big document's runs use it until they are measured).
+    est: f32,
+}
+
+/// What building the rows reads from the reader: a snapshot, so the work can run on other threads.
+#[derive(Clone)]
+struct RowInputs {
+    markdown: bool,
+    blocks: Arc<Vec<Block>>,
+    chunks: Arc<Vec<(usize, String)>>,
+    txt_line_rows: bool,
+    size: usize,
+    light: bool,
+    hits: Vec<Hit>,
+    current: Option<Hit>,
+    ticks: HashMap<usize, bool>,
+    /// Width of the text column (for the height estimate).
+    col_w: f32,
+}
+
+fn row_inputs(rd: &Reader) -> RowInputs {
+    RowInputs {
+        markdown: rd.markdown,
+        blocks: rd.blocks.clone(),
+        chunks: rd.chunks.clone(),
+        txt_line_rows: rd.txt_line_rows,
+        size: rd.size,
+        light: rd.light,
+        hits: rd.hits.clone(),
+        current: rd.current.and_then(|i| rd.hits.get(i)).copied(),
+        ticks: rd.ticks.clone(),
+        col_w: rd.window.get_column_w().max(200.0),
+    }
+}
+
+/// Font size and the margins above / below a Markdown block (the web's CSS).
+fn block_margins(b: &Block, base: f32) -> (f32, f32, f32) {
+    let in_list = b.indent > 0;
+    match b.kind {
+        BlockKind::Heading => {
+            let em = [2.0, 1.5, 1.25, 1.05, 0.83, 0.67][(b.level.clamp(1, 6) - 1) as usize];
+            (base * em, 1.6 * base * em, 0.6 * base * em)
         }
-    } else {
-        let mut prev_bottom: Option<f32> = None;
-        let mut prev_quote = false;
-        let n = rd.blocks.len();
-        for (i, b) in rd.blocks.iter().enumerate() {
-            let in_list = b.indent > 0;
-            let (fs, top, bottom) = match b.kind {
-                BlockKind::Heading => {
-                    let em = [2.0, 1.5, 1.25, 1.05, 0.83, 0.67][(b.level.clamp(1, 6) - 1) as usize];
-                    (base * em, 1.6 * base * em, 0.6 * base * em)
+        BlockKind::Code => (base * 0.9, base, base),
+        BlockKind::Table => (base * 0.92, base * 0.92, base * 0.92),
+        BlockKind::Rule => (base, 1.8 * base, 1.8 * base),
+        BlockKind::Image => (base, 0.8 * base, 0.8 * base),
+        BlockKind::Paragraph if in_list => (base, 0.3 * base, 0.3 * base),
+        BlockKind::Paragraph => (base, 0.8 * base, 0.8 * base),
+    }
+}
+
+/// All rows of the page, made on every CPU core: each row depends only on its block and the block before it.
+fn make_rows(inp: &RowInputs) -> Vec<RowSpec> {
+    use rayon::prelude::*;
+    let base = 16.0 * SIZES[inp.size];
+    let (fg, bg) = if inp.light { (0x1a1a1a, 0xfafafa) } else { (0xe8e8e8, 0x111111) };
+    let colors = Colors { strong: Some(if inp.light { 0x000000 } else { 0xffffff }), em: Some(rgb_mix(bg, fg, 0.85)) };
+    // search marks grouped once by block / table cell (not filtered again for every block)
+    let mut marks: HashMap<(usize, Option<(usize, usize)>), Vec<Mark>> = HashMap::new();
+    for h in &inp.hits {
+        let cur = Some(*h) == inp.current;
+        marks
+            .entry((h.block, h.cell))
+            .or_default()
+            .push(Mark { start: h.start, end: h.end, color: if cur { MATCH_CURRENT } else { MATCH }, underline: cur });
+    }
+    let marks_for = |block: usize, cell: Option<(usize, usize)>| -> Vec<Mark> { marks.get(&(block, cell)).cloned().unwrap_or_default() };
+    if !inp.markdown {
+        let lh = if inp.txt_line_rows { 1.8 } else { 0.0 };
+        return inp
+            .chunks
+            .par_iter()
+            .enumerate()
+            .map(|(i, (_, chunk))| {
+                let marks = marks_for(i, None);
+                let est = (chunk.matches('\n').count() + 1) as f32 * base * if lh > 0.0 { lh } else { 1.45 };
+                if marks.is_empty() {
+                    RowSpec { kind: 6, plain: chunk.as_str().into(), lh, font_size: base, task: -1, sel_start: -1, sel_end: -1, est, ..Default::default() }
+                } else {
+                    // a row with search matches: styled text, so every match can be coloured
+                    let spans = [markdown::Span { text: chunk.clone(), style: 0, link: None }];
+                    let markup = markdown::to_markup(&spans, &marks, None, Colors::default());
+                    RowSpec { kind: 0, text: styled(&markup, chunk), lh, font_size: base, task: -1, sel_start: -1, sel_end: -1, est, ..Default::default() }
                 }
-                BlockKind::Code => (base * 0.9, base, base),
-                BlockKind::Table => (base * 0.92, base * 0.92, base * 0.92),
-                BlockKind::Rule => (base, 1.8 * base, 1.8 * base),
-                BlockKind::Image => (base, 0.8 * base, 0.8 * base),
-                BlockKind::Paragraph if in_list => (base, 0.3 * base, 0.3 * base),
-                BlockKind::Paragraph => (base, 0.8 * base, 0.8 * base),
-            };
+            })
+            .collect();
+    }
+    let blocks = &inp.blocks;
+    blocks
+        .par_iter()
+        .enumerate()
+        .map(|(i, b)| {
+            let in_list = b.indent > 0;
+            let (fs, top, _bottom) = block_margins(b, base);
+            let prev = i.checked_sub(1).map(|p| &blocks[p]);
             // a list as a whole has .6em margins around it
-            let prev_in_list = i > 0 && rd.blocks[i - 1].indent > 0;
+            let prev_in_list = prev.is_some_and(|p| p.indent > 0);
             let top = if in_list != prev_in_list { top.max(0.6 * base) } else { top };
             let quote = b.quote > 0;
-            let next_quote = rd.blocks.get(i + 1).is_some_and(|x| x.quote > 0);
+            let prev_quote = prev.is_some_and(|p| p.quote > 0);
+            let next_quote = blocks.get(i + 1).is_some_and(|x| x.quote > 0);
+            let prev_bottom = prev.map(|p| block_margins(p, base).2);
             // a quote box has 1em margins outside and .4em padding + the paragraph's .8em inside
             let gap = match prev_bottom {
                 // the next line of the same paragraph
@@ -386,52 +484,57 @@ fn rebuild(rd: &Reader) {
                 Some(pb) if !quote && prev_quote => pb.max(base).max(top),
                 Some(pb) => pb.max(top),
             };
-            let mut rb = ReaderBlock { font_size: fs, gap, indent: 25.6 / 16.0 * base * b.indent as f32, task: -1, ..Default::default() };
-            rb.quote = quote;
-            rb.quote_first = quote && !prev_quote && !b.cont;
-            rb.quote_last = quote && !next_quote;
-            rb.marker = b.marker.as_str().into();
+            let mut rs = RowSpec { font_size: fs, gap, indent: 25.6 / 16.0 * base * b.indent as f32, task: -1, ..Default::default() };
+            rs.quote = quote;
+            rs.quote_first = quote && !prev_quote && !b.cont;
+            rs.quote_last = quote && !next_quote;
+            rs.marker = b.marker.as_str().into();
             if let Some(done) = b.task {
-                let done = rd.ticks.get(&b.task_index).copied().unwrap_or(done);
-                rb.task = done as i32;
-                rb.task_index = b.task_index as i32;
+                let done = inp.ticks.get(&b.task_index).copied().unwrap_or(done);
+                rs.task = done as i32;
+                rs.task_index = b.task_index as i32;
             }
             match b.kind {
                 BlockKind::Paragraph => {
-                    rb.kind = 0;
-                    rb.lh = 1.75;
+                    rs.kind = 0;
+                    rs.lh = 1.75;
                     let markup = markdown::to_markup(&b.spans, &marks_for(i, None), None, colors);
-                    rb.text = styled(&markup, &b.plain());
+                    rs.text = styled(&markup, &b.plain());
                 }
                 BlockKind::Heading => {
-                    rb.kind = 1;
-                    rb.lh = 1.25;
-                    rb.level = b.level as i32;
-                    let spans: Vec<_> = b.spans.iter().cloned().map(|mut s| {
-                        s.style |= markdown::STRONG;
-                        s
-                    }).collect();
+                    rs.kind = 1;
+                    rs.lh = 1.25;
+                    rs.level = b.level as i32;
+                    let spans: Vec<_> = b
+                        .spans
+                        .iter()
+                        .cloned()
+                        .map(|mut s| {
+                            s.style |= markdown::STRONG;
+                            s
+                        })
+                        .collect();
                     // the web paints the gradient over the full column: short headings stay near the teal end
                     let chars = markdown::spans_plain(&spans).chars().count() as f32;
                     let reach = ((chars * fs * 0.56 + fs * 0.6) / (812.0 + fs * 1.25)).clamp(0.05, 1.0);
                     let markup = markdown::to_markup(&spans, &marks_for(i, None), Some((ACCENT, rgb_mix(ACCENT, ACCENT2, reach))), Colors::default());
-                    rb.text = styled(&markup, &b.plain());
+                    rs.text = styled(&markup, &b.plain());
                 }
                 BlockKind::Code => {
-                    rb.kind = 2;
-                    rb.plain = b.code.as_str().into();
-                    rb.sel_start = -1;
-                    rb.sel_end = -1;
+                    rs.kind = 2;
+                    rs.plain = b.code.as_str().into();
+                    rs.sel_start = -1;
+                    rs.sel_end = -1;
                     let marks = marks_for(i, None);
                     if !marks.is_empty() {
                         let spans = [markdown::Span { text: b.code.clone(), style: 0, link: None }];
-                        rb.text = styled(&markdown::to_markup(&spans, &marks, None, Colors::default()), &b.code);
-                        rb.code_styled = true;
+                        rs.text = styled(&markdown::to_markup(&spans, &marks, None, Colors::default()), &b.code);
+                        rs.code_styled = true;
                     }
                 }
-                BlockKind::Rule => rb.kind = 3,
+                BlockKind::Rule => rs.kind = 3,
                 BlockKind::Table => {
-                    rb.kind = 4;
+                    rs.kind = 4;
                     let cols = b.rows.iter().map(|r| r.len()).max().unwrap_or(0);
                     let mut widths = vec![0f32; cols];
                     for row in &b.rows {
@@ -440,15 +543,15 @@ fn rebuild(rd: &Reader) {
                             widths[c] = widths[c].max(chars * fs * 0.55 + 28.0 + 2.0).max(44.0);
                         }
                     }
-                    let avail = 812.0 - rb.indent;
+                    let avail = 812.0 - rs.indent;
                     let sum: f32 = widths.iter().sum();
                     if sum > avail {
                         for w in &mut widths {
                             *w *= avail / sum;
                         }
                     }
-                    rb.col_w = ModelRc::new(VecModel::from(widths));
-                    let rows: Vec<ReaderRow> = b
+                    rs.col_w = widths;
+                    rs.rows = b
                         .rows
                         .iter()
                         .enumerate()
@@ -467,29 +570,179 @@ fn rebuild(rd: &Reader) {
                                     styled(&markup, &markdown::spans_plain(cell))
                                 })
                                 .collect();
-                            ReaderRow { cells: ModelRc::new(VecModel::from(cells)), header: ri == 0, even: ri > 0 && ri % 2 == 0 }
+                            (cells, ri == 0, ri > 0 && ri % 2 == 0)
                         })
                         .collect();
-                    rb.rows = ModelRc::new(VecModel::from(rows));
                 }
                 BlockKind::Image => {
-                    rb.kind = 5;
-                    rb.alt = b.alt.as_str().into();
-                    if let Some(Some(img)) = rd.images.get(&b.src) {
-                        rb.img = img.img.clone();
-                        rb.has_img = true;
-                        rb.img_w = img.w;
-                        rb.img_h = img.h;
-                    }
+                    rs.kind = 5;
+                    rs.alt = b.alt.as_str().into();
+                    rs.img_src = b.src.clone();
                 }
             }
-            prev_bottom = Some(bottom);
-            prev_quote = quote;
-            out.push(rb);
-            let _ = n;
+            rs.est = estimate_block(b, fs, rs.indent, inp.col_w, gap);
+            rs
+        })
+        .collect()
+}
+
+/// Rough height of a Markdown block: text lines from its length and the column width (the real height replaces it as
+/// soon as the run is shown).
+fn estimate_block(b: &Block, fs: f32, indent: f32, col_w: f32, gap: f32) -> f32 {
+    let per_line = ((col_w - indent).max(120.0) / (fs * 0.52)).max(10.0);
+    let lines = |chars: usize| (chars as f32 / per_line).ceil().max(1.0);
+    let body = match b.kind {
+        BlockKind::Paragraph => lines(b.plain().chars().count()) * fs * 1.75,
+        BlockKind::Heading => lines(b.plain().chars().count()) * fs * 1.25,
+        BlockKind::Code => b.code.lines().count().max(1) as f32 * fs * 1.5 + 2.0 * fs,
+        BlockKind::Table => b.rows.len() as f32 * (fs * 1.6 + 16.0),
+        BlockKind::Rule => 2.0,
+        BlockKind::Image => 240.0,
+    };
+    gap + body
+}
+
+/// A row for the window (UI thread: makes the table models and takes the image).
+fn spec_to_block(s: RowSpec, images: &HashMap<String, Option<Image>>) -> ReaderBlock {
+    let mut rb = ReaderBlock {
+        kind: s.kind,
+        text: s.text,
+        plain: s.plain,
+        level: s.level,
+        font_size: s.font_size,
+        gap: s.gap,
+        indent: s.indent,
+        marker: s.marker,
+        task: s.task,
+        task_index: s.task_index,
+        quote: s.quote,
+        quote_first: s.quote_first,
+        quote_last: s.quote_last,
+        alt: s.alt,
+        sel_start: s.sel_start,
+        sel_end: s.sel_end,
+        lh: s.lh,
+        code_styled: s.code_styled,
+        ..Default::default()
+    };
+    if s.kind == 4 {
+        rb.col_w = ModelRc::new(VecModel::from(s.col_w));
+        let rows: Vec<ReaderRow> = s
+            .rows
+            .into_iter()
+            .map(|(cells, header, even)| ReaderRow { cells: ModelRc::new(VecModel::from(cells)), header, even })
+            .collect();
+        rb.rows = ModelRc::new(VecModel::from(rows));
+    }
+    if s.kind == 5 {
+        if let Some(Some(img)) = images.get(&s.img_src) {
+            rb.img = img.img.clone();
+            rb.has_img = true;
+            rb.img_w = img.w;
+            rb.img_h = img.h;
         }
     }
-    // the same blocks again (a task ticked, search marks, theme): update the changed rows in place
+    rb
+}
+
+/// Build the page rows again (load, font size, theme, search marks, a task ticked, an image arrived). Small documents
+/// are built at once (on all cores, waited for); big ones on all cores in the background, so no window waits for that.
+fn rebuild(rd: &Reader) {
+    let inp = row_inputs(rd);
+    let gen = rd.build_gen.get() + 1;
+    rd.build_gen.set(gen);
+    let count = if inp.markdown { inp.blocks.len() } else { inp.chunks.len() };
+    if count <= ASYNC_ROWS {
+        let specs = make_rows(&inp);
+        let est: Vec<f32> = specs.iter().map(|s| s.est).collect();
+        let rows: Vec<ReaderBlock> = specs.into_iter().map(|s| spec_to_block(s, &rd.images)).collect();
+        apply_rows(rd, rows, est);
+        return;
+    }
+    let weak = rd.window.as_weak();
+    std::thread::spawn(move || {
+        let specs = make_rows(&inp);
+        let _ = slint::invoke_from_event_loop(move || apply_built(weak, gen, specs));
+    });
+}
+
+/// From this many rows on, the page is virtual: only the runs near the view get their blocks.
+const VIRTUAL_MIN: usize = CHUNK * 64;
+
+/// The virtual page of a big document. Slint lays out only the runs that have blocks; the others are empty boxes of
+/// their height, so opening and scrolling an 8 MB document no longer makes Slint measure all its text (measured: over a
+/// minute of a frozen UI thread in a debug build, under one second with blocks near the view only).
+#[derive(Default)]
+struct Virtual {
+    on: bool,
+    /// font size, font, column width (8 px steps): measured heights belong to these
+    key: (usize, usize, i32),
+    rows: Vec<Vec<ReaderBlock>>,
+    heights: Vec<f32>,
+    live: Vec<bool>,
+}
+
+fn chunk_row(v: &Virtual, c: usize) -> ReaderChunk {
+    ReaderChunk {
+        first: (c * CHUNK) as i32,
+        est_h: v.heights[c].max(1.0),
+        blocks: if v.live[c] { ModelRc::new(VecModel::from(v.rows[c].clone())) } else { ModelRc::default() },
+    }
+}
+
+/// Give blocks to the runs from one screen above the view to two below (and to the run of the current search match),
+/// take them from the others.
+fn update_live(rd: &Reader) {
+    let mut v = rd.virt.borrow_mut();
+    if !v.on {
+        return;
+    }
+    let top = rd.window.get_view_top() - 40.0; // the column starts below the page padding
+    let vh = rd.window.get_view_height().max(200.0);
+    let (lo, hi) = (top - vh, top + 2.0 * vh);
+    let cur = rd.current.and_then(|i| rd.hits.get(i)).map(|h| h.block / CHUNK);
+    let model = rd.window.get_chunks();
+    let mut y = 0.0;
+    for c in 0..v.heights.len() {
+        let h = v.heights[c];
+        let want = (y + h >= lo && y <= hi) || cur == Some(c);
+        y += h;
+        if want != v.live[c] {
+            v.live[c] = want;
+            model.set_row_data(c, chunk_row(&v, c));
+        }
+    }
+}
+
+/// A run that just got its blocks has its real height: remember it, and when the run is above the view, scroll by the
+/// difference so the text being read stays where it was.
+fn chunk_measured(rd: &Reader, first: i32, h: f32) {
+    let mut v = rd.virt.borrow_mut();
+    let c = first.max(0) as usize / CHUNK;
+    if !v.on || c >= v.heights.len() || !v.live[c] {
+        return;
+    }
+    let old = v.heights[c];
+    if (h - old).abs() < 0.5 {
+        return;
+    }
+    v.heights[c] = h;
+    let y: f32 = v.heights[..c].iter().sum();
+    drop(v);
+    if y + old <= rd.window.get_view_top() - 40.0 {
+        rd.window.invoke_scroll_by(h - old, false);
+    }
+}
+
+/// Rows into the window: changed rows in place when the shape stayed (a task ticked, search marks, theme), else a new
+/// page. Big documents get the virtual page.
+fn apply_rows(rd: &Reader, out: Vec<ReaderBlock>, est: Vec<f32>) {
+    rd.window.set_status("".into());
+    if out.len() >= VIRTUAL_MIN {
+        apply_virtual(rd, out, est);
+        return;
+    }
+    rd.virt.borrow_mut().on = false;
     let model = rd.window.get_chunks();
     let same_shape = model.row_count() == out.len().div_ceil(CHUNK)
         && (0..model.row_count()).all(|c| model.row_data(c).is_some_and(|ch| ch.blocks.row_count() == out[c * CHUNK..].len().min(CHUNK)));
@@ -507,9 +760,68 @@ fn rebuild(rd: &Reader) {
     let chunks: Vec<ReaderChunk> = out
         .chunks(CHUNK)
         .enumerate()
-        .map(|(c, part)| ReaderChunk { first: (c * CHUNK) as i32, blocks: ModelRc::new(VecModel::from(part.to_vec())) })
+        .map(|(c, part)| ReaderChunk { first: (c * CHUNK) as i32, blocks: ModelRc::new(VecModel::from(part.to_vec())), est_h: 0.0 })
         .collect();
     rd.window.set_chunks(ModelRc::new(VecModel::from(chunks)));
+}
+
+fn apply_virtual(rd: &Reader, out: Vec<ReaderBlock>, est: Vec<f32>) {
+    let key = (rd.size, rd.font, (rd.window.get_column_w() / 8.0).round() as i32);
+    let mut rows: Vec<Vec<ReaderBlock>> = Vec::with_capacity(out.len().div_ceil(CHUNK));
+    let mut it = out.into_iter();
+    loop {
+        let part: Vec<ReaderBlock> = it.by_ref().take(CHUNK).collect();
+        if part.is_empty() {
+            break;
+        }
+        rows.push(part);
+    }
+    let n = rows.len();
+    let mut v = rd.virt.borrow_mut();
+    let same = v.on && v.key == key && v.rows.len() == n && v.rows.iter().zip(&rows).all(|(a, b)| a.len() == b.len());
+    if same {
+        // the same page (search marks, theme, a task ticked): only changed rows, live runs updated in place
+        let model = rd.window.get_chunks();
+        for (c, new) in rows.into_iter().enumerate() {
+            if v.rows[c] == new {
+                continue;
+            }
+            if v.live[c] {
+                if let Some(ch) = model.row_data(c) {
+                    for (j, b) in new.iter().enumerate() {
+                        if ch.blocks.row_data(j).as_ref() != Some(b) {
+                            ch.blocks.set_row_data(j, b.clone());
+                        }
+                    }
+                }
+            }
+            v.rows[c] = new;
+        }
+    } else {
+        let heights: Vec<f32> = est.chunks(CHUNK).map(|p| p.iter().sum()).collect();
+        *v = Virtual { on: true, key, rows, heights, live: vec![false; n] };
+        let chunks: Vec<ReaderChunk> = (0..n).map(|c| chunk_row(&v, c)).collect();
+        rd.window.set_chunks(ModelRc::new(VecModel::from(chunks)));
+    }
+    drop(v);
+    update_live(rd);
+}
+
+/// Rows built in the background into the window, all at once: adding them in slices made Slint lay out the whole
+/// growing page again after every slice (measured: far slower than one change). A newer rebuild makes this one stop.
+fn apply_built(weak: slint::Weak<ReaderWindow>, gen: u64, specs: Vec<RowSpec>) {
+    let Some(w) = weak.upgrade() else { return };
+    let Some(r) = find(&w) else { return };
+    let rd = r.borrow();
+    if rd.build_gen.get() != gen {
+        return;
+    }
+    let est: Vec<f32> = specs.iter().map(|s| s.est).collect();
+    let rows: Vec<ReaderBlock> = specs.into_iter().map(|s| spec_to_block(s, &rd.images)).collect();
+    apply_rows(&rd, rows, est);
+    if rd.current.is_some() {
+        show_find_state(&rd);
+    }
 }
 
 /// Fetch the images of a Markdown file (relative sources resolve against the file's URL).
@@ -668,7 +980,56 @@ fn wire(shared: &Arc<Shared>, r: &Rc<RefCell<Reader>>) {
                 rd.font = (rd.font + 1) % FONTS.len();
                 apply_look(&rd);
                 save_look(&shared, &rd);
+                // a big document's measured heights belong to the old font
+                if rd.virt.borrow().on {
+                    rebuild(&rd);
+                }
             })
+        });
+    }
+    {
+        // scrolling a big document: blocks follow the view (once per event-loop turn)
+        let weak_r = Rc::downgrade(r);
+        w.on_viewport_changed(move || {
+            let Some(r) = weak_r.upgrade() else { return };
+            let rd = r.borrow();
+            if !rd.virt.borrow().on || rd.live_pending.replace(true) {
+                return;
+            }
+            let weak_r = Rc::downgrade(&r);
+            slint::Timer::single_shot(std::time::Duration::ZERO, move || {
+                if let Some(r) = weak_r.upgrade() {
+                    let rd = r.borrow();
+                    rd.live_pending.set(false);
+                    update_live(&rd);
+                }
+            });
+        });
+    }
+    {
+        let weak_r = Rc::downgrade(r);
+        w.on_chunk_measured(move |first, h| {
+            if let Some(r) = weak_r.upgrade() {
+                if let Ok(rd) = r.try_borrow() {
+                    chunk_measured(&rd, first, h);
+                }
+            }
+        });
+    }
+    {
+        // the column width changed (window resized): a big document's heights are estimated again, a moment later
+        let weak_r = Rc::downgrade(r);
+        let timer = Rc::new(slint::Timer::default());
+        w.on_layout_changed(move || {
+            let weak_r = weak_r.clone();
+            timer.start(slint::TimerMode::SingleShot, std::time::Duration::from_millis(200), move || {
+                if let Some(r) = weak_r.upgrade() {
+                    let rd = r.borrow();
+                    if rd.virt.borrow().on {
+                        rebuild(&rd);
+                    }
+                }
+            });
         });
     }
     {
