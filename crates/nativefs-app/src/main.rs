@@ -13,6 +13,7 @@ mod debug;
 mod desktop_entry;
 mod expiry_ui;
 mod notify;
+mod settings_sync;
 mod files_ui;
 mod image_ui;
 mod layout;
@@ -107,6 +108,10 @@ struct Shared {
     file_stats: Mutex<HashMap<String, FileStats>>,
     global_stats: Mutex<Option<GlobalStats>>,
     stats_at: Mutex<Option<Instant>>,
+    /// Settings sync: the server's copy was taken over after this login; the last copy sent / known from the server.
+    sync_pulled: AtomicBool,
+    sync_pushed: Mutex<Option<String>>,
+    sync_server: Mutex<serde_json::Map<String, serde_json::Value>>,
     /// The upload running right now (its files are not shown as NOT FINISHED).
     active_run: Mutex<Option<Arc<Run>>>,
     /// Unfinished uploads of this account on any device (`/api/status`).
@@ -144,6 +149,75 @@ struct LocalData {
 
 /// Recent entries live at most 31 days (the longest expiry is 30 days; expired pages stay listed until then).
 const RECENT_MAX_AGE_MS: i64 = 31 * 24 * 60 * 60 * 1000;
+
+/// Settings sync (opt-in, accounts only): after a login the server's copy wins (returned when it changed something
+/// here, to show it); later changes of this device are sent. Runs with the status refresh.
+async fn sync_settings(shared: &Arc<Shared>, account: Option<&tvfs_core::models::AccountSettings>) -> Option<(Config, prefs::AppPrefs)> {
+    if !shared.config.lock().unwrap().settings_sync {
+        return None;
+    }
+    if !shared.sync_pulled.load(Ordering::Relaxed) {
+        // the account settings come with the first refresh after a login
+        let account = account?;
+        shared.sync_pulled.store(true, Ordering::Relaxed);
+        let client = account.client.clone()?; // nothing on the server yet: this device's copy is sent next time
+        *shared.sync_server.lock().unwrap() = client.clone();
+        let mut cfg = shared.config.lock().unwrap().clone();
+        let mut prefs = prefs::load();
+        let changed = settings_sync::apply(&client, &mut cfg, &mut prefs);
+        // what the server holds now: the next refresh sends the full set when this device knows more keys
+        *shared.sync_pushed.lock().unwrap() = Some(serde_json::to_string(&client).unwrap_or_default());
+        if !changed {
+            return None;
+        }
+        {
+            let mut live = shared.config.lock().unwrap();
+            *live = cfg.clone();
+            let _ = live.save();
+        }
+        prefs::update(|p| *p = prefs);
+        return Some((cfg, prefs));
+    }
+    let snap = {
+        let cfg = shared.config.lock().unwrap().clone();
+        let base = shared.sync_server.lock().unwrap().clone();
+        settings_sync::snapshot(&cfg, &prefs::load(), &base)
+    };
+    let json = serde_json::to_string(&snap).unwrap_or_default();
+    if shared.sync_pushed.lock().unwrap().as_deref() != Some(json.as_str()) && shared.client.set_client_settings(&snap).await.is_ok() {
+        *shared.sync_pushed.lock().unwrap() = Some(json);
+        *shared.sync_server.lock().unwrap() = snap;
+    }
+    None
+}
+
+/// Shows settings that came from another device (the web reloads its page instead).
+fn apply_synced_to_ui(ui: &MainWindow, cfg: &Config, prefs: &prefs::AppPrefs) {
+    ui.global::<Palette>().set_light(cfg.light_theme);
+    let look = ui.global::<Look>();
+    look.set_glass(cfg.glass);
+    look.set_compact(prefs.compact);
+    ui.set_motion(cfg.motion.index() as i32);
+    ANIM.with(|a| {
+        if let Some(a) = a.borrow_mut().as_mut() {
+            a.motion = cfg.motion;
+        }
+    });
+    ui.set_auto_copy(match cfg.auto_copy {
+        tvfs_core::config::AutoCopy::Off => 0,
+        tvfs_core::config::AutoCopy::Normal => 1,
+        tvfs_core::config::AutoCopy::Styled => 2,
+    });
+    ui.set_prefer_tool(cfg.auto_copy_prefer_tool);
+    ui.set_image_styled(cfg.auto_copy_image_styled);
+    ui.set_users_only(cfg.tvfs_users_only);
+    if !upload_ui::busy() {
+        ui.set_access_users(cfg.tvfs_users_only);
+    }
+    ui.set_notify_done(cfg.notify_done);
+    notify::register(cfg.notify_done);
+    ui.window().request_redraw();
+}
 
 /// Settings > TVFS in numbers (the web's `renderGlobalStats`).
 fn global_stats_text(g: &GlobalStats) -> String {
@@ -857,6 +931,9 @@ fn show_login(weak: &Weak<MainWindow>, shared: &Shared, message: String) {
     shared.file_stats.lock().unwrap().clear();
     *shared.global_stats.lock().unwrap() = None;
     *shared.stats_at.lock().unwrap() = None;
+    shared.sync_pulled.store(false, Ordering::Relaxed);
+    *shared.sync_pushed.lock().unwrap() = None;
+    shared.sync_server.lock().unwrap().clear();
     on_ui(weak, move |ui| {
         expiry_ui::set_config(ui, None);
         ui.set_logged_in(false);
@@ -916,7 +993,9 @@ async fn refresh(shared: &Arc<Shared>, weak: &Weak<MainWindow>) -> Result<(), Er
     }
     let global_text = shared.global_stats.lock().unwrap().as_ref().filter(|_| status.tier > 0).map(global_stats_text).unwrap_or_default();
     // the settings kept with the account, with the upload rules (after a login, then once a minute)
-    let expired_months = if stale && status.tier > 0 { shared.client.account_settings().await.ok().map(|a| a.expired_page_months as i32) } else { None };
+    let account = if stale && status.tier > 0 { shared.client.account_settings().await.ok() } else { None };
+    let expired_months = account.as_ref().map(|a| a.expired_page_months as i32);
+    let synced = if status.tier > 0 { sync_settings(shared, account.as_ref()).await } else { None };
     push_recent(shared, weak);
     on_ui(weak, move |ui| {
         ui.set_backend_online(true);
@@ -928,6 +1007,9 @@ async fn refresh(shared: &Arc<Shared>, weak: &Weak<MainWindow>) -> Result<(), Er
         ui.set_global_stats_text(global_text.into());
         if let Some(m) = expired_months {
             ui.set_expired_months(m);
+        }
+        if let Some((cfg, prefs)) = synced {
+            apply_synced_to_ui(ui, &cfg, &prefs);
         }
         // new rules, or only the clock moved on (greyed options, the "Files expire on" date)
         match config {
@@ -1867,6 +1949,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         file_stats: Mutex::new(HashMap::new()),
         global_stats: Mutex::new(None),
         stats_at: Mutex::new(None),
+        sync_pulled: AtomicBool::new(false),
+        sync_pushed: Mutex::new(None),
+        sync_server: Mutex::new(serde_json::Map::new()),
         active_run: Mutex::new(None),
         finished_ids: Mutex::new(Vec::new()),
         pending: Mutex::new(Vec::new()),
@@ -1923,6 +2008,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.set_users_only(config.tvfs_users_only);
     ui.set_access_users(config.tvfs_users_only);
     ui.set_notify_done(config.notify_done);
+    ui.set_settings_sync(config.settings_sync);
     if config.notify_done {
         notify::register(true); // keeps the Windows toast identity and its icon current
     }
@@ -2360,6 +2446,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut cfg = shared.config.lock().unwrap();
             cfg.tvfs_users_only = on;
             let _ = cfg.save();
+        });
+    }
+    {
+        // turning sync on makes this device the copy the others get (as on the web)
+        let shared = shared.clone();
+        ui.on_settings_sync_changed(move |on| {
+            {
+                let mut cfg = shared.config.lock().unwrap();
+                cfg.settings_sync = on;
+                let _ = cfg.save();
+            }
+            shared.sync_pulled.store(on, Ordering::Relaxed);
+            *shared.sync_pushed.lock().unwrap() = None;
+            shared.wake.notify_one();
         });
     }
     {

@@ -149,6 +149,12 @@ impl Client {
         Self::json(self.http.put(self.endpoint("api/settings")?).json(&body)).await
     }
 
+    /// `PUT /api/settings` with the synced settings (Settings > Sync settings).
+    pub async fn set_client_settings(&self, client: &serde_json::Map<String, serde_json::Value>) -> Result<AccountSettings> {
+        let body = serde_json::json!({ "client": client });
+        Self::json(self.http.put(self.endpoint("api/settings")?).json(&body)).await
+    }
+
     /// `GET /api/stats`: opens / plays of this account's files and the TVFS totals (accounts only, not the host).
     pub async fn stats(&self) -> Result<StatsResponse> {
         Self::json(self.http.get(self.endpoint("api/stats")?)).await

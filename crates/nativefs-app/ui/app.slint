@@ -452,6 +452,9 @@ export component MainWindow inherits Window {
     // Settings > Uploads > Notify when done
     in-out property <bool> notify-done;
     callback notify-done-changed(bool);
+    // Settings > Uploads > Sync settings (accounts only)
+    in-out property <bool> settings-sync;
+    callback settings-sync-changed(bool);
     callback expired-months-changed(int);
     in-out property <bool> chunk-auto: true;
     in-out property <string> chunk-count-text: "3";
@@ -2499,6 +2502,29 @@ export component MainWindow inherits Window {
                                             }
                                         }
                                         Explain { text: "A system notification when uploads finish or fail while naTiVeFS is not in front."; }
+                                    }
+                                }
+                                if root.logged-in && root.tier > 0 : VerticalLayout {
+                                    SettingCard {
+                                        height: lay-sync.preferred-height;
+                                        lay-sync := VerticalLayout {
+                                            padding-top: Look.compact ? 11px : 16px;
+                                            padding-bottom: Look.compact ? 11px : 16px;
+                                            padding-left: Look.compact ? 14px : 18px;
+                                            padding-right: Look.compact ? 14px : 18px;
+                                            spacing: Look.compact ? 6px : 8px;
+                                            HorizontalLayout {
+                                                Text { text: "Sync settings"; font-size: 13.12px; font-weight: 700; color: Palette.text; vertical-alignment: center; }
+                                                Rectangle { }
+                                                Seg {
+                                                    controlled: true;
+                                                    options: ["Off", "On"];
+                                                    selected: root.settings-sync ? 1 : 0;
+                                                    picked(i) => { root.settings-sync = i == 1; root.settings-sync-changed(root.settings-sync); }
+                                                }
+                                            }
+                                            Explain { text: "Theme, glass, layout, background motion, auto copy, voice note options and the Users Only default follow your account to other devices where this is on too. Chunk and microphone settings stay per device."; }
+                                        }
                                     }
                                 }
                             }

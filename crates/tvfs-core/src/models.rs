@@ -144,6 +144,9 @@ pub struct AccountSettings {
     /// How many months the "this file has expired" page of an expired upload stays (0 = none).
     #[serde(default)]
     pub expired_page_months: u32,
+    /// Synced settings (the web's localStorage keys and values), when a device has synced them.
+    #[serde(default)]
+    pub client: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 /// `POST /api/file/:id/keep-max`

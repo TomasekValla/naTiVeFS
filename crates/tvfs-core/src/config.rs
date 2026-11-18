@@ -95,6 +95,8 @@ pub struct Config {
     pub tvfs_users_only: bool,
     /// Settings > Uploads > Notify when done: a system notification when uploads finish or fail in the background.
     pub notify_done: bool,
+    /// Settings > Uploads > Sync settings: the settings follow the account (this device only, not synced itself).
+    pub settings_sync: bool,
     /// Chunk configuration: "Manage automatically" (true) or "Fixed".
     pub chunk_auto: bool,
     /// Fixed mode: parallel connections.
@@ -179,6 +181,7 @@ impl Default for Config {
             check_updates: true,
             tvfs_users_only: false,
             notify_done: false,
+            settings_sync: false,
             chunk_auto: true,
             chunk_count: 3,
             chunk_size_mb: 30,
