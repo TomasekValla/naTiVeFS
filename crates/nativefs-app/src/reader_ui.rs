@@ -202,13 +202,20 @@ pub fn open(shared: &Arc<Shared>, content: Content) {
     let (shared2, weak) = (shared.clone(), window.as_weak());
     let url = content.url.clone();
     shared.rt.spawn(async move {
-        let result = shared2.client.fetch_bytes(&url, MAX_TEXT_BYTES).await;
+        // decoding, Markdown parsing and splitting run off the UI thread (a big file took seconds and froze the window);
+        // the window only gets the finished result
+        let result = match shared2.client.fetch_bytes(&url, MAX_TEXT_BYTES).await {
+            Ok(bytes) => tokio::task::spawn_blocking(move || prepare(bytes.to_vec(), markdown))
+                .await
+                .map_err(|_| tvfs_core::Error::Server { status: 0, message: "the file could not be read".into() }),
+            Err(e) => Err(e),
+        };
         let _ = slint::invoke_from_event_loop(move || {
             let Some(w) = weak.upgrade() else { return };
             let Some(r) = find(&w) else { return };
             match result {
-                Ok(bytes) => {
-                    loaded(&r, bytes.to_vec());
+                Ok(prepared) => {
+                    loaded(&r, prepared);
                     let shared3 = shared2.clone();
                     load_images(&shared3, &r);
                 }
@@ -226,15 +233,23 @@ fn find(w: &ReaderWindow) -> Option<Rc<RefCell<Reader>>> {
     READERS.with(|r| r.borrow().iter().find(|x| std::ptr::eq(x.borrow().window.window(), w.window())).cloned())
 }
 
-fn loaded(r: &Rc<RefCell<Reader>>, bytes: Vec<u8>) {
-    let mut rd = r.borrow_mut();
+/// A loaded file, ready for the window (made on a worker thread).
+struct Prepared {
+    raw: Vec<u8>,
+    text: String,
+    blocks: Vec<Block>,
+    chunks: Vec<(usize, String)>,
+    txt_line_rows: bool,
+}
+
+fn prepare(bytes: Vec<u8>, markdown: bool) -> Prepared {
     let text = String::from_utf8_lossy(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes)).replace("\r\n", "\n");
-    rd.raw = bytes;
-    if rd.markdown {
-        rd.blocks = markdown::parse(&text);
+    let mut p = Prepared { raw: Vec::new(), text: String::new(), blocks: Vec::new(), chunks: Vec::new(), txt_line_rows: false };
+    if markdown {
+        p.blocks = markdown::parse(&text);
     } else if text.split('\n').count() <= TXT_LINE_ROWS_MAX {
         let mut off = 0;
-        rd.chunks = text
+        p.chunks = text
             .split('\n')
             .map(|l| {
                 let row = (off, l.to_owned());
@@ -242,9 +257,8 @@ fn loaded(r: &Rc<RefCell<Reader>>, bytes: Vec<u8>) {
                 row
             })
             .collect();
-        rd.txt_line_rows = true;
+        p.txt_line_rows = true;
     } else {
-        rd.txt_line_rows = false;
         let mut chunks = Vec::new();
         let mut start = 0;
         let mut lines = 0;
@@ -261,9 +275,20 @@ fn loaded(r: &Rc<RefCell<Reader>>, bytes: Vec<u8>) {
         if start < text.len() || chunks.is_empty() {
             chunks.push((start, text[start..].to_owned()));
         }
-        rd.chunks = chunks;
+        p.chunks = chunks;
     }
-    rd.text = text;
+    p.raw = bytes;
+    p.text = text;
+    p
+}
+
+fn loaded(r: &Rc<RefCell<Reader>>, p: Prepared) {
+    let mut rd = r.borrow_mut();
+    rd.raw = p.raw;
+    rd.text = p.text;
+    rd.blocks = p.blocks;
+    rd.chunks = p.chunks;
+    rd.txt_line_rows = p.txt_line_rows;
     rd.window.set_status("".into());
     // debug builds: `NATIVEFS_READER_FIND=<text>` opens Find with that text (synthetic typing does not reach winit windows)
     #[cfg(debug_assertions)]
