@@ -268,7 +268,7 @@ impl Analysis {
     }
 }
 
-/// The particle field and its frame buffer.
+/// The particle field (the frame buffer is the caller's: it draws straight into the image the UI shows).
 pub struct Field {
     pub width: usize,
     pub height: usize,
@@ -276,8 +276,6 @@ pub struct Field {
     cy: f32,
     rmax: f32,
     particles: Vec<Particle>,
-    /// Premultiplied RGBA.
-    pub pixels: Vec<u8>,
     t: f32,
     swirl: f32,
 }
@@ -332,7 +330,7 @@ impl Field {
                 });
             }
         }
-        Field { width: w, height: h, cx: cx * scale, cy: cy * scale, rmax, particles, pixels: vec![0; w * h * 4], t: 0.0, swirl: 0.0 }
+        Field { width: w, height: h, cx: cx * scale, cy: cy * scale, rmax, particles, t: 0.0, swirl: 0.0 }
     }
 
     /// Continue `old`'s animation (a new field after a resize must not restart the motion).
@@ -345,10 +343,12 @@ impl Field {
         self.particles.len()
     }
 
-    /// Draw one frame. `mouse`: pointer in buffer px (pushes particles aside), `scale` as in `new`.
-    pub fn draw(&mut self, a: &Analysis, dt: f32, scale: f32, mouse: Option<(f32, f32)>) {
+    /// Draw one frame into `px` (premultiplied RGBA, `width` x `height`, cleared here). `mouse`: pointer in buffer px
+    /// (pushes particles aside), `scale` as in `new`.
+    pub fn draw(&mut self, px: &mut [u8], a: &Analysis, dt: f32, scale: f32, mouse: Option<(f32, f32)>) {
+        assert_eq!(px.len(), self.width * self.height * 4);
         self.t += dt;
-        self.pixels.iter_mut().for_each(|p| *p = 0);
+        px.fill(0);
         let pal_shift = self.t * 0.006;
         let activity = (a.level * 2.5).min(1.0);
         let key_mix = ((a.key_clarity - 0.08) / 0.27).clamp(0.0, 1.0) * 0.9 * (activity * 2.0).min(1.0);
@@ -408,7 +408,7 @@ impl Field {
             let hl = (0.6 + 4.6 * p.sz) * (1.0 + 1.6 * be + 0.9 * wave + a.drop * 0.9) * scale;
             let hw = (0.55 + 1.05 * p.sz) * (1.0 + 0.35 * be) * scale;
             let c = colors[p.bucket];
-            fill_capsule(&mut self.pixels, self.width, self.height, x, y, dx, dy, hl, hw, c);
+            fill_capsule(px, self.width, self.height, x, y, dx, dy, hl, hw, c);
         }
     }
 }
@@ -459,14 +459,15 @@ mod tests {
         assert!((1000..3200).contains(&f.count()), "{}", f.count());
         let mut a = Analysis::new(44100);
         let samples: Vec<f32> = (0..16384).map(|i| ((i as f32) * 0.05).sin() * 0.5).collect();
+        let mut px = vec![0u8; 1120 * 760 * 4];
         let t = std::time::Instant::now();
         for _ in 0..30 {
             a.update(Some(&samples), 1.0 / 60.0, Some(123.0), 1.0);
-            f.draw(&a, 1.0 / 60.0, 1.0, None);
+            f.draw(&mut px, &a, 1.0 / 60.0, 1.0, None);
         }
         let per_frame = t.elapsed() / 30;
         println!("{} particles, {:?} per frame", f.count(), per_frame);
-        assert!(f.pixels.iter().any(|p| *p > 0), "something was drawn");
+        assert!(px.iter().any(|p| *p > 0), "something was drawn");
     }
 
     /// The key colour: a pitch class sits on the circle of fifths (C 0 deg = red, F# 180 = cyan, like

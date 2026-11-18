@@ -140,6 +140,12 @@ struct State {
     /// Visualizer: the music analysis (also drives the disc pulse) and the particle field.
     analysis: Option<nativefs_audio::vis::Analysis>,
     field: Option<nativefs_audio::vis::Field>,
+    /// The field is drawn straight into these two images in turn (the one shown last may still be in use by the
+    /// renderer, so the other one is drawn; no copy of the frame).
+    vis_bufs: [Option<slint::SharedPixelBuffer<slint::Rgba8Pixel>>; 2],
+    vis_next: usize,
+    /// When the last visualizer frame was drawn (None: the frame timer was stopped)
+    vis_last: Option<Instant>,
     /// Pointer in physical px (pushes particles aside).
     cursor: Option<(f32, f32)>,
     /// The system media overlay / media keys (Windows SMTC).
@@ -222,6 +228,9 @@ fn open_source(shared: &Arc<Shared>, source: Source) {
         spec_last: Instant::now(),
         analysis: None,
         field: None,
+        vis_bufs: [None, None],
+        vis_next: 0,
+        vis_last: None,
         cursor: None,
         media: None,
     }));
@@ -604,7 +613,9 @@ fn schedule(state: &Rc<RefCell<State>>) {
                 !sb.player.as_ref().is_some_and(Player::is_playing) && sb.analysis.as_ref().is_none_or(|a| a.settled())
             };
             if done {
-                s.borrow_mut().timer = None;
+                let mut sb = s.borrow_mut();
+                sb.timer = None;
+                sb.vis_last = None;
             }
         }
     });
@@ -670,11 +681,16 @@ fn visualize_at(state: &Rc<RefCell<State>>, size: Option<(u32, u32)>) {
     let playing = sb.player.as_ref().is_some_and(Player::is_playing);
     let samples = if playing { sb.player.as_ref().map(|p| p.scope(16384)) } else { None };
     let tempo = sb.rack.values[2] as f32;
-    a.update(samples.as_deref(), 1.0 / 60.0, sb.rack.bpm, tempo);
+    // the real time since the last frame (a slow frame catches up instead of slowing the motion down)
+    let now = Instant::now();
+    let dt = sb.vis_last.map_or(1.0 / 60.0, |t| now.duration_since(t).as_secs_f32().clamp(0.001, 0.05));
+    sb.vis_last = Some(now);
+    a.update(samples.as_deref(), dt, sb.rack.bpm, tempo);
     let w = &sb.window;
     w.set_disc_scale(a.disc_scale());
     if !w.get_vis_on() {
         sb.field = None;
+        sb.vis_bufs = [None, None];
         return;
     }
     let (sw, sh) = size.unwrap_or_else(|| {
@@ -698,9 +714,16 @@ fn visualize_at(state: &Rc<RefCell<State>>, size: Option<(u32, u32)>) {
         sb.field = Some(field);
     }
     let Some(f) = sb.field.as_mut() else { return };
-    f.draw(a, 1.0 / 60.0, scale, sb.cursor);
-    let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(&f.pixels, pw as u32, ph as u32);
-    w.set_vis_frame(slint::Image::from_rgba8_premultiplied(buf));
+    let i = sb.vis_next;
+    sb.vis_next = 1 - i;
+    let slot = &mut sb.vis_bufs[i];
+    if slot.as_ref().is_none_or(|b| b.width() != pw as u32 || b.height() != ph as u32) {
+        *slot = Some(slint::SharedPixelBuffer::new(pw as u32, ph as u32));
+    }
+    let Some(buf) = slot.as_mut() else { return };
+    // copies only if the renderer still holds this image (then it costs what the old copy did)
+    f.draw(buf.make_mut_bytes(), a, dt, scale, sb.cursor);
+    w.set_vis_frame(slint::Image::from_rgba8_premultiplied(buf.clone()));
 }
 
 fn apply_gain(state: &Rc<RefCell<State>>) {
