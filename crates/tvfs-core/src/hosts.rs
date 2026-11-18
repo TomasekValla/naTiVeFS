@@ -118,7 +118,7 @@ pub fn is_tvfs_host_name(host: &str) -> bool {
     let h = host.to_ascii_lowercase();
     KNOWN_HOSTS.contains(&h.as_str())
         || base().is_some_and(|b| b.host_str().is_some_and(|bh| bh.eq_ignore_ascii_case(&h)))
-        || SERVER_HOSTS.read().is_ok_and(|v| v.iter().any(|x| *x == h))
+        || SERVER_HOSTS.read().is_ok_and(|v| v.contains(&h))
 }
 
 /// What a URL may point at.

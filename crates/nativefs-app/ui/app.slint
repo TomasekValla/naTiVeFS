@@ -454,6 +454,8 @@ export component MainWindow inherits Window {
     callback notify-done-changed(bool);
     // Settings > Uploads > Sync settings (accounts only)
     in-out property <bool> settings-sync;
+    // the server answered /api/settings (Expired pages and Sync settings need it)
+    in property <bool> account-settings-ok;
     callback settings-sync-changed(bool);
     callback expired-months-changed(int);
     in-out property <bool> chunk-auto: true;
@@ -2386,29 +2388,32 @@ export component MainWindow inherits Window {
                                 // accounts only (the server keeps them per account; not for the host)
                                 if root.logged-in && root.tier > 0 : VerticalLayout {
                                     spacing: Look.compact ? 8px : 12px;
-                                    SettingCard {
-                                        height: lay-exp.preferred-height;
-                                        lay-exp := VerticalLayout {
-                                            padding-top: Look.compact ? 11px : 16px;
-                                            padding-bottom: Look.compact ? 11px : 16px;
-                                            padding-left: Look.compact ? 14px : 18px;
-                                            padding-right: Look.compact ? 14px : 18px;
-                                            spacing: Look.compact ? 6px : 8px;
-                                            // five options do not fit beside the title in the settings column: they go below it
-                                            Text { text: "Expired pages"; font-size: 13.12px; font-weight: 700; color: Palette.text; }
-                                            HorizontalLayout {
-                                                alignment: start;
-                                                Seg {
-                                                    controlled: true;
-                                                    options: ["Off", "1 mo", "3 mo", "6 mo", "12 mo"];
-                                                    selected: root.expired-months == 0 ? 0 : root.expired-months == 1 ? 1 : root.expired-months == 3 ? 2 : root.expired-months == 6 ? 3 : 4;
-                                                    picked(i) => {
-                                                        root.expired-months = i == 0 ? 0 : i == 1 ? 1 : i == 2 ? 3 : i == 3 ? 6 : 12;
-                                                        root.expired-months-changed(root.expired-months);
+                                    // only once the server keeps account settings (older servers have no /api/settings)
+                                    if root.account-settings-ok : VerticalLayout {
+                                        SettingCard {
+                                            height: lay-exp.preferred-height;
+                                            lay-exp := VerticalLayout {
+                                                padding-top: Look.compact ? 11px : 16px;
+                                                padding-bottom: Look.compact ? 11px : 16px;
+                                                padding-left: Look.compact ? 14px : 18px;
+                                                padding-right: Look.compact ? 14px : 18px;
+                                                spacing: Look.compact ? 6px : 8px;
+                                                // five options do not fit beside the title in the settings column: they go below it
+                                                Text { text: "Expired pages"; font-size: 13.12px; font-weight: 700; color: Palette.text; }
+                                                HorizontalLayout {
+                                                    alignment: start;
+                                                    Seg {
+                                                        controlled: true;
+                                                        options: ["Off", "1 mo", "3 mo", "6 mo", "12 mo"];
+                                                        selected: root.expired-months == 0 ? 0 : root.expired-months == 1 ? 1 : root.expired-months == 3 ? 2 : root.expired-months == 6 ? 3 : 4;
+                                                        picked(i) => {
+                                                            root.expired-months = i == 0 ? 0 : i == 1 ? 1 : i == 2 ? 3 : i == 3 ? 6 : 12;
+                                                            root.expired-months-changed(root.expired-months);
+                                                        }
                                                     }
                                                 }
+                                                Explain { text: "After a file expires, its link says \"This file has expired\" (without the name) instead of \"not found\", for this long. You can remove each one from Recently uploaded."; }
                                             }
-                                            Explain { text: "After a file expires, its link says \"This file has expired\" (without the name) instead of \"not found\", for this long. You can remove each one from Recently uploaded."; }
                                         }
                                     }
                                     if root.global-stats-text != "" : VerticalLayout {
@@ -2505,25 +2510,28 @@ export component MainWindow inherits Window {
                                     }
                                 }
                                 if root.logged-in && root.tier > 0 : VerticalLayout {
-                                    SettingCard {
-                                        height: lay-sync.preferred-height;
-                                        lay-sync := VerticalLayout {
-                                            padding-top: Look.compact ? 11px : 16px;
-                                            padding-bottom: Look.compact ? 11px : 16px;
-                                            padding-left: Look.compact ? 14px : 18px;
-                                            padding-right: Look.compact ? 14px : 18px;
-                                            spacing: Look.compact ? 6px : 8px;
-                                            HorizontalLayout {
-                                                Text { text: "Sync settings"; font-size: 13.12px; font-weight: 700; color: Palette.text; vertical-alignment: center; }
-                                                Rectangle { }
-                                                Seg {
-                                                    controlled: true;
-                                                    options: ["Off", "On"];
-                                                    selected: root.settings-sync ? 1 : 0;
-                                                    picked(i) => { root.settings-sync = i == 1; root.settings-sync-changed(root.settings-sync); }
+                                    // only once the server keeps account settings (older servers have no /api/settings)
+                                    if root.account-settings-ok : VerticalLayout {
+                                        SettingCard {
+                                            height: lay-sync.preferred-height;
+                                            lay-sync := VerticalLayout {
+                                                padding-top: Look.compact ? 11px : 16px;
+                                                padding-bottom: Look.compact ? 11px : 16px;
+                                                padding-left: Look.compact ? 14px : 18px;
+                                                padding-right: Look.compact ? 14px : 18px;
+                                                spacing: Look.compact ? 6px : 8px;
+                                                HorizontalLayout {
+                                                    Text { text: "Sync settings"; font-size: 13.12px; font-weight: 700; color: Palette.text; vertical-alignment: center; }
+                                                    Rectangle { }
+                                                    Seg {
+                                                        controlled: true;
+                                                        options: ["Off", "On"];
+                                                        selected: root.settings-sync ? 1 : 0;
+                                                        picked(i) => { root.settings-sync = i == 1; root.settings-sync-changed(root.settings-sync); }
+                                                    }
                                                 }
+                                                Explain { text: "Theme, glass, layout, background motion, auto copy, voice note options and the Users Only default follow your account to other devices where this is on too. Chunk and microphone settings stay per device."; }
                                             }
-                                            Explain { text: "Theme, glass, layout, background motion, auto copy, voice note options and the Users Only default follow your account to other devices where this is on too. Chunk and microphone settings stay per device."; }
                                         }
                                     }
                                 }

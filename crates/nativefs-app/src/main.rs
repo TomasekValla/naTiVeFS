@@ -937,6 +937,7 @@ fn show_login(weak: &Weak<MainWindow>, shared: &Shared, message: String) {
     on_ui(weak, move |ui| {
         expiry_ui::set_config(ui, None);
         ui.set_logged_in(false);
+        ui.set_account_settings_ok(false);
         ui.set_busy(false);
         ui.set_error_text(message.into());
     });
@@ -1007,6 +1008,7 @@ async fn refresh(shared: &Arc<Shared>, weak: &Weak<MainWindow>) -> Result<(), Er
         ui.set_global_stats_text(global_text.into());
         if let Some(m) = expired_months {
             ui.set_expired_months(m);
+            ui.set_account_settings_ok(true);
         }
         if let Some((cfg, prefs)) = synced {
             apply_synced_to_ui(ui, &cfg, &prefs);
@@ -1763,6 +1765,7 @@ fn apply_demo(ui: &MainWindow) {
     ui.set_latency_text("23ms".into());
     ui.set_used_text("12.4 GB".into());
     ui.set_tier(3);
+    ui.set_account_settings_ok(true);
     ui.set_global_stats_text("1,234 uploads, 56.7 GB uploaded and about 210.3 GB downloaded or played, 8,901 opens and 2,345 plays since Sep 1, 2026.".into());
     if mode != "0" {
         let items = vec![

@@ -424,6 +424,9 @@ fn block_margins(b: &Block, base: f32) -> (f32, f32, f32) {
     }
 }
 
+/// Search marks of one block: (block, table cell)
+type MarkKey = (usize, Option<(usize, usize)>);
+
 /// All rows of the page, made on every CPU core: each row depends only on its block and the block before it.
 fn make_rows(inp: &RowInputs) -> Vec<RowSpec> {
     use rayon::prelude::*;
@@ -431,7 +434,7 @@ fn make_rows(inp: &RowInputs) -> Vec<RowSpec> {
     let (fg, bg) = if inp.light { (0x1a1a1a, 0xfafafa) } else { (0xe8e8e8, 0x111111) };
     let colors = Colors { strong: Some(if inp.light { 0x000000 } else { 0xffffff }), em: Some(rgb_mix(bg, fg, 0.85)) };
     // search marks grouped once by block / table cell (not filtered again for every block)
-    let mut marks: HashMap<(usize, Option<(usize, usize)>), Vec<Mark>> = HashMap::new();
+    let mut marks: HashMap<MarkKey, Vec<Mark>> = HashMap::new();
     for h in &inp.hits {
         let cur = Some(*h) == inp.current;
         marks
